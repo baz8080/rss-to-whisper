@@ -292,6 +292,8 @@ class PodcastPipelineRunTest {
 
         assertEquals(0, txSvc.calls.size)
         val episodeDirs = Files.list(tempDir.resolve("Show")).use { it.toList() }
+        // The directory is created by the download attempt itself, so this has something to assert on.
+        assertEquals(1, episodeDirs.size)
         assertFalse(episodeDirs.any { Files.exists(it.resolve("transcript.json")) })
     }
 

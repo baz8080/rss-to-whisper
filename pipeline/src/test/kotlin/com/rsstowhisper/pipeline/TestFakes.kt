@@ -48,9 +48,10 @@ internal open class FakeFeedService(
     ): Boolean {
         // Mirrors the real skip-if-present contract, so tests can assert on it.
         if (Files.exists(targetPath)) return true
+        // Created before the failure check, as the real service does, so a failed download still leaves the directory.
+        Files.createDirectories(targetPath.parent)
         if (downloadFails(url)) return false
         downloads.add(url to targetPath)
-        Files.createDirectories(targetPath.parent)
         Files.writeString(targetPath, "fake-mp3-bytes")
         return true
     }

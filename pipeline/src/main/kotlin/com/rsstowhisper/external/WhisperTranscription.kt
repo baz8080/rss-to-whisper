@@ -106,13 +106,29 @@ data class WhisperTranscription(
          * Absent when the server was asked for timestamps it did not produce.
          * Dropping the word is right: a word with no time cannot place a
          * boundary, and a zero would place one at the start of the episode.
+         *
+         * Some words arrive with `end` before `start`. It comes from
+         * `whisper_exp_compute_token_level_timestamps` in whisper.cpp, whose
+         * monotonicity fix-up is guarded on `j > 0` and so never repairs a
+         * segment's first token, and runs per segment and so cannot order
+         * across a segment boundary. Over a 17,553-episode corpus it hit 2.1%
+         * of episodes, and within an affected one about 4.8% of its words;
+         * 54% of the inversions sit on the first token of their segment.
+         *
+         * The pair is clamped to `start <= end` here rather than left to
+         * readers, so the file is correct on disk and no consumer has to
+         * rediscover the defect. Clamp, not drop: an inverted word still marks
+         * a real position in the stream, and dropping it would shift every
+         * index built on the sidecar.
          */
         private fun JsonNode.toWord(segment: Int): Word? {
             if (!has("start") || !has("end")) return null
+            val start = path("start").asDouble()
+            val end = path("end").asDouble()
             return Word(
                 text = path("word").asText(),
-                start = path("start").asDouble(),
-                end = path("end").asDouble(),
+                start = minOf(start, end),
+                end = end,
                 probability = path("probability").asDouble(),
                 segment = segment,
             )

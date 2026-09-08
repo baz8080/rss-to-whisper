@@ -115,11 +115,17 @@ data class WhisperTranscription(
          * of episodes, and within an affected one about 4.8% of its words;
          * 54% of the inversions sit on the first token of their segment.
          *
-         * The pair is clamped to `start <= end` here rather than left to
-         * readers, so the file is correct on disk and no consumer has to
-         * rediscover the defect. Clamp, not drop: an inverted word still marks
-         * a real position in the stream, and dropping it would shift every
-         * index built on the sidecar.
+         * `end` is the half that moves, which is what whisper.cpp does to the
+         * tokens it does repair (`t1 = max(t0, t1)`). Lowering `start` instead
+         * would drag the word backwards past whatever precedes it, and a word
+         * whose `end` is the bogus half -- 0.0 against a real `start` -- would
+         * land at the beginning of the episode, the outcome the missing-time
+         * guard above exists to avoid.
+         *
+         * Clamp, not drop: an inverted word still marks a real position in the
+         * stream, and dropping it would shift every index built on the
+         * sidecar. Doing it here rather than leaving it to readers keeps the
+         * file correct on disk, so no consumer has to rediscover the defect.
          */
         private fun JsonNode.toWord(segment: Int): Word? {
             if (!has("start") || !has("end")) return null
@@ -127,8 +133,8 @@ data class WhisperTranscription(
             val end = path("end").asDouble()
             return Word(
                 text = path("word").asText(),
-                start = minOf(start, end),
-                end = end,
+                start = start,
+                end = maxOf(start, end),
                 probability = path("probability").asDouble(),
                 segment = segment,
             )

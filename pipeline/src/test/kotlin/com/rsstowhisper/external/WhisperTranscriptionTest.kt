@@ -92,9 +92,23 @@ class WhisperTranscriptionTest {
 
         assertEquals(2, words.size)
         assertEquals(" So", words[0].text)
-        assertEquals(10.4, words[0].start)
-        assertEquals(10.4, words[0].end)
+        assertEquals(11.2, words[0].start)
+        assertEquals(11.2, words[0].end)
         assertEquals(" anyway.", words[1].text)
+    }
+
+    @Test
+    fun `clamping moves end, so a word is never dragged back to the start of the episode`() {
+        val json =
+            """
+            {"segments":[{"id":0,"start":310.0,"end":314.0,"text":" Right.",
+             "words":[{"word":" Right.","start":312.4,"end":0.0,"probability":0.7}]}]}
+            """.trimIndent()
+
+        val word = WhisperTranscription.parse(json).words.single()
+
+        assertEquals(312.4, word.start)
+        assertEquals(312.4, word.end)
     }
 
     @Test

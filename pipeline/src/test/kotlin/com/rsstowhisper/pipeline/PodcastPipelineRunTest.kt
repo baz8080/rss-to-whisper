@@ -279,21 +279,16 @@ class PodcastPipelineRunTest {
     fun `run does not transcribe an episode whose download failed`(
         @TempDir tempDir: Path,
     ) {
-        val config =
-            AppConfig(
-                dataDirectory = tempDir.toAbsolutePath().toString(),
-                whisperServerUrl = FAKE_SERVER_URL,
-                podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed")),
+        val feed = makeFeed(makeEntry("Unfetchable"))
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                feed,
+                feedService = FakeFeedService(mapOf("https://feed" to feed), downloadFails = { true }),
             )
-        val feedSvc =
-            object : FakeFeedService(mapOf("https://feed" to makeFeed(makeEntry("Unfetchable")))) {
-                override fun downloadAudio(
-                    url: String,
-                    targetPath: Path,
-                ): Boolean = false
-            }
-        val txSvc = FakeTranscriber(FAKE_SERVER_URL, MINIMAL_VTT)
-        PodcastPipeline(config = config, feedService = feedSvc, transcriber = txSvc).run()
+
+        pipeline.run()
 
         assertEquals(0, txSvc.calls.size)
         val episodeDirs = Files.list(tempDir.resolve("Show")).use { it.toList() }
@@ -425,13 +420,14 @@ class PodcastPipelineRunTest {
                 makeEntry("Ep Two", audioUrl = "https://cdn/two.mp3"),
                 makeEntry("Ep Three", audioUrl = "https://cdn/three.mp3"),
             )
-        lateinit var feedSvc: FakeFeedService
+        val feedSvc = FakeFeedService(mapOf("https://feed" to feed))
         val downloadedDuringFirstDecode = mutableListOf<String>()
-        val (pipeline, txSvc, svc) =
+        val (pipeline, txSvc, _) =
             buildPipeline(
                 tempDir,
                 listOf(PodcastConfig(name = "Show", url = "https://feed")),
                 feed,
+                feedService = feedSvc,
                 onTranscribe = { audioPath ->
                     if (audioPath.parent.fileName.toString().contains("Ep-One")) {
                         // The prefetch runs on its own thread, so give it a moment to be recorded.
@@ -440,7 +436,6 @@ class PodcastPipelineRunTest {
                     }
                 },
             )
-        feedSvc = svc
 
         pipeline.run()
 
@@ -451,32 +446,54 @@ class PodcastPipelineRunTest {
         assertEquals(3, episodeDirs.count { Files.exists(it.resolve("transcript.json")) })
     }
 
+    /**
+     * A feed that lists one guid twice used to be deduped by the first entry creating its
+     * directory before the second was examined. Deciding before downloading removed that.
+     */
+    @Test
+    fun `run transcribes an episode once when the feed lists its guid twice`(
+        @TempDir tempDir: Path,
+    ) {
+        val feed =
+            makeFeed(
+                makeEntry("Ep Twelve", guid = "https://example.com/guid/twelve"),
+                makeEntry("Ep Twelve (fixed audio)", guid = "https://example.com/guid/twelve"),
+            )
+        val (pipeline, txSvc, feedSvc) =
+            buildPipeline(tempDir, listOf(PodcastConfig(name = "Show", url = "https://feed")), feed)
+
+        pipeline.run()
+
+        assertEquals(1, txSvc.calls.size)
+        assertEquals(1, feedSvc.downloads.size)
+        val episodeDirs = Files.list(tempDir.resolve("Show")).use { it.toList() }
+        assertEquals(1, episodeDirs.size)
+        assertTrue(Files.exists(episodeDirs.single().resolve("transcript.json")))
+    }
+
     @Test
     fun `run skips an episode whose prefetched download failed and continues`(
         @TempDir tempDir: Path,
     ) {
-        val config =
-            AppConfig(
-                dataDirectory = tempDir.toAbsolutePath().toString(),
-                whisperServerUrl = FAKE_SERVER_URL,
-                podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed")),
-            )
         val feed =
             makeFeed(
                 makeEntry("Ep One", audioUrl = "https://cdn/one.mp3"),
                 makeEntry("Ep Two", audioUrl = "https://cdn/two.mp3"),
                 makeEntry("Ep Three", audioUrl = "https://cdn/three.mp3"),
             )
-        val feedSvc =
-            object : FakeFeedService(mapOf("https://feed" to feed)) {
-                override fun downloadAudio(
-                    url: String,
-                    targetPath: Path,
-                ): Boolean = if (url.endsWith("two.mp3")) false else super.downloadAudio(url, targetPath)
-            }
-        val txSvc = FakeTranscriber(FAKE_SERVER_URL, MINIMAL_VTT)
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                feed,
+                feedService =
+                    FakeFeedService(
+                        mapOf("https://feed" to feed),
+                        downloadFails = { url -> url.endsWith("two.mp3") },
+                    ),
+            )
 
-        PodcastPipeline(config = config, feedService = feedSvc, transcriber = txSvc).run()
+        pipeline.run()
 
         val decoded = txSvc.calls.map { it.parent.fileName.toString() }
         assertEquals(2, decoded.size)
@@ -516,5 +533,6 @@ class PodcastPipelineRunTest {
     ) {
         val deadline = System.currentTimeMillis() + 5_000
         while (feedSvc.downloads.size < count && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        assertEquals(count, feedSvc.downloads.size, "timed out waiting for $count downloads")
     }
 }

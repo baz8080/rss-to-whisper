@@ -28,7 +28,10 @@ internal fun whisperJson(vararg cues: Triple<Double, Double, String>): String =
 
 internal val MINIMAL_VTT = whisperJson(Triple(0.0, 1.0, "Hello world."))
 
-internal open class FakeFeedService(private val feeds: Map<String, SyndFeed?>) : FeedService() {
+internal open class FakeFeedService(
+    private val feeds: Map<String, SyndFeed?>,
+    private val downloadFails: (String) -> Boolean = { false },
+) : FeedService() {
     val requestedUrls = mutableListOf<String>()
 
     // Written from the prefetch thread while a test's transcribe hook reads it.
@@ -45,6 +48,7 @@ internal open class FakeFeedService(private val feeds: Map<String, SyndFeed?>) :
     ): Boolean {
         // Mirrors the real skip-if-present contract, so tests can assert on it.
         if (Files.exists(targetPath)) return true
+        if (downloadFails(url)) return false
         downloads.add(url to targetPath)
         Files.createDirectories(targetPath.parent)
         Files.writeString(targetPath, "fake-mp3-bytes")
@@ -123,6 +127,8 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
+    /** Supply one when the test needs a reference to it before the pipeline exists. */
+    feedService: FakeFeedService? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
@@ -134,7 +140,7 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             podcasts = podcasts,
         )
-    val feedSvc = FakeFeedService(mapOf(feedUrl to feed))
+    val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))
     val txSvc = FakeTranscriber(FAKE_SERVER_URL, vtt, transcriberFails, onTranscribe)
     val pipeline =
         PodcastPipeline(

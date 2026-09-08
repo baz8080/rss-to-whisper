@@ -106,13 +106,35 @@ data class WhisperTranscription(
          * Absent when the server was asked for timestamps it did not produce.
          * Dropping the word is right: a word with no time cannot place a
          * boundary, and a zero would place one at the start of the episode.
+         *
+         * Some words arrive with `end` before `start`. It comes from
+         * `whisper_exp_compute_token_level_timestamps` in whisper.cpp, whose
+         * monotonicity fix-up is guarded on `j > 0` and so never repairs a
+         * segment's first token, and runs per segment and so cannot order
+         * across a segment boundary. Over a 17,553-episode corpus it hit 2.1%
+         * of episodes, and within an affected one about 4.8% of its words;
+         * 54% of the inversions sit on the first token of their segment.
+         *
+         * `end` is the half that moves, which is what whisper.cpp does to the
+         * tokens it does repair (`t1 = max(t0, t1)`). Lowering `start` instead
+         * would drag the word backwards past whatever precedes it, and a word
+         * whose `end` is the bogus half -- 0.0 against a real `start` -- would
+         * land at the beginning of the episode, the outcome the missing-time
+         * guard above exists to avoid.
+         *
+         * Clamp, not drop: an inverted word still marks a real position in the
+         * stream, and dropping it would shift every index built on the
+         * sidecar. Doing it here rather than leaving it to readers keeps the
+         * file correct on disk, so no consumer has to rediscover the defect.
          */
         private fun JsonNode.toWord(segment: Int): Word? {
             if (!has("start") || !has("end")) return null
+            val start = path("start").asDouble()
+            val end = path("end").asDouble()
             return Word(
                 text = path("word").asText(),
-                start = path("start").asDouble(),
-                end = path("end").asDouble(),
+                start = start,
+                end = maxOf(start, end),
                 probability = path("probability").asDouble(),
                 segment = segment,
             )

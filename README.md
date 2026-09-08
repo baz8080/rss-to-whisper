@@ -173,6 +173,22 @@ words.jsonl.gz      {"w":" Doritos","s":1423.44,"e":1423.79,"p":0.94,"seg":118}
 sidecar joins back to the WebVTT without re-alignment. Roughly 274 KB per
 episode before compression.
 
+`e` is clamped to at least `s` on the way out, because whisper.cpp sometimes
+stamps a word with its end before its start.
+`whisper_exp_compute_token_level_timestamps` guards its monotonicity fix-up on
+`j > 0`, so it never repairs a segment's first token, and it runs per segment,
+so it cannot order across a segment boundary. Over a 17,553-episode corpus that
+reached 2.1% of episodes, and about 4.8% of the words inside an affected one,
+with 54% of the inversions sitting on the first token of their segment.
+
+`e` is the half that moves, matching the `t1 = max(t0, t1)` whisper.cpp applies
+to the tokens it does repair; lowering `s` instead would drag the word back
+past whatever precedes it. The word is clamped rather than dropped, because it
+still marks a real position in the stream and dropping it would shift every
+index built on the sidecar. Sidecars written before this change keep their
+inversions until the episode is decoded again, so a reader that must also cope
+with the existing corpus still needs its own `min`/`max`.
+
 ### `token_timestamps`, `max_len`, `split_on_word`
 
 whisper.cpp only applies `max_len` when `token_timestamps` is on — the wrap call

@@ -80,6 +80,57 @@ class WhisperTranscriptionTest {
     }
 
     @Test
+    fun `a word stamped with end before start is clamped rather than dropped`() {
+        val json =
+            """
+            {"segments":[{"id":0,"start":10.0,"end":12.0,"text":" So anyway.",
+             "words":[{"word":" So","start":11.2,"end":10.4,"probability":0.6},
+                      {"word":" anyway.","start":10.4,"end":11.9,"probability":0.8}]}]}
+            """.trimIndent()
+
+        val words = WhisperTranscription.parse(json).words
+
+        assertEquals(2, words.size)
+        assertEquals(" So", words[0].text)
+        assertEquals(11.2, words[0].start)
+        assertEquals(11.2, words[0].end)
+        assertEquals(" anyway.", words[1].text)
+    }
+
+    @Test
+    fun `clamping moves end, so a word is never dragged back to the start of the episode`() {
+        val json =
+            """
+            {"segments":[{"id":0,"start":310.0,"end":314.0,"text":" Right.",
+             "words":[{"word":" Right.","start":312.4,"end":0.0,"probability":0.7}]}]}
+            """.trimIndent()
+
+        val word = WhisperTranscription.parse(json).words.single()
+
+        assertEquals(312.4, word.start)
+        assertEquals(312.4, word.end)
+    }
+
+    @Test
+    fun `an ordered word keeps both of its own times`() {
+        val words = WhisperTranscription.parse(response).words
+        assertEquals(1.79, words[0].start)
+        assertEquals(2.04, words[0].end)
+    }
+
+    @Test
+    fun `every word written to the sidecar has start at or before end`() {
+        val json =
+            """
+            {"segments":[{"id":0,"start":0.0,"end":2.0,"text":" One two.",
+             "words":[{"word":" One","start":1.5,"end":0.4,"probability":0.6},
+                      {"word":" two.","start":0.4,"end":1.9,"probability":0.8}]}]}
+            """.trimIndent()
+
+        WhisperTranscription.parse(json).words.forEach { assertTrue(it.start <= it.end) }
+    }
+
+    @Test
     fun `a response with no segments is empty rather than throwing`() {
         val parsed = WhisperTranscription.parse("""{"task":"transcribe"}""")
         assertTrue(parsed.isEmpty)

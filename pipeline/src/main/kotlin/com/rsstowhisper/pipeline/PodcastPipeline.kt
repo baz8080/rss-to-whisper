@@ -24,6 +24,10 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 
 class PodcastPipeline(
@@ -92,6 +96,9 @@ class PodcastPipeline(
         var consecutiveTranscribed = 0
         var brokeEarly = false
 
+        // Decide first, then do: the doing pass needs the next item known before the
+        // current one is decoded, so it can download it in the meantime.
+        val pending = mutableListOf<PendingEpisode>()
         for (entry in feed.entries) {
             try {
                 val skip = skipReason(entry, podcast, minDuration)
@@ -104,11 +111,8 @@ class PodcastPipeline(
                 logger.debug("Processing $stablePrefix")
                 examined += stablePrefix
 
-                val episodeDirPath =
-                    findExistingEpisodeDir(podPath, stablePrefix)
-                        ?: createPath(podPath, getEpisodeDirName(entry))
-
-                if (Files.exists(episodeDirPath.resolve(TRANSCRIPT_FILENAME))) {
+                val existingDir = findExistingEpisodeDir(podPath, stablePrefix)
+                if (existingDir != null && Files.exists(existingDir.resolve(TRANSCRIPT_FILENAME))) {
                     consecutiveTranscribed++
                     if (consecutiveTranscribed >= skipThreshold) {
                         logger.debug(
@@ -121,29 +125,83 @@ class PodcastPipeline(
                 }
                 consecutiveTranscribed = 0
 
+                // Not created yet: a run killed mid-way should leave one empty directory, not a feed's worth.
+                val episodeDirPath = existingDir ?: podPath.resolve(escapeFilename(getEpisodeDirName(entry)))
                 val mp3Info = getMp3Info(entry, episodeDirPath, dataDir)
                 if (mp3Info == null) {
                     logger.warn("${entry.title} has no mp3 link. Skipping")
                     continue
                 }
-
-                if (!feedService.downloadAudio(mp3Info.url, mp3Info.filePath)) {
-                    logger.warn("Could not download audio for ${entry.title}. Skipping")
-                    continue
-                }
-                val transcription = WhisperTranscription.parse(transcribeEpisode(mp3Info.filePath, episodeDirPath))
-                writeEpisodeJson(feed, entry, mp3Info, episodeDirPath, podcast.collections, transcription)
+                pending += PendingEpisode(entry, episodeDirPath, mp3Info)
             } catch (e: Exception) {
                 logger.error("Couldn't process episode entry: ${entry.title}")
                 logger.error(e.message, e)
             }
         }
 
+        transcribeAll(feed, podcast, pending)
+
         try {
             scanForOrphans(feed, podcast, podPath, dataDir, prefixes, examined, brokeEarly)
         } catch (e: Exception) {
             logger.error("Orphan recovery failed for ${podcast.name}", e)
         }
+    }
+
+    /** A feed entry that passed every filter and has no transcript yet. */
+    private class PendingEpisode(
+        val entry: SyndEntry,
+        val episodeDirPath: Path,
+        val mp3Info: Mp3Info,
+    )
+
+    /**
+     * Downloads one episode ahead while the current one is decoding, so the GPU does not
+     * idle for every download. One ahead, not more, so a failed run leaves at most one
+     * extra audio file on disk.
+     */
+    private fun transcribeAll(
+        feed: SyndFeed,
+        podcast: PodcastConfig,
+        pending: List<PendingEpisode>,
+    ) {
+        if (pending.isEmpty()) return
+        val prefetcher = Executors.newSingleThreadExecutor { Thread(it, "prefetch").apply { isDaemon = true } }
+        var next: Future<Boolean>? = prefetcher.submit(Callable { download(pending[0]) })
+
+        try {
+            for ((index, episode) in pending.withIndex()) {
+                val entry = episode.entry
+                // Queued behind the current download on the single thread, so it runs during the decode.
+                val current = next!!
+                next = pending.getOrNull(index + 1)?.let { ep -> prefetcher.submit(Callable { download(ep) }) }
+                try {
+                    if (!current.get()) {
+                        logger.warn("Could not download audio for ${entry.title}. Skipping")
+                        continue
+                    }
+                    if (Files.exists(episode.episodeDirPath.resolve(TRANSCRIPT_FILENAME))) {
+                        logger.debug("${entry.title} was transcribed while this run was busy; skipping")
+                        continue
+                    }
+                    val transcription =
+                        WhisperTranscription.parse(transcribeEpisode(episode.mp3Info.filePath, episode.episodeDirPath))
+                    writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, transcription)
+                } catch (e: Exception) {
+                    val cause = (e as? ExecutionException)?.cause ?: e
+                    logger.error("Couldn't process episode entry: ${entry.title}")
+                    logger.error(cause.message, cause)
+                }
+            }
+        } finally {
+            next?.cancel(true)
+            prefetcher.shutdownNow()
+        }
+    }
+
+    private fun download(episode: PendingEpisode): Boolean {
+        Files.createDirectories(episode.episodeDirPath)
+        return feedService.downloadAudio(episode.mp3Info.url, episode.mp3Info.filePath)
     }
 
     /** The first filter an entry trips, in the order the pipeline has always applied them. */

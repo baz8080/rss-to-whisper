@@ -10,6 +10,10 @@ Done so far from this list:
   page highlights the cues the query matches and steps between them. The query parser
   in `web/.../models/SearchModels.kt` (`searchTerms`, `highlightMatches`) is the reference
   for how the web module reads FTS5 syntax.
+- **P5, prefetch the next download**.
+  `PodcastPipeline.processPodcast` now decides first (skip rules, consecutive-transcribed
+  break) and then `transcribeAll` downloads one episode ahead on a single-thread executor
+  while the current one decodes. The orphan path stays sequential.
 
 Explicitly declined:
 
@@ -275,7 +279,7 @@ that Jackson will serialise too; annotate with `@JsonIgnore` or accept them.
 
 ## Pipeline
 
-Suggested order: P1 and P4 together, then P2, P3, P6, P8, P7, P5.
+Suggested order: P1 and P4 together, then P2, P3, P6, P8, P7. P5 is done.
 
 ### P1. Transcript quality gate
 

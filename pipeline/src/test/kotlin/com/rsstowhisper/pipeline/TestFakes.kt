@@ -13,6 +13,7 @@ import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.feed.FeedService
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Collections
 import java.util.Date
 
 internal const val FAKE_SERVER_URL = "http://localhost:9000"
@@ -29,7 +30,9 @@ internal val MINIMAL_VTT = whisperJson(Triple(0.0, 1.0, "Hello world."))
 
 internal open class FakeFeedService(private val feeds: Map<String, SyndFeed?>) : FeedService() {
     val requestedUrls = mutableListOf<String>()
-    val downloads = mutableListOf<Pair<String, Path>>()
+
+    // Written from the prefetch thread while a test's transcribe hook reads it.
+    val downloads: MutableList<Pair<String, Path>> = Collections.synchronizedList(mutableListOf())
 
     override fun fetchFeed(url: String): SyndFeed? {
         requestedUrls.add(url)

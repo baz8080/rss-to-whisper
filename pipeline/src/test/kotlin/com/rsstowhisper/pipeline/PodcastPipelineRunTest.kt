@@ -414,4 +414,107 @@ class PodcastPipelineRunTest {
         assertTrue(json.contains("\"episode_relative_audio_path\""))
         assertTrue(json.contains("Show/"))
     }
+
+    @Test
+    fun `run downloads the next episode while the current one is decoding`(
+        @TempDir tempDir: Path,
+    ) {
+        val feed =
+            makeFeed(
+                makeEntry("Ep One", audioUrl = "https://cdn/one.mp3"),
+                makeEntry("Ep Two", audioUrl = "https://cdn/two.mp3"),
+                makeEntry("Ep Three", audioUrl = "https://cdn/three.mp3"),
+            )
+        lateinit var feedSvc: FakeFeedService
+        val downloadedDuringFirstDecode = mutableListOf<String>()
+        val (pipeline, txSvc, svc) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                feed,
+                onTranscribe = { audioPath ->
+                    if (audioPath.parent.fileName.toString().contains("Ep-One")) {
+                        // The prefetch runs on its own thread, so give it a moment to be recorded.
+                        awaitDownloads(feedSvc, 2)
+                        downloadedDuringFirstDecode += synchronized(feedSvc.downloads) { feedSvc.downloads.map { it.first } }
+                    }
+                },
+            )
+        feedSvc = svc
+
+        pipeline.run()
+
+        assertEquals(listOf("https://cdn/one.mp3", "https://cdn/two.mp3"), downloadedDuringFirstDecode)
+        assertEquals(3, txSvc.calls.size)
+        assertEquals(3, feedSvc.downloads.size)
+        val episodeDirs = Files.list(tempDir.resolve("Show")).use { it.toList() }
+        assertEquals(3, episodeDirs.count { Files.exists(it.resolve("transcript.json")) })
+    }
+
+    @Test
+    fun `run skips an episode whose prefetched download failed and continues`(
+        @TempDir tempDir: Path,
+    ) {
+        val config =
+            AppConfig(
+                dataDirectory = tempDir.toAbsolutePath().toString(),
+                whisperServerUrl = FAKE_SERVER_URL,
+                podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed")),
+            )
+        val feed =
+            makeFeed(
+                makeEntry("Ep One", audioUrl = "https://cdn/one.mp3"),
+                makeEntry("Ep Two", audioUrl = "https://cdn/two.mp3"),
+                makeEntry("Ep Three", audioUrl = "https://cdn/three.mp3"),
+            )
+        val feedSvc =
+            object : FakeFeedService(mapOf("https://feed" to feed)) {
+                override fun downloadAudio(
+                    url: String,
+                    targetPath: Path,
+                ): Boolean = if (url.endsWith("two.mp3")) false else super.downloadAudio(url, targetPath)
+            }
+        val txSvc = FakeTranscriber(FAKE_SERVER_URL, MINIMAL_VTT)
+
+        PodcastPipeline(config = config, feedService = feedSvc, transcriber = txSvc).run()
+
+        val decoded = txSvc.calls.map { it.parent.fileName.toString() }
+        assertEquals(2, decoded.size)
+        assertTrue(decoded.any { it.contains("Ep-One") })
+        assertTrue(decoded.any { it.contains("Ep-Three") })
+    }
+
+    @Test
+    fun `run keeps going when the transcriber fails on one episode`(
+        @TempDir tempDir: Path,
+    ) {
+        val feed =
+            makeFeed(
+                makeEntry("Ep One", audioUrl = "https://cdn/one.mp3"),
+                makeEntry("Ep Two", audioUrl = "https://cdn/two.mp3"),
+                makeEntry("Ep Three", audioUrl = "https://cdn/three.mp3"),
+            )
+        val (pipeline, txSvc, feedSvc) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                feed,
+                transcriberFails = { throw IllegalStateException("whisper is down") },
+            )
+
+        assertTrue(pipeline.run())
+
+        assertEquals(3, txSvc.calls.size)
+        assertEquals(3, feedSvc.downloads.size)
+        val episodeDirs = Files.list(tempDir.resolve("Show")).use { it.toList() }
+        assertFalse(episodeDirs.any { Files.exists(it.resolve("transcript.json")) })
+    }
+
+    private fun awaitDownloads(
+        feedSvc: FakeFeedService,
+        count: Int,
+    ) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (feedSvc.downloads.size < count && System.currentTimeMillis() < deadline) Thread.sleep(5)
+    }
 }

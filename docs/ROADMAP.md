@@ -10,6 +10,10 @@ Done so far from this list:
   page highlights the cues the query matches and steps between them. The query parser
   in `web/.../models/SearchModels.kt` (`searchTerms`, `highlightMatches`) is the reference
   for how the web module reads FTS5 syntax.
+- **P5, prefetch the next download**.
+  `PodcastPipeline.processPodcast` now decides first (skip rules, consecutive-transcribed
+  break) and then `transcribeAll` downloads one episode ahead on a single-thread executor
+  while the current one decodes. The orphan path stays sequential.
 
 Explicitly declined:
 
@@ -275,7 +279,7 @@ that Jackson will serialise too; annotate with `@JsonIgnore` or accept them.
 
 ## Pipeline
 
-Suggested order: P1 and P4 together, then P2, P3, P6, P8, P7, P5.
+Suggested order: P1 and P4 together, then P2, P3, P6, P8, P7. P5 is done.
 
 ### P1. Transcript quality gate
 
@@ -462,14 +466,21 @@ an `open fun notify(url, body)` overridden in a fake.
 same `audio.mp3.part` and one would delete the other's. A lock per episode directory lifts
 that restriction.
 
-**Where.** `PodcastPipeline` around the download-and-decode block and `recoverEpisode`, README
-section "Running two instances at once".
+**Where.** `PodcastPipeline.transcribeAll` and `recoverEpisode`, README section
+"Running two instances at once".
 
-**Design.** Before downloading, `Files.createFile(episodeDir.resolve(".transcribing"))`,
-which is atomic and fails if the file exists; write pid and timestamp into it. If it exists
-and is younger than six hours, skip the episode with a debug line; older is stale (a crashed
-run) and is taken over. Delete in `finally`. The existing "transcribed by something else"
-check in `writeTranscriptArtifacts` stays as the last line of defence.
+**Design.** `Files.createFile(episodeDir.resolve(".transcribing"))` is atomic and fails if
+the file exists; write pid and timestamp into it. If it exists and is younger than six
+hours, skip the episode with a debug line; older is stale (a crashed run) and is taken
+over. The existing "transcribed by something else" check in `writeTranscriptArtifacts`
+stays as the last line of defence.
+
+Since P5 the download no longer sits next to the decode: `transcribeAll` submits the
+download for episode N+1 to the prefetch thread before decoding N. Take the lock on the
+main thread at submit time, so the other instance is excluded from the download as well as
+the decode, and release it after the decode or when the pending future is abandoned in the
+`finally`. A lock taken inside the submitted task instead would release before the decode
+and let both instances decode the same episode.
 
 **Gotchas.** `O_EXCL` semantics hold on local disks and NFSv3+, and on SMB in practice; say
 so in the README rather than promising more.

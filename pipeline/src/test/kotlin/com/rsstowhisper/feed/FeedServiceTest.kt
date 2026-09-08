@@ -116,6 +116,18 @@ class FeedServiceTest {
         assertTrue(Files.notExists(tmp.resolve("episode.mp3.part")))
     }
 
+    /** The pipeline stopped creating episode directories when the download moved to a prefetch thread. */
+    @Test
+    fun `downloadAudio creates a missing parent directory`(
+        @TempDir tmp: Path,
+    ) {
+        val target = tmp.resolve("Show/2026-09-08-abcd1234-Ep/episode.mp3")
+        val ok = FeedService(clientReturning(body = "audio-bytes")).downloadAudio("https://example.com/ep.mp3", target)
+
+        assertTrue(ok)
+        assertEquals("audio-bytes", Files.readString(target))
+    }
+
     @Test
     fun `downloadAudio returns true without a request when file already present`(
         @TempDir tmp: Path,

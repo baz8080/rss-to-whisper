@@ -65,9 +65,11 @@ open class FeedService(private val httpClient: OkHttpClient = OkHttpClient()) {
         val partialPath = targetPath.resolveSibling("${targetPath.fileName}.part")
 
         try {
+            targetPath.parent?.let { Files.createDirectories(it) }
             httpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
-                    logger.error("Error saving file response: ${response.code}")
+                    // Named, not positional: this runs on the prefetch thread, an episode ahead of the log around it.
+                    logger.error("Error ${response.code} downloading $url")
                     return false
                 }
 

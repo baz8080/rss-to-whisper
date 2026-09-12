@@ -12,8 +12,7 @@ import com.rsstowhisper.external.WhisperTranscription
  * produced by the decoder going wrong rather than by an unusual episode.
  *
  * Every threshold below is a starting point measured on the real corpus, not a
- * tuned constant. They are together in one place so a run over the whole corpus
- * can move them without hunting.
+ * tuned constant; expect to move them after a run over the whole corpus.
  */
 object TranscriptQuality {
     /**
@@ -22,10 +21,6 @@ object TranscriptQuality {
      * 0.1611 after). The failure mode is not a low value, it is near zero:
      * whisper drops into a mode where it emits no punctuation and no capitals
      * for a whole episode, and 654 episodes hit it.
-     *
-     * That is not cosmetic. Whisper segments on sentence structure, so with no
-     * full stops the cue boundaries stop tracking speech and every timestamp
-     * derived from them becomes unreliable.
      */
     const val MIN_PUNCTUATION_PER_WORD = 0.03
 
@@ -57,13 +52,10 @@ object TranscriptQuality {
      */
     const val MAX_REPEATED_CUE_RUN = 4
 
-    /** Words the decoder itself was unsure of. */
     const val LOW_CONFIDENCE_PROBABILITY = 0.3
 
-    /** Share of words under [LOW_CONFIDENCE_PROBABILITY] that means the decode is guessing. */
     const val MAX_LOW_CONFIDENCE_SHARE = 0.2
 
-    /** The 4-gram width the repetition check slides. */
     private const val NGRAM = 4
 
     private val PUNCTUATION = setOf('.', ',', '!', '?', ';', ':')
@@ -124,8 +116,6 @@ object TranscriptQuality {
     }
 
     /**
-     * How much of the transcript the single most repeated 4-gram accounts for.
-     *
      * Only occurrences *after* the first count. Every transcript contains some
      * most-frequent 4-gram, so counting the first one would make the floor
      * `4 / wordCount` -- which on its own exceeds the threshold for anything
@@ -171,7 +161,7 @@ object TranscriptQuality {
     private val WHITESPACE = Regex("\\s+")
 }
 
-/** A decode and what it scored, so nothing downstream can write one without the other. */
+/** Paired so nothing downstream can write a transcript without its score. */
 data class ScoredTranscription(
     val transcription: WhisperTranscription,
     val quality: QualityReport,
@@ -197,9 +187,8 @@ data class QualityReport(
     val isFlagged: Boolean get() = flags.isNotEmpty()
 
     /**
-     * Better means fewer flags, and on a tie the more punctuated decode --
-     * punctuation is what the cue boundaries are derived from, so it is the
-     * measure with consequences beyond itself.
+     * Punctuation breaks a tie because the cue boundaries are derived from it,
+     * so it is the one measure with consequences beyond itself.
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {

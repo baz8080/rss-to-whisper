@@ -574,7 +574,7 @@ class PodcastPipelineRunTest {
 
     // ---------- quality gate ----------
 
-    /** Twenty identical cues: a repetition loop, which is what the gate is for. */
+    /** Identical cues repeated: the loop the gate exists to catch. */
     private fun loopingJson(): String =
         whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "And that is the thing about it, really.") }.toTypedArray())
 
@@ -647,7 +647,6 @@ class PodcastPipelineRunTest {
         assertEquals(1, txSvc.calls.size)
     }
 
-    /** Both decodes bad: the episode is still written, and still carries its flags. */
     @Test
     fun `a transcript flagged twice is written anyway with its flags recorded`(
         @TempDir tempDir: Path,

@@ -596,14 +596,21 @@ overwrites, and that write is the only copy: re-transcribing can improve an epis
 leave it alone, never cost it the better decode. A transcript written before the quality
 gate has no score to compare against, so it is simply replaced.
 
-Both files are staged beside their originals and moved over them back to back, so an
-interrupted run never leaves an episode with a truncated transcript — or none at all,
-which deleting first would risk. They move together because `words.jsonl.gz` addresses
-cues by position: a new transcript beside the old sidecar would mis-time every word,
-silently and for good, since an episode that has a `transcript.json` is one nothing
-revisits. If the new decode carries no word timestamps at all, the stale sidecar is
-deleted rather than left behind — a missing one is visible and can be rebuilt, a wrong
-one never announces itself.
+A re-decode that comes back with no word timestamps at all is refused outright when the
+episode already has them. Word times are not part of the score — `low-confidence` cannot
+even be raised without them — so such a decode looks like a clean one, and would both
+replace a transcript flagged for low confidence and take its `words.jsonl.gz` with it. It
+means the server ignored `token_timestamps`, and the warning says so.
+
+Otherwise both files are staged beside their originals and moved into place, with the
+sidecar absent for the whole swap: cleared first, restored only once the transcript it
+belongs to is there. `words.jsonl.gz` addresses cues by position, so either file left
+beside the other's transcript mis-times every word — silently and for good, since an
+episode that has a `transcript.json` is one nothing revisits. Interrupted anywhere in
+between, the episode is left visibly missing a sidecar instead of quietly holding the
+wrong one. Staged files are named per process, because two instances sharing a data
+directory select the same episodes: `--retranscribe-flagged` scans the whole tree,
+whatever podcasts its config names.
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.

@@ -28,6 +28,12 @@ internal fun whisperJson(vararg cues: Triple<Double, Double, String>): String =
 
 internal val MINIMAL_VTT = whisperJson(Triple(0.0, 1.0, "Hello world."))
 
+/** Segments with no per-word times, which is what a server decoding without token_timestamps returns. */
+internal val WORDLESS_JSON =
+    """{"task":"transcribe","segments":[""" +
+        """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
+        "]}"
+
 internal open class FakeFeedService(
     private val feeds: Map<String, SyndFeed?>,
     private val downloadFails: (String) -> Boolean = { false },

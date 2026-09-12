@@ -27,6 +27,31 @@ class PodcastPipelineRunTest {
         assertTrue(feedSvc.requestedUrls.isEmpty())
     }
 
+    /**
+     * The feed path writes the sidecar before transcript.json, so a crash
+     * between the two leaves a sidecar with no transcript. The decode that
+     * redoes the episode must not adopt it -- it describes a decode that was
+     * thrown away, and the sidecar addresses cues by position.
+     */
+    @Test
+    fun `a decode with no word timestamps clears a sidecar an earlier crash left behind`(
+        @TempDir tempDir: Path,
+    ) {
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+        val (first, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
+        first.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        assertTrue(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+        Files.delete(episodeDir.resolve("transcript.json"))
+
+        val (second, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")), vtt = WORDLESS_JSON)
+        second.run()
+
+        assertTrue(Files.exists(episodeDir.resolve("transcript.json")))
+        assertFalse(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+    }
+
     @Test
     fun `run returns true when there is nothing to do`(
         @TempDir tempDir: Path,

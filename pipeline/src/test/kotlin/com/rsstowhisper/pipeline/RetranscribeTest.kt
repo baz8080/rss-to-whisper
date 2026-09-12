@@ -23,12 +23,6 @@ class RetranscribeTest {
                 .toTypedArray(),
         )
 
-    /** Segments with no per-word times, which is what a server decoding without token_timestamps returns. */
-    private fun wordlessJson(): String =
-        """{"task":"transcribe","segments":[""" +
-            """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
-            "]}"
-
     /** The shape [TranscriptQuality] writes, which is what a re-decode is measured against. */
     private fun qualityMap(
         flags: List<String>,
@@ -70,6 +64,10 @@ class RetranscribeTest {
         Files.writeString(dir.resolve("transcript.json"), mapper.writeValueAsString(fields))
         return dir
     }
+
+    /** Named per process, so the assertion cannot hard-code the run's own pid. */
+    private fun stagingFiles(dir: Path): List<String> =
+        Files.list(dir).use { stream -> stream.map { it.fileName.toString() }.filter { it.endsWith(".new") }.toList() }
 
     @Suppress("UNCHECKED_CAST")
     private fun readTranscript(dir: Path): Map<String, Any?> =
@@ -267,13 +265,15 @@ class RetranscribeTest {
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir)
+        // Bytes, not text: what replaces it is gzip.
+        val stale = "the word times of the decode being replaced".toByteArray()
+        Files.write(dir.resolve("words.jsonl.gz"), stale)
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
 
-        assertTrue(Files.exists(dir.resolve("words.jsonl.gz")))
-        assertFalse(Files.exists(dir.resolve("transcript.json.new")))
-        assertFalse(Files.exists(dir.resolve("words.jsonl.gz.new")))
+        assertFalse(stale.contentEquals(Files.readAllBytes(dir.resolve("words.jsonl.gz"))))
+        assertEquals(emptyList(), stagingFiles(dir))
     }
 
     /**
@@ -313,22 +313,24 @@ class RetranscribeTest {
     }
 
     /**
-     * The sidecar addresses cues by position, so one left over from a decode
-     * that is gone mis-times every word -- and nothing downstream can tell.
+     * Word times are not part of the score -- low-confidence cannot even be
+     * raised without them -- so a decode that lost them reads as an improvement
+     * on the transcript flagged for it, and would take the sidecar down too.
      */
     @Test
-    fun `a re-decode carrying no word timestamps clears the stale sidecar`(
+    fun `a re-decode with no word timestamps keeps the transcript that has them`(
         @TempDir tempDir: Path,
     ) {
-        val dir = episode(tempDir)
-        Files.writeString(dir.resolve("words.jsonl.gz"), "stale sidecar from the previous decode")
-        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(wordlessJson()))
+        val dir = episode(tempDir, extra = mapOf("episode_quality" to qualityMap(listOf("low-confidence"), 0.15)))
+        val sidecar = dir.resolve("words.jsonl.gz")
+        Files.writeString(sidecar, "the word times of the decode on disk")
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(WORDLESS_JSON))
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
 
-        assertTrue("no word times" in readTranscript(dir)["episode_transcript"].toString())
-        assertFalse(Files.exists(dir.resolve("words.jsonl.gz")))
-        assertFalse(Files.exists(dir.resolve("words.jsonl.gz.new")))
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+        assertEquals("the word times of the decode on disk", Files.readString(sidecar))
     }
 
     @Test

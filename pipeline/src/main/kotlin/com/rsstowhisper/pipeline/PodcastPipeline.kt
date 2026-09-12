@@ -141,6 +141,19 @@ class PodcastPipeline(
             return false
         }
 
+        // Word times are not part of the score -- low-confidence cannot even be
+        // raised without them -- so a decode that came back with none reads as
+        // an improvement on a transcript flagged for low confidence, and would
+        // both overwrite it and take the sidecar with it. The server was asked
+        // for token_timestamps, so this is a server that ignored it.
+        if (scored.transcription.words.isEmpty() && Files.exists(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME))) {
+            logger.warn(
+                "Re-transcription of $label came back with no word timestamps and would drop the ones it has; " +
+                    "keeping the existing transcript. Is token_timestamps still set on the server?",
+            )
+            return false
+        }
+
         // Whisper is not deterministic, so a re-decode can come back worse than
         // the transcript it would overwrite -- and this write is the only copy
         // of it. Judged the same way the retry inside transcribeEpisode judges
@@ -673,30 +686,46 @@ class PodcastPipeline(
             // done, both here and for anything reading the tree, so writing it
             // last means a crash in between leaves the episode to be redone
             // rather than leaving it permanently without its sidecar.
-            writeWords(transcription, wordsPath, label)
+            // A crash that got as far as the sidecar can leave one behind, so a
+            // decode with no word times has to clear it rather than adopt it.
+            if (!writeWords(transcription, wordsPath, label)) Files.deleteIfExists(wordsPath)
             Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
             return
         }
 
         // Both files describe one decode, and the sidecar addresses cues by
-        // position, so a new transcript left beside the old sidecar mis-times
+        // position, so either one left beside the other's transcript mis-times
         // every word -- silently, and for good, since an episode with a
-        // transcript.json is one nothing will revisit. Stage both, then put
-        // them in place back to back.
-        val stagedJson = episodeDirPath.resolve("$TRANSCRIPT_FILENAME$STAGING_SUFFIX")
-        val stagedWords = episodeDirPath.resolve("${WhisperTranscription.WORDS_FILENAME}$STAGING_SUFFIX")
-        Files.writeString(stagedJson, jsonMapper.writeValueAsString(episodeDict))
+        // transcript.json is one nothing will revisit.
+        //
+        // So the sidecar is absent for the whole swap: cleared first, restored
+        // only once the transcript it belongs to is in place. Interrupted
+        // anywhere in between, the episode is left visibly missing a sidecar
+        // instead of quietly holding the wrong one.
+        val stagedJson = episodeDirPath.resolve("$TRANSCRIPT_FILENAME${stagingSuffix()}")
+        val stagedWords = episodeDirPath.resolve("${WhisperTranscription.WORDS_FILENAME}${stagingSuffix()}")
+        try {
+            Files.writeString(stagedJson, jsonMapper.writeValueAsString(episodeDict))
+            val haveWords = writeWords(transcription, stagedWords, label)
 
-        if (writeWords(transcription, stagedWords, label)) {
-            replaceWith(stagedWords, wordsPath)
-        } else {
-            // No sidecar at all beats one describing a transcript that no
-            // longer exists: the first is visibly missing and re-transcribing
-            // rebuilds it, the second is wrong and nothing can tell.
             Files.deleteIfExists(wordsPath)
+            replaceWith(stagedJson, jsonPath)
+            if (haveWords) replaceWith(stagedWords, wordsPath)
+        } finally {
+            // Named per process, so anything left by a failure here is this
+            // run's litter and nobody else's half-written file.
+            runCatching { Files.deleteIfExists(stagedJson) }
+            runCatching { Files.deleteIfExists(stagedWords) }
         }
-        replaceWith(stagedJson, jsonPath)
     }
+
+    /**
+     * Two instances over one data directory select the same episodes --
+     * `--retranscribe-flagged` scans the whole tree, whatever podcasts the
+     * config names -- so a shared staging name would let one move the other's
+     * half-written file over a transcript.
+     */
+    private fun stagingSuffix(): String = ".${ProcessHandle.current().pid()}$STAGING_SUFFIX"
 
     /** Moved over the original rather than written onto it, so a crash mid-write cannot truncate the file. */
     private fun replaceWith(

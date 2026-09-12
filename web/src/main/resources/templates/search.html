@@ -39,7 +39,7 @@
   fragment via templateEngine.process("search :: app", ctx).
 -->
 <div id="app" th:fragment="app"
-     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.episodeTypes.size()}">
+     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.tags.size() + filters.episodeTypes.size()}">
 
     <div id="filter-backdrop" class="filter-backdrop" onclick="closeFilterSheet()"></div>
 
@@ -78,6 +78,13 @@
                   hx-trigger="change from:input[type='checkbox']"
                   hx-include="#search-input"
                   hx-indicator="#loading">
+
+                <!--/* The active tags are links in the sidebar, and a form does not
+                       serialise links. Without these, ticking any checkbox re-submits
+                       without tag= and silently drops the tag filter. */-->
+                <input type="hidden" name="tag"
+                       th:each="tag : ${filters.tags}"
+                       th:value="${tag}"/>
 
                 <details class="filter-group" open="open">
                     <summary>Duration</summary>
@@ -123,6 +130,25 @@
                                    th:checked="${filters.collections.contains(collection)}"/>
                             <small th:text="${collection}"></small>
                         </label>
+                    </div>
+                </details>
+
+                <!--/* Only the ACTIVE tags: feeds contribute thousands of keywords,
+                       so the sidebar would be unusable listing them all. Tag pills
+                       on the result cards are how a tag gets added. */-->
+                <details class="filter-group" open="open"
+                         th:if="${not filters.tags.isEmpty()}">
+                    <summary>Tags</summary>
+                    <div class="filter-list">
+                        <a class="tag-pill tag-pill-active"
+                           th:each="tag : ${filters.tags}"
+                           th:href="${tagRemoveUrls.get(tag)}"
+                           th:attr="hx-get=${tagRemoveUrls.get(tag)}"
+                           hx-target="#app"
+                           hx-swap="outerHTML"
+                           hx-push-url="true"
+                           th:title="'Remove the ' + ${tag} + ' filter'"
+                           th:text="${tag} + ' ✕'"></a>
                     </div>
                 </details>
 
@@ -210,9 +236,14 @@
 
                 <!-- Tags -->
                 <div th:if="${not episode.tagList.isEmpty()}">
-                    <span class="tag-pill"
-                          th:each="tag : ${episode.tagList}"
-                          th:text="${tag}"></span>
+                    <a class="tag-pill"
+                       th:each="tag : ${episode.tagList}"
+                       th:href="${tagBaseUrl} + 'tag=' + ${#uris.escapeQueryParam(tag)}"
+                       th:attr="hx-get=${tagBaseUrl} + 'tag=' + ${#uris.escapeQueryParam(tag)}"
+                       hx-target="#app"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       th:text="${tag}"></a>
                 </div>
 
                 <!-- Audio player -->

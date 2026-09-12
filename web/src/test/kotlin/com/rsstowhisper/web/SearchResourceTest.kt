@@ -243,6 +243,60 @@ class SearchResourceTest {
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
 
+    // --- tag filtering ---
+
+    @Test
+    fun `search exposes a base url tag pills can append to`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        resource.search("climate", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 3, null)
+
+        // Page 1, though 3 was asked for.
+        assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
+    }
+
+    /** With no filters at all the base ends in ?, so appending still yields a valid URL. */
+    @Test
+    fun `the tag base url has no stray separator when nothing is filtered`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+
+        assertEquals("/search?", ctxSlot.captured.getVariable("tagBaseUrl"))
+    }
+
+    @Test
+    fun `search builds a remove link for every active tag`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        resource.search("", emptyList(), emptyList(), emptyList(), listOf("space", "science"), emptyList(), 2, null)
+
+        @Suppress("UNCHECKED_CAST")
+        val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
+        assertEquals(setOf("space", "science"), removeUrls.keys)
+        // Page 1 again, though 2 was asked for.
+        assertEquals("/search?tag=science", removeUrls["space"])
+        assertEquals("/search?tag=space", removeUrls["science"])
+    }
+
+    @Test
+    fun `tags reach the repository as filters`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        resource.search("", emptyList(), emptyList(), emptyList(), listOf("space"), emptyList(), 1, null)
+
+        assertEquals(setOf("space"), captured.captured.tags)
+    }
+
     // --- helpers ---
 
     private fun stubSearchDependencies() {

@@ -2,6 +2,7 @@ package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.appendableSearchUrl
 import com.rsstowhisper.web.models.buildSearchUrl
 import com.rsstowhisper.web.models.episodeQuerySuffix
 import com.rsstowhisper.web.models.hasActiveFilters
@@ -81,6 +82,15 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
+                // Page 1 on both: changing the tags changes the result set, so
+                // the page number carried over would point somewhere else.
+                setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
+                setVariable(
+                    "tagRemoveUrls",
+                    filters.tags.associateWith { tag ->
+                        buildSearchUrl(filters.copy(tags = filters.tags - tag, page = 1))
+                    },
+                )
                 // Result links carry the query so the episode page can jump to the matches.
                 setVariable("episodeQuerySuffix", episodeQuerySuffix(filters.query))
             }

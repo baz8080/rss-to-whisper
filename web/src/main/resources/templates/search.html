@@ -39,7 +39,7 @@
   fragment via templateEngine.process("search :: app", ctx).
 -->
 <div id="app" th:fragment="app"
-     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.episodeTypes.size()}">
+     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.tags.size() + filters.episodeTypes.size()}">
 
     <div id="filter-backdrop" class="filter-backdrop" onclick="closeFilterSheet()"></div>
 
@@ -126,6 +126,25 @@
                     </div>
                 </details>
 
+                <!--/* Only the ACTIVE tags: feeds contribute thousands of keywords,
+                       so the sidebar would be unusable listing them all. Tag pills
+                       on the result cards are how a tag gets added. */-->
+                <details class="filter-group" open="open"
+                         th:if="${not filters.tags.isEmpty()}">
+                    <summary>Tags</summary>
+                    <div class="filter-list">
+                        <a class="tag-pill tag-pill-active"
+                           th:each="tag : ${filters.tags}"
+                           th:href="${tagRemoveUrls.get(tag)}"
+                           th:attr="hx-get=${tagRemoveUrls.get(tag)}"
+                           hx-target="#app"
+                           hx-swap="outerHTML"
+                           hx-push-url="true"
+                           th:title="'Remove the ' + ${tag} + ' filter'"
+                           th:text="${tag} + ' ✕'"></a>
+                    </div>
+                </details>
+
                 <details class="filter-group"
                          th:if="${filterOptions.episodeTypes.size() > 1}">
                     <summary>Episode Type</summary>
@@ -208,11 +227,16 @@
                      th:if="${episode.snippetHtml != null}"
                      th:utext="${episode.snippetHtml}"></div>
 
-                <!-- Tags -->
+                <!-- Tags: each one adds itself to the current filters. -->
                 <div th:if="${not episode.tagList.isEmpty()}">
-                    <span class="tag-pill"
-                          th:each="tag : ${episode.tagList}"
-                          th:text="${tag}"></span>
+                    <a class="tag-pill"
+                       th:each="tag : ${episode.tagList}"
+                       th:href="${tagBaseUrl} + 'tag=' + ${#uris.escapeQueryParam(tag)}"
+                       th:attr="hx-get=${tagBaseUrl} + 'tag=' + ${#uris.escapeQueryParam(tag)}"
+                       hx-target="#app"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       th:text="${tag}"></a>
                 </div>
 
                 <!-- Audio player -->

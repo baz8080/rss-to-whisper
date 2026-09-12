@@ -120,6 +120,20 @@ fun buildSearchUrl(filters: SearchFilters): String {
     return "/search?${params.joinToString("&")}"
 }
 
+/**
+ * [buildSearchUrl] with a trailing separator, so a template can append one more
+ * parameter to it.
+ *
+ * Tag pills are built in the template because the tags come from each result
+ * card, so the set is not known here. Ending the base in `?` or `&` as
+ * appropriate keeps the result a well-formed URL either way, rather than the
+ * `/search?&tag=x` that appending blind would produce.
+ */
+fun appendableSearchUrl(filters: SearchFilters): String {
+    val url = buildSearchUrl(filters)
+    return if (url.endsWith("?")) url else "$url&"
+}
+
 fun formatDuration(seconds: Int): String {
     val hours = seconds / 3600
     val minutes = (seconds % 3600) / 60

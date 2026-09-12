@@ -170,6 +170,23 @@ body {
     font-size: 0.8rem;
     margin: 0.1rem;
 }
+/* Pills are links now. Keep them looking like pills rather than body links. */
+a.tag-pill {
+    text-decoration: none;
+    cursor: pointer;
+}
+a.tag-pill:hover {
+    background: #cbd5e1;
+    color: #1e293b;
+}
+.tag-pill-active {
+    background: #334155;
+    color: #f1f5f9;
+}
+a.tag-pill-active:hover {
+    background: #1e293b;
+    color: #ffffff;
+}
 .htmx-indicator {
     opacity: 0;
     transition: opacity 200ms ease-in;

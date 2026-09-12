@@ -51,9 +51,14 @@
             <th>Collections</th>
             <td th:text="${episode.podcastCollections}"></td>
         </tr>
-        <tr th:if="${episode.allTags != null and not #strings.isEmpty(episode.allTags)}">
+        <tr th:if="${not episode.tagList.isEmpty()}">
             <th>Tags</th>
-            <td th:text="${episode.allTags}"></td>
+            <td>
+                <a class="tag-pill"
+                   th:each="tag : ${episode.tagList}"
+                   th:href="'/search?tag=' + ${#uris.escapeQueryParam(tag)}"
+                   th:text="${tag}"></a>
+            </td>
         </tr>
         <!-- linkifiedSummary is pre-processed in SearchResource: URLs wrapped in <a> tags -->
         <tr th:if="${linkifiedSummary != null and not #strings.isEmpty(linkifiedSummary)}">

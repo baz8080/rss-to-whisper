@@ -149,9 +149,8 @@
             trackEl.src = URL.createObjectURL(blob);
         }
 
-        // The address bar always holds the last cue clicked, so a passage can be
-        // copied out of it. replaceState rather than pushState: stepping through
-        // a transcript should not fill the back button with its own cues.
+        // replaceState, not pushState: stepping through a transcript should not
+        // fill the back button with its own cues.
         function rememberPosition(seconds) {
             history.replaceState(null, '', location.pathname + location.search + '#t=' + Math.floor(seconds));
         }
@@ -247,13 +246,11 @@
             return match ? parseFloat(match[1]) : null;
         }
 
-        // Scroll to the cue and mark it, and arm the player to begin there --
-        // without autoplaying, which browsers block and readers do not expect.
+        // Arms the player rather than starting it: browsers block autoplay, and
+        // a reader opening a link does not expect sound.
         function openAtTime(seconds) {
             // Armed first: the assignment can raise events, and none of them
-            // should arrive after the cue below has been marked. preload="none"
-            // means nothing is fetched until the reader presses play, and the
-            // fragment is what makes that play start here.
+            // should arrive after the cue below has been marked.
             if (audioEl) audioEl.src = audioSrcBase + '#t=' + seconds;
             const line = findActiveLine(seconds * 1000);
             if (line) {

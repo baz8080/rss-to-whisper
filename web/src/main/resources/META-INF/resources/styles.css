@@ -456,3 +456,31 @@ a.tag-pill-active:hover {
 .podcast-name a:hover {
     text-decoration: underline;
 }
+
+/* Word timings */
+.transcript-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.word-controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    cursor: pointer;
+}
+.word-controls input {
+    margin: 0;
+}
+.word.current-word {
+    background: var(--pico-primary-focus, #b7d4ff);
+    border-radius: 3px;
+}
+/* Only when asked for: a transcript permanently mottled with faded words is
+   harder to read than one that never shows its confidence at all. */
+.transcript.dim-low-confidence .word.low-confidence {
+    opacity: 0.45;
+}

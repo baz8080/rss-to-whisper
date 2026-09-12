@@ -112,12 +112,23 @@
 
     <!-- Transcript — parsed into timestamped lines by SearchResource -->
     <div th:if="${not transcriptLines.isEmpty()}">
-        <h3>Transcript</h3>
+        <div class="transcript-header">
+            <h3>Transcript</h3>
+            <!--/* Hidden until the sidecar is known to exist: episodes
+                   transcribed before word timings were emitted have none. */-->
+            <div class="word-controls" id="word-controls" hidden="hidden">
+                <label title="Fade the words whisper was least sure of">
+                    <input type="checkbox" id="dim-toggle"/>
+                    <small>Mark low confidence</small>
+                </label>
+            </div>
+        </div>
         <div class="transcript" id="transcript">
             <div class="transcript-line"
                  th:each="line : ${transcriptLines}"
                  th:classappend="${line.matched} ? 'match'"
-                 th:data-start-ms="${line.millis}">
+                 th:data-start-ms="${line.millis}"
+                 th:data-cue="${line.cueIndex}">
                 <span class="transcript-time"
                       th:onclick="'seekAudio(' + ${line.seconds} + ')'"
                       th:title="'Play from ' + ${line.display} + ' and link to it'"
@@ -263,6 +274,123 @@
                 line.scrollIntoView({block: 'center'});
             }
         }
+
+        // --- Word timings ---------------------------------------------------
+        //
+        // words.jsonl.gz is roughly 60 KB per episode, so it is never fetched on
+        // page load: the first play pulls it, and so does ticking the
+        // confidence toggle.
+
+        const wordsUrl = [[${wordsUrl}]];
+        const wordControls = document.getElementById('word-controls');
+        const transcriptEl = document.getElementById('transcript');
+        const dimToggle = document.getElementById('dim-toggle');
+
+        // Whisper's own probability. Below this the decoder was guessing, and
+        // the reader deserves to know which words those are.
+        const LOW_CONFIDENCE = 0.4;
+
+        let wordsByCue = null;
+        let wordSpans = [];      // every rendered word, in time order
+        let currentWord = null;
+        let wordsRequested = false;
+
+        async function loadWords() {
+            if (wordsRequested) return wordsByCue;
+            wordsRequested = true;
+            if (!wordsUrl) return null;
+            let text;
+            try {
+                const response = await fetch(wordsUrl);
+                // 404 is the ordinary case for an episode transcribed before
+                // word timings existed. Fall back silently.
+                if (!response.ok) return null;
+                text = await response.text();
+            } catch (e) {
+                return null;
+            }
+            wordsByCue = new Map();
+            for (const row of text.split('\n')) {
+                if (!row) continue;
+                let word;
+                try { word = JSON.parse(row); } catch (e) { continue; }
+                if (!wordsByCue.has(word.seg)) wordsByCue.set(word.seg, []);
+                wordsByCue.get(word.seg).push(word);
+            }
+            renderWords();
+            if (wordControls && wordSpans.length > 0) wordControls.hidden = false;
+            return wordsByCue;
+        }
+
+        function renderWords() {
+            for (const lineEl of lineEls) {
+                // A matched line is already marked up with <mark>; rewriting it
+                // per word would throw the highlights away. Word timing is the
+                // lesser feature here, so it yields.
+                if (lineEl.classList.contains('match')) continue;
+                const words = wordsByCue.get(+lineEl.dataset.cue);
+                if (!words || words.length === 0) continue;
+                const textEl = lineEl.querySelector('.transcript-text');
+                if (!textEl) continue;
+
+                textEl.textContent = '';
+                for (const word of words) {
+                    const span = document.createElement('span');
+                    // Whisper words carry their own leading space, so
+                    // concatenating them reproduces the cue text exactly.
+                    span.textContent = word.w;
+                    span.className = word.p < LOW_CONFIDENCE ? 'word low-confidence' : 'word';
+                    span.dataset.start = word.s;
+                    textEl.appendChild(span);
+                    wordSpans.push({start: word.s, el: span});
+                }
+            }
+            wordSpans.sort((a, b) => a.start - b.start);
+        }
+
+        // Last word whose start is at or before now, by binary search -- the
+        // same shape as findActiveLine, over a much longer list.
+        function findWordAt(seconds) {
+            let lo = 0, hi = wordSpans.length - 1, result = null;
+            while (lo <= hi) {
+                const mid = (lo + hi) >>> 1;
+                if (wordSpans[mid].start <= seconds) {
+                    result = wordSpans[mid].el;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return result;
+        }
+
+        function highlightWordAt(seconds) {
+            if (wordSpans.length === 0) return;
+            const word = findWordAt(seconds);
+            if (word === currentWord) return;
+            if (currentWord) currentWord.classList.remove('current-word');
+            if (word) word.classList.add('current-word');
+            currentWord = word;
+        }
+
+        if (audioEl) {
+            audioEl.addEventListener('play', loadWords, {once: true});
+            audioEl.addEventListener('timeupdate', function () {
+                if (audioEl.readyState === 0) return;
+                highlightWordAt(audioEl.currentTime);
+            });
+        }
+
+        if (dimToggle) {
+            dimToggle.addEventListener('change', async function () {
+                await loadWords();
+                transcriptEl.classList.toggle('dim-low-confidence', dimToggle.checked);
+            });
+        }
+
+        // The toggle is the only way in for a reader who never presses play, so
+        // it has to be reachable before the words are fetched.
+        if (wordsUrl && wordControls) wordControls.hidden = false;
 
         document.addEventListener('keydown', function (e) {
             const tag = document.activeElement.tagName;

@@ -592,4 +592,33 @@ class SearchModelsTest {
         assertTrue(SearchFilters(years = setOf("2024")).hasActiveFilters())
         assertFalse(SearchFilters().hasActiveFilters())
     }
+
+    // --- cue ordinals (W6) ---
+
+    @Test
+    fun `cueIndex counts cues in order`() {
+        val vtt =
+            "WEBVTT\n\n" +
+                "00:00:00.000 --> 00:00:01.000\nFirst\n\n" +
+                "00:00:01.000 --> 00:00:02.000\nSecond\n\n" +
+                "00:00:02.000 --> 00:00:03.000\nThird\n"
+        assertEquals(listOf(0, 1, 2), parseTranscript(vtt).map { it.cueIndex })
+    }
+
+    /**
+     * The reason cueIndex exists: a cue with no text is dropped from the list
+     * but still counts as a whisper segment, so line index and cue ordinal
+     * diverge from that point on. The word sidecar keys on the ordinal.
+     */
+    @Test
+    fun `a blank cue still advances the ordinal`() {
+        val vtt =
+            "WEBVTT\n\n" +
+                "00:00:00.000 --> 00:00:01.000\nFirst\n\n" +
+                "00:00:01.000 --> 00:00:02.000\n\n" +
+                "00:00:02.000 --> 00:00:03.000\nThird\n"
+        val lines = parseTranscript(vtt)
+        assertEquals(listOf("First", "Third"), lines.map { it.text })
+        assertEquals(listOf(0, 2), lines.map { it.cueIndex })
+    }
 }

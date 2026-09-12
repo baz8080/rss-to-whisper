@@ -147,6 +147,15 @@ data class TranscriptLine(
     val millis: Long,
     val text: String,
     val highlightedHtml: String? = null,
+    /**
+     * This cue's ordinal in the VTT, counting every cue.
+     *
+     * Not the line's index in this list: [parseTranscript] drops cues with
+     * blank text, so the two diverge as soon as a decode emits one. The word
+     * sidecar keys on the whisper segment index, which counts them all, so this
+     * is what joins the two.
+     */
+    val cueIndex: Int = 0,
 ) {
     val seconds: Double get() = millis / 1000.0
     val display: String get() = formatTimestamp(millis)
@@ -229,11 +238,12 @@ fun parseTranscript(transcript: String): List<TranscriptLine> {
 
     val result = mutableListOf<TranscriptLine>()
     var currentStartMs: Long? = null
+    var cueOrdinal = -1
     val currentText = StringBuilder()
 
     fun flush() {
         if (currentStartMs != null && currentText.isNotBlank()) {
-            result.add(TranscriptLine(currentStartMs!!, currentText.toString().trim()))
+            result.add(TranscriptLine(currentStartMs!!, currentText.toString().trim(), cueIndex = cueOrdinal))
         }
     }
 
@@ -243,6 +253,9 @@ fun parseTranscript(transcript: String): List<TranscriptLine> {
         when {
             timingMatch != null -> {
                 flush()
+                // Counted here rather than from result.size, so a cue whose text
+                // is blank still advances the ordinal the sidecar keys on.
+                cueOrdinal++
                 val h = timingMatch.groupValues[1].toLong()
                 val m = timingMatch.groupValues[2].toLong()
                 val s = timingMatch.groupValues[3].toLong()

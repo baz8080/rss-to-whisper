@@ -236,6 +236,23 @@ class TranscriberTest {
         assertEquals("true", fields["carry_initial_prompt"])
     }
 
+    /**
+     * whisper.cpp's whisper_lang_id is a lookup in a map keyed by lower-case
+     * codes, and its caller never checks the result: an unmatched code returns
+     * -1, which is added to the language token's base index, so an upper-case
+     * code selects the wrong token rather than failing.
+     */
+    @Test
+    fun `transcribe lower-cases the language code it posts`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "EN")
+
+        assertEquals("en", partValue(requests.single(), "language"))
+    }
+
     /** Whisper's codes are lower-case, but a hand-edited pods.yaml need not be. */
     @Test
     fun `the prompt language match is case-insensitive`(

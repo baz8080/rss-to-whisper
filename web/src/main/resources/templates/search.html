@@ -227,7 +227,7 @@
                      th:if="${episode.snippetHtml != null}"
                      th:utext="${episode.snippetHtml}"></div>
 
-                <!-- Tags: each one adds itself to the current filters. -->
+                <!-- Tags -->
                 <div th:if="${not episode.tagList.isEmpty()}">
                     <a class="tag-pill"
                        th:each="tag : ${episode.tagList}"

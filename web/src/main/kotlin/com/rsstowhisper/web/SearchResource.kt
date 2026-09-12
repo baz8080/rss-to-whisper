@@ -82,8 +82,8 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
-                // Adding a tag resets to page 1: the result set changes, so the
-                // old page number points at a different set of episodes.
+                // Page 1 on both: changing the tags changes the result set, so
+                // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
                 setVariable(
                     "tagRemoveUrls",

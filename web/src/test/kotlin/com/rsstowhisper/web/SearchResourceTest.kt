@@ -243,7 +243,7 @@ class SearchResourceTest {
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
 
-    // --- tag filtering (W1) ---
+    // --- tag filtering ---
 
     @Test
     fun `search exposes a base url tag pills can append to`() {
@@ -253,7 +253,7 @@ class SearchResourceTest {
 
         resource.search("climate", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 3, null)
 
-        // Page reset to 1, and ending in & so the template can append tag=...
+        // Page 1, though 3 was asked for.
         assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
     }
 
@@ -280,7 +280,7 @@ class SearchResourceTest {
         @Suppress("UNCHECKED_CAST")
         val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
         assertEquals(setOf("space", "science"), removeUrls.keys)
-        // Each link drops its own tag and keeps the other, back at page 1.
+        // Page 1 again, though 2 was asked for.
         assertEquals("/search?tag=science", removeUrls["space"])
         assertEquals("/search?tag=space", removeUrls["science"])
     }

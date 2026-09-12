@@ -170,7 +170,6 @@ body {
     font-size: 0.8rem;
     margin: 0.1rem;
 }
-/* Pills are links now. Keep them looking like pills rather than body links. */
 a.tag-pill {
     text-decoration: none;
     cursor: pointer;

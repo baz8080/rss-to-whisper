@@ -180,6 +180,77 @@ class TranscriberTest {
         assertEquals(null, fields["carry_initial_prompt"])
     }
 
+    /**
+     * The prompt is English prose, and an initial prompt biases vocabulary as
+     * well as style. Conditioning a French decode on it would pull the
+     * transcript toward English -- carried into every window, since
+     * carry_initial_prompt travels with it.
+     */
+    @Test
+    fun `transcribe omits the prompt when decoding another language`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "fr")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals("fr", fields["language"])
+        assertEquals(null, fields["prompt"])
+        assertEquals(null, fields["carry_initial_prompt"])
+    }
+
+    /**
+     * Worse than useless under "auto": an English prompt skews whisper's own
+     * language detection toward English before it decodes anything, breaking
+     * the detection the setting exists to enable.
+     */
+    @Test
+    fun `transcribe omits the prompt when the language is auto-detected`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "auto")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals(null, fields["prompt"])
+        assertEquals(null, fields["carry_initial_prompt"])
+    }
+
+    /** A prompt in the decode's own language still rides along. */
+    @Test
+    fun `transcribe sends a prompt written in the language being decoded`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber(
+            "http://whisper-server",
+            initialPrompt = "Bonjour, et bienvenue dans cette emission.",
+            promptLanguage = "fr",
+            httpClient = clientReturning("{}", captureRequests = requests),
+        ).transcribe(mp3File(tmp), "fr")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals("Bonjour, et bienvenue dans cette emission.", fields["prompt"])
+        assertEquals("true", fields["carry_initial_prompt"])
+    }
+
+    /** Whisper's codes are lower-case, but a hand-edited pods.yaml need not be. */
+    @Test
+    fun `the prompt language match is case-insensitive`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "EN")
+
+        assertEquals(
+            Transcriber.DEFAULT_INITIAL_PROMPT,
+            formFields(requests.single().body as okhttp3.MultipartBody)["prompt"],
+        )
+    }
+
     @Test
     fun `transcribe honours a custom max length`(
         @TempDir tmp: Path,

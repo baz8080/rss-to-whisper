@@ -131,6 +131,17 @@ domain-specific contaminates transcripts. The default in `Transcriber.kt` was
 checked against a repaired episode — zero occurrences of any prompt fragment,
 word count within 5% of the original.
 
+**The prompt only rides with the language it is written in.** The default is
+English prose, so a podcast set to another `language` decodes without it — an
+English prompt on French audio is the same vocabulary contamination as a
+domain-specific one, and `carry_initial_prompt` would apply it to every window.
+Under `language: auto` it is worse: the prompt would skew whisper's own language
+detection toward English before it decoded anything, breaking the very thing
+`auto` is for. A non-English feed therefore gives up this lever; see
+the `language` key in [`pods.yaml`](#podsyaml). To supply a prompt in another language,
+`Transcriber` takes `initialPrompt` with a matching `promptLanguage`, though
+nothing in `pods.yaml` reaches those yet.
+
 ### `vad=false` — sent explicitly, and off
 
 Not merely omitted. A request that omits `vad` inherits whatever the server was

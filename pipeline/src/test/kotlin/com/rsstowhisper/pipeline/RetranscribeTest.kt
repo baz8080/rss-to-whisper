@@ -15,7 +15,7 @@ class RetranscribeTest {
 
     private val podcast = PodcastConfig(name = "Show", url = "https://feed")
 
-    /** Twenty identical cues, which the quality gate scores as a repetition loop. */
+    /** What the quality gate scores as a repetition loop. */
     private fun loopingJson(): String =
         whisperJson(
             *(0 until 20)

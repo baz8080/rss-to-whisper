@@ -80,12 +80,8 @@ class PodcastPipeline(
     /**
      * Decodes episodes that already have a transcript, and replaces it.
      *
-     * The only way to redo an episode used to be deleting its `transcript.json`
-     * by hand. With the quality gate recording flags, the loop closes: find the
-     * flagged episodes, decode them again.
-     *
-     * No feed is fetched. Every target is already on disk, and for one that
-     * aged out of its feed there is nothing left to fetch.
+     * No feed is fetched. Every target is already on disk, and one that aged
+     * out of its feed has nothing left to fetch.
      */
     fun retranscribe(request: RetranscribeRequest): Boolean {
         val dataDir = Path.of(config.dataDirectory)
@@ -162,10 +158,9 @@ class PodcastPipeline(
         }
 
         // Whisper is not deterministic, so a re-decode can come back worse than
-        // the transcript it would overwrite -- and this write is the only copy
-        // of it. Judged the same way the retry inside transcribeEpisode judges
-        // its second attempt, so re-transcribing can improve an episode or
-        // leave it alone, never cost it the better decode.
+        // the transcript it would overwrite, and this write is the only copy of
+        // it. Judged the way transcribeEpisode judges its retry, so redoing an
+        // episode can improve it or leave it alone, never cost it a decode.
         if (previous != null && previous.isBetterThan(scored.quality)) {
             logger.warn(
                 "Re-transcription of $label scored worse than what is on disk " +
@@ -675,7 +670,6 @@ class PodcastPipeline(
         label: String,
         transcription: WhisperTranscription,
         episodeDict: Map<String, Any?>,
-        /** Re-transcription deliberately overwrites; everything else refuses to. */
         replace: Boolean = false,
     ): Boolean {
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
@@ -698,11 +692,8 @@ class PodcastPipeline(
             // decode with no word times has to clear it rather than adopt it.
             if (!writeWords(transcription, wordsPath, label)) {
                 Files.deleteIfExists(wordsPath)
-                // Writing transcript.json anyway would mark the episode done and
-                // leave it permanently without a sidecar -- which is the thing
-                // this ordering exists to avoid, so a failure that swallowed its
-                // exception must not walk past it either. Leaving the episode
-                // undone is what gets it redone.
+                // writeWords swallows its exception, so without this the run
+                // would walk straight past the ordering above.
                 if (transcription.words.isNotEmpty()) {
                     logger.error("Not writing $label: its word timestamps could not be written")
                     return false
@@ -712,24 +703,18 @@ class PodcastPipeline(
             return true
         }
 
-        // Both files describe one decode, and the sidecar addresses cues by
-        // position, so either one left beside the other's transcript mis-times
-        // every word -- silently, and for good, since an episode with a
-        // transcript.json is one nothing will revisit.
-        //
-        // So the sidecar is absent for the whole swap: cleared first, restored
-        // only once the transcript it belongs to is in place. Interrupted
-        // anywhere in between, the episode is left visibly missing a sidecar
-        // instead of quietly holding the wrong one.
+        // The sidecar addresses cues by position, so either file left beside
+        // the other's transcript mis-times every word -- silently and for good,
+        // since an episode with a transcript.json is one nothing revisits. So
+        // it is absent for the whole swap, cleared first and restored last: an
+        // interrupted replace leaves it visibly missing rather than wrong.
         val stagedJson = episodeDirPath.resolve("$TRANSCRIPT_FILENAME${stagingSuffix()}")
         val stagedWords = episodeDirPath.resolve("${WhisperTranscription.WORDS_FILENAME}${stagingSuffix()}")
         try {
             Files.writeString(stagedJson, jsonMapper.writeValueAsString(episodeDict))
             val haveWords = writeWords(transcription, stagedWords, label)
-            // A decode that has word times but could not write them must not
-            // take the existing ones down with it -- the clear below is what
-            // would do that. A full disk should cost the run this episode, not
-            // the word times of the decode it was going to replace.
+            // The clear below would otherwise take the existing word times
+            // down with it. A full disk should cost the run this episode.
             if (!haveWords && transcription.words.isNotEmpty()) {
                 logger.error("Not replacing $label: its word timestamps could not be written")
                 return false
@@ -740,8 +725,6 @@ class PodcastPipeline(
             if (haveWords) replaceWith(stagedWords, wordsPath)
             return true
         } finally {
-            // Named per process, so anything left by a failure here is this
-            // run's litter and nobody else's half-written file.
             runCatching { Files.deleteIfExists(stagedJson) }
             runCatching { Files.deleteIfExists(stagedWords) }
         }
@@ -760,7 +743,7 @@ class PodcastPipeline(
      */
     private fun stagingSuffix(): String = ".${ProcessHandle.current().pid()}$STAGING_SUFFIX"
 
-    /** Moved over the original rather than written onto it, so a crash mid-write cannot truncate the file. */
+    /** A move rather than a write, so an interrupted replace cannot truncate the target. */
     private fun replaceWith(
         staged: Path,
         target: Path,
@@ -866,7 +849,6 @@ class PodcastPipeline(
     companion object {
         internal const val TRANSCRIPT_FILENAME = "transcript.json"
 
-        /** Marks a file written beside its target and not yet moved over it. */
         internal const val STAGING_SUFFIX = ".new"
         internal const val AUDIO_FILENAME = "audio.mp3"
 

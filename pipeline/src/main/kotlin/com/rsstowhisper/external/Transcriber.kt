@@ -102,6 +102,13 @@ open class Transcriber(
         audioPath: Path,
         language: String = DEFAULT_LANGUAGE,
     ): String {
+        // whisper.cpp looks the code up in a map keyed by lower-case codes and
+        // never checks the result: an unmatched one returns -1, and the caller
+        // adds it to the language token's base index, so "EN" silently selects
+        // the wrong token instead of failing. A hand-edited pods.yaml is the
+        // likely source, and whisper only ever emits lower case itself.
+        val code = language.lowercase()
+
         val bodyBuilder =
             MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -110,7 +117,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-                .addFormDataPart("language", language)
+                .addFormDataPart("language", code)
                 // verbose_json rather than vtt: per-word start/end are gated on
                 // token_timestamps, which is already on below, so the decode
                 // ALREADY computes these times and VTT discards them. A cue is
@@ -146,7 +153,7 @@ open class Transcriber(
         // For "auto" it is worse than useless: an English prompt skews whisper's
         // own language detection toward English before it decodes anything, so
         // the detection the setting exists to enable is what it would break.
-        val promptApplies = language.equals(promptLanguage, ignoreCase = true)
+        val promptApplies = code == promptLanguage.lowercase()
         if (initialPrompt.isNotBlank() && promptApplies) {
             bodyBuilder.addFormDataPart("prompt", initialPrompt)
             // Without this the prompt conditions only the FIRST window, so an
@@ -157,7 +164,7 @@ open class Transcriber(
         } else if (initialPrompt.isNotBlank()) {
             logger.debug(
                 "Decoding as {}; the initial prompt is {} so it is not being sent",
-                language,
+                code,
                 promptLanguage,
             )
         }

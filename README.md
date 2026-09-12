@@ -400,7 +400,7 @@ launch from a quiet one.
 - `min_episode_duration_seconds` — skip episodes shorter than this (optional, default `150`; set to `0` to disable)
 - `recover_orphans` — transcribe episodes that aged out of their feed before they were processed (optional, default `true`; see [Orphan recovery](#orphan-recovery))
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
-- `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`)
+- `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Case does not matter; it is lower-cased before being sent, because whisper.cpp matches the code exactly and silently decodes with the wrong language token when it does not match
 - `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 

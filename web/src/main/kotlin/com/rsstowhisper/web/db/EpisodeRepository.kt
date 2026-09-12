@@ -5,6 +5,7 @@ import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
+import com.rsstowhisper.web.models.SortOrder
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import jakarta.enterprise.context.ApplicationScoped
@@ -59,6 +60,7 @@ class EpisodeRepository {
         addCsvContainsFilter(filters.collections, "e.podcast_collections", whereClauses, params)
         addCsvContainsFilter(filters.tags, "e.all_tags", whereClauses, params)
         addSetFilter(filters.episodeTypes, "e.episode_type", whereClauses, params)
+        addYearFilter(filters.years, whereClauses, params)
 
         val whereClause = if (whereClauses.isEmpty()) "" else "WHERE ${whereClauses.joinToString(" AND ")}"
 
@@ -96,13 +98,13 @@ class EpisodeRepository {
                FROM episodes e
                JOIN episodes_fts ON e.rowid = episodes_fts.rowid
                $whereClause
-               ORDER BY episodes_fts.rank
+               ORDER BY ${orderBy(filters, hasQuery = true)}
                LIMIT ? OFFSET ?"""
             } else {
                 """SELECT $SEARCH_COLUMNS, NULL AS snippet
                FROM episodes e
                $whereClause
-               ORDER BY e.episode_published_on DESC
+               ORDER BY ${orderBy(filters, hasQuery = false)}
                LIMIT ? OFFSET ?"""
             }
 
@@ -175,11 +177,29 @@ class EpisodeRepository {
             }
         }
 
+        // Newest year first, matching how the results themselves are ordered
+        // by default. The column holds YYYY-MM-DD, so the first four
+        // characters are the year and sort as text.
+        fun queryYears(): List<String> {
+            val sql =
+                "SELECT DISTINCT substr(e.episode_published_on, 1, 4) AS y $fromClause " +
+                    "$wherePrefix e.episode_published_on IS NOT NULL ORDER BY y DESC"
+            return conn.prepareStatement(sql).use { stmt ->
+                if (ftsQuery != null) stmt.setString(1, ftsQuery)
+                stmt.executeQuery().use { rs ->
+                    generateSequence { if (rs.next()) rs.getString(1) else null }
+                        .filter { it.length == 4 }
+                        .toList()
+                }
+            }
+        }
+
         val options =
             FilterOptions(
                 podcasts = queryDistinct("e.podcast_title"),
                 collections = splitCsv("e.podcast_collections"),
                 episodeTypes = queryDistinct("e.episode_type"),
+                years = queryYears(),
             )
         cachedFilterQuery = query
         cachedFilterOptions = options
@@ -223,6 +243,41 @@ class EpisodeRepository {
                 stmt.executeQuery().use { it.next() }
             }
         }.isSuccess
+
+    /**
+     * `episode_published_on` is `YYYY-MM-DD` text with an index, so
+     * lexicographic comparison orders it correctly.
+     *
+     * With a query, rank is the secondary key on a date sort: episodes sharing
+     * a publication date would otherwise come back in an arbitrary order that
+     * could differ between pages of the same search.
+     *
+     * A recovered orphan keeps a real date from its directory name, so a null
+     * date is rare; under DESC it sorts last, which is where an episode of
+     * unknown age belongs.
+     */
+    private fun orderBy(
+        filters: SearchFilters,
+        hasQuery: Boolean,
+    ): String {
+        val rankTiebreak = if (hasQuery) ", episodes_fts.rank" else ""
+        return when (filters.effectiveSort) {
+            SortOrder.RELEVANCE -> if (hasQuery) "episodes_fts.rank" else "e.episode_published_on DESC"
+            SortOrder.NEWEST -> "e.episode_published_on DESC$rankTiebreak"
+            SortOrder.OLDEST -> "e.episode_published_on ASC$rankTiebreak"
+        }
+    }
+
+    private fun addYearFilter(
+        years: Set<String>,
+        clauses: MutableList<String>,
+        params: MutableList<Any>,
+    ) {
+        if (years.isEmpty()) return
+        val placeholders = years.joinToString(",") { "?" }
+        clauses.add("substr(e.episode_published_on, 1, 4) IN ($placeholders)")
+        params.addAll(years)
+    }
 
     private fun addDurationFilter(
         filters: SearchFilters,

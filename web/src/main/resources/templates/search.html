@@ -39,7 +39,7 @@
   fragment via templateEngine.process("search :: app", ctx).
 -->
 <div id="app" th:fragment="app"
-     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.tags.size() + filters.episodeTypes.size()}">
+     th:with="activeFilterCount=${filters.durations.size() + filters.podcasts.size() + filters.collections.size() + filters.tags.size() + filters.episodeTypes.size() + filters.years.size()}">
 
     <div id="filter-backdrop" class="filter-backdrop" onclick="closeFilterSheet()"></div>
 
@@ -75,9 +75,22 @@
                   hx-target="#app"
                   hx-swap="outerHTML"
                   hx-push-url="true"
-                  hx-trigger="change from:input[type='checkbox']"
+                  hx-trigger="change from:input[type='checkbox'], change from:select"
                   hx-include="#search-input"
                   hx-indicator="#loading">
+
+                <!--/* Relevance is meaningless without a query, and the
+                       repository silently treats it as newest, so the control
+                       only appears when it has something to do. */-->
+                <div class="filter-group sort-group" th:if="${not #strings.isEmpty(filters.query)}">
+                    <label for="sort-select"><strong>Sort</strong></label>
+                    <select id="sort-select" name="sort">
+                        <option th:each="option : ${sortOptions}"
+                                th:value="${option.param}"
+                                th:text="${option.label}"
+                                th:selected="${filters.sort == option}"></option>
+                    </select>
+                </div>
 
                 <details class="filter-group" open="open">
                     <summary>Duration</summary>
@@ -122,6 +135,19 @@
                                    th:value="${collection}"
                                    th:checked="${filters.collections.contains(collection)}"/>
                             <small th:text="${collection}"></small>
+                        </label>
+                    </div>
+                </details>
+
+                <details class="filter-group"
+                         th:if="${filterOptions.years.size() > 1}">
+                    <summary>Year</summary>
+                    <div class="filter-list">
+                        <label th:each="year : ${filterOptions.years}">
+                            <input type="checkbox" name="year"
+                                   th:value="${year}"
+                                   th:checked="${filters.years.contains(year)}"/>
+                            <small th:text="${year}"></small>
                         </label>
                     </div>
                 </details>

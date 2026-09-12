@@ -5,6 +5,7 @@ import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.TranscriptLine
 import io.mockk.every
 import io.mockk.mockk
@@ -48,7 +49,7 @@ class SearchResourceTest {
         every { templateEngine.process("search", any<IContext>()) } returns "<html>full</html>"
 
         val result =
-            resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+            search("")
 
         assertEquals("<html>full</html>", result)
     }
@@ -59,7 +60,7 @@ class SearchResourceTest {
         every { templateEngine.process("search", setOf("app"), any<IContext>()) } returns "<div>partial</div>"
 
         val result =
-            resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, "true")
+            search("", htmxRequest = "true")
 
         assertEquals("<div>partial</div>", result)
     }
@@ -71,7 +72,7 @@ class SearchResourceTest {
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
         every { templateEngine.process("search", any<IContext>()) } returns ""
 
-        resource.search("  kotlin  ", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("  kotlin  ")
 
         assertEquals("kotlin", captured.captured.query)
     }
@@ -83,7 +84,7 @@ class SearchResourceTest {
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
         every { templateEngine.process("search", any<IContext>()) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), -5, null)
+        search("", page = -5)
 
         assertEquals(1, captured.captured.page)
     }
@@ -227,7 +228,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("climate change", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("climate change")
 
         assertEquals("?q=climate%20change", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
@@ -238,7 +239,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("")
 
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
@@ -251,7 +252,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("climate", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 3, null)
+        search("climate", page = 3)
 
         // Page reset to 1, and ending in & so the template can append tag=...
         assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
@@ -264,7 +265,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("")
 
         assertEquals("/search?", ctxSlot.captured.getVariable("tagBaseUrl"))
     }
@@ -275,7 +276,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), listOf("space", "science"), emptyList(), 2, null)
+        search("", tags = listOf("space", "science"), page = 2)
 
         @Suppress("UNCHECKED_CAST")
         val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
@@ -292,12 +293,81 @@ class SearchResourceTest {
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
         every { templateEngine.process("search", any<IContext>()) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), listOf("space"), emptyList(), 1, null)
+        search("", tags = listOf("space"))
 
         assertEquals(setOf("space"), captured.captured.tags)
     }
 
     // --- helpers ---
+
+    // --- sort and year (W2) ---
+
+    @Test
+    fun `sort and years reach the repository`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        search("space", years = listOf("2024", "2023"), sort = "oldest")
+
+        assertEquals(setOf("2024", "2023"), captured.captured.years)
+        assertEquals(SortOrder.OLDEST, captured.captured.sort)
+    }
+
+    /** The parameter is user-typed, so nonsense must not 500 the page. */
+    @Test
+    fun `an unknown sort falls back to relevance`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        search("space", sort = "sideways")
+
+        assertEquals(SortOrder.RELEVANCE, captured.captured.sort)
+    }
+
+    @Test
+    fun `search offers every sort option to the template`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search("space")
+
+        assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    /**
+     * Named defaults rather than a positional call in every test: `search()`
+     * has grown a parameter with almost every filter added, and each one used
+     * to mean editing all ten call sites here.
+     */
+    private fun search(
+        query: String = "",
+        durations: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+        collections: List<String> = emptyList(),
+        tags: List<String> = emptyList(),
+        episodeTypes: List<String> = emptyList(),
+        years: List<String> = emptyList(),
+        sort: String = "relevance",
+        page: Int = 1,
+        htmxRequest: String? = null,
+    ): String =
+        resource.search(
+            query,
+            durations,
+            podcasts,
+            collections,
+            tags,
+            episodeTypes,
+            years,
+            sort,
+            page,
+            htmxRequest,
+        )
 
     private fun stubSearchDependencies() {
         every { repository.search(any()) } returns emptySearchResult()

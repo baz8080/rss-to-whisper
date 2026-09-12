@@ -2,6 +2,7 @@ package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.appendableSearchUrl
 import com.rsstowhisper.web.models.buildSearchUrl
 import com.rsstowhisper.web.models.episodeQuerySuffix
@@ -55,6 +56,8 @@ class SearchResource {
         @QueryParam("collection") collections: List<String>,
         @QueryParam("tag") tags: List<String>,
         @QueryParam("episodeType") episodeTypes: List<String>,
+        @QueryParam("year") years: List<String>,
+        @QueryParam("sort") @DefaultValue("relevance") sort: String,
         @QueryParam("page") @DefaultValue("1") page: Int,
         @HeaderParam("HX-Request") htmxRequest: String?,
     ): String {
@@ -66,6 +69,8 @@ class SearchResource {
                 collections = collections.toSet(),
                 tags = tags.toSet(),
                 episodeTypes = episodeTypes.toSet(),
+                years = years.toSet(),
+                sort = SortOrder.parse(sort),
                 page = page.coerceAtLeast(1),
             )
         val result = repository.search(filters)
@@ -82,6 +87,7 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
+                setVariable("sortOptions", SortOrder.entries)
                 // Adding a tag resets to page 1: the result set changes, so the
                 // old page number points at a different set of episodes.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))

@@ -13,6 +13,8 @@ internal val USAGE =
       --recover-orphans      Transcribe episodes that aged out of their feed (default)
       --no-recover-orphans   Follow the feed only
       --orphan-limit <n>     Recover at most n orphans this run; 0 means no limit
+      --quality-retry        Decode a flagged transcript a second time (default)
+      --no-quality-retry     Keep the first decode whatever it scores
       -h, --help             Show this message
 
     Options override .env, which overrides pods.yaml. Give a second instance its
@@ -27,6 +29,7 @@ internal data class Args(
     val verbose: Boolean? = null,
     val recoverOrphans: Boolean? = null,
     val orphanRecoveryLimit: Int? = null,
+    val qualityRetry: Boolean? = null,
     val help: Boolean = false,
 )
 
@@ -45,6 +48,8 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--recover-orphans" -> args.copy(recoverOrphans = true)
                 "--no-recover-orphans" -> args.copy(recoverOrphans = false)
                 "--orphan-limit" -> args.copy(orphanRecoveryLimit = intValueFor(flag, argv, ++i))
+                "--quality-retry" -> args.copy(qualityRetry = true)
+                "--no-quality-retry" -> args.copy(qualityRetry = false)
                 "-h", "--help" -> args.copy(help = true)
                 else ->
                     if (flag.startsWith("-")) {

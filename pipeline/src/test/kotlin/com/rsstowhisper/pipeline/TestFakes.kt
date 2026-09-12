@@ -59,7 +59,12 @@ internal open class FakeFeedService(
 
 internal class FakeTranscriber(
     serverUrl: String,
-    private val vtt: String,
+    /**
+     * Consumed in order, so a test can make the first decode of an episode
+     * differ from its retry. The last entry repeats once the list runs out,
+     * which is what a single-element list means.
+     */
+    private val vtts: List<String>,
     private val failWith: (() -> Nothing)? = null,
     /** Runs mid-transcription, so a test can simulate another instance finishing first. */
     private val onCall: ((Path) -> Unit)? = null,
@@ -73,11 +78,12 @@ internal class FakeTranscriber(
         audioPath: Path,
         language: String,
     ): String {
+        val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
         languages.add(language)
         onCall?.invoke(audioPath)
         failWith?.invoke()
-        return vtt
+        return response
     }
 }
 
@@ -128,12 +134,15 @@ internal fun buildPipeline(
     podcasts: List<PodcastConfig>,
     feed: SyndFeed?,
     vtt: String = MINIMAL_VTT,
+    /** Overrides [vtt] when a test needs successive decodes to differ. */
+    vtts: List<String>? = null,
     feedUrl: String = "https://feed",
     skipAfterConsecutive: Int = 20,
     minEpisodeDurationSeconds: Int = 150,
     recoverOrphans: Boolean = true,
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
+    qualityRetry: Boolean = true,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
     /** Supply one when the test needs a reference to it before the pipeline exists. */
@@ -148,10 +157,11 @@ internal fun buildPipeline(
             recoverOrphans = recoverOrphans,
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
+            qualityRetry = qualityRetry,
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))
-    val txSvc = FakeTranscriber(FAKE_SERVER_URL, vtt, transcriberFails, onTranscribe)
+    val txSvc = FakeTranscriber(FAKE_SERVER_URL, vtts ?: listOf(vtt), transcriberFails, onTranscribe)
     val pipeline =
         PodcastPipeline(
             config = config,

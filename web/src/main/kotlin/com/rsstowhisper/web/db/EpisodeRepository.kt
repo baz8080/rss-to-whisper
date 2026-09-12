@@ -177,9 +177,6 @@ class EpisodeRepository {
             }
         }
 
-        // Newest year first, matching how the results themselves are ordered
-        // by default. The column holds YYYY-MM-DD, so the first four
-        // characters are the year and sort as text.
         fun queryYears(): List<String> {
             val sql =
                 "SELECT DISTINCT substr(e.episode_published_on, 1, 4) AS y $fromClause " +

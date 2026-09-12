@@ -552,7 +552,7 @@ class SearchModelsTest {
         fun `display formats timestamp with hours`() = assertEquals("1:00:00", TranscriptLine(3_600_000L, "").display)
     }
 
-    // --- sort and year in URLs (W2) ---
+    // --- sort and year in URLs ---
 
     @Test
     fun `buildSearchUrl carries years and a non-default sort`() {

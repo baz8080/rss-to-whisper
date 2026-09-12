@@ -86,9 +86,8 @@
                        th:each="tag : ${filters.tags}"
                        th:value="${tag}"/>
 
-                <!--/* Relevance is meaningless without a query, and the
-                       repository silently treats it as newest, so the control
-                       only appears when it has something to do. */-->
+                <!--/* Hidden without a query: relevance would mean nothing,
+                       and the repository silently sorts by newest anyway. */-->
                 <div class="filter-group sort-group" th:if="${not #strings.isEmpty(filters.query)}">
                     <label for="sort-select"><strong>Sort</strong></label>
                     <select id="sort-select" name="sort">

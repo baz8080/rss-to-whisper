@@ -393,8 +393,6 @@ a.tag-pill-active:hover {
     }
 }
 
-/* Sort control: a select rather than a details/summary group, since it is one
-   choice among three rather than a set of independent toggles. */
 .sort-group {
     display: flex;
     flex-direction: column;

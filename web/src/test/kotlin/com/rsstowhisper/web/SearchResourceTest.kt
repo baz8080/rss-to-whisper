@@ -300,7 +300,7 @@ class SearchResourceTest {
 
     // --- helpers ---
 
-    // --- sort and year (W2) ---
+    // --- sort and year ---
 
     @Test
     fun `sort and years reach the repository`() {

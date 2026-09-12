@@ -193,12 +193,15 @@ data class QualityReport(
 
     /**
      * Punctuation breaks a tie because the cue boundaries are derived from it,
-     * so it is the one measure with consequences beyond itself.
+     * so it is the one measure with consequences beyond itself. Compared at the
+     * precision [toMap] stores, so that a report read back off disk and one
+     * still in memory are judged on the same number rather than on digits only
+     * one of them kept.
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {
             flags.size != other.flags.size -> flags.size < other.flags.size
-            else -> punctuationPerWord > other.punctuationPerWord
+            else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
 
     /** For a log line that has to say why one decode beat another. */

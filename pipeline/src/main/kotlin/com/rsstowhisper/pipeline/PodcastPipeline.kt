@@ -144,9 +144,16 @@ class PodcastPipeline(
         // Word times are not part of the score -- low-confidence cannot even be
         // raised without them -- so a decode that came back with none reads as
         // an improvement on a transcript flagged for low confidence, and would
-        // both overwrite it and take the sidecar with it. The server was asked
-        // for token_timestamps, so this is a server that ignored it.
-        if (scored.transcription.words.isEmpty() && Files.exists(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME))) {
+        // overwrite it and clear the flag. The server was asked for
+        // token_timestamps, so this is a server that ignored it.
+        //
+        // The stored score decides this, not the sidecar file: writing the
+        // sidecar is allowed to fail, which leaves an episode whose decode had
+        // word times and whose flags say so, with no file to find them in.
+        val hadWordTimes =
+            previous?.meanWordProbability != null ||
+                Files.exists(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME))
+        if (scored.transcription.words.isEmpty() && hadWordTimes) {
             logger.warn(
                 "Re-transcription of $label came back with no word timestamps and would drop the ones it has; " +
                     "keeping the existing transcript. Is token_timestamps still set on the server?",
@@ -707,6 +714,14 @@ class PodcastPipeline(
         try {
             Files.writeString(stagedJson, jsonMapper.writeValueAsString(episodeDict))
             val haveWords = writeWords(transcription, stagedWords, label)
+            // A decode that has word times but could not write them must not
+            // take the existing ones down with it -- the clear below is what
+            // would do that. A full disk should cost the run this episode, not
+            // the word times of the decode it was going to replace.
+            if (!haveWords && transcription.words.isNotEmpty()) {
+                logger.error("Not replacing $label: its word timestamps could not be written")
+                return
+            }
 
             Files.deleteIfExists(wordsPath)
             replaceWith(stagedJson, jsonPath)
@@ -724,6 +739,11 @@ class PodcastPipeline(
      * `--retranscribe-flagged` scans the whole tree, whatever podcasts the
      * config names -- so a shared staging name would let one move the other's
      * half-written file over a transcript.
+     *
+     * It stops that, and nothing more: the swap is two moves, not one, so two
+     * instances re-transcribing the same episode can still interleave into a
+     * transcript and a sidecar from different decodes. Nothing here locks, so
+     * do not point two runs at the same episode.
      */
     private fun stagingSuffix(): String = ".${ProcessHandle.current().pid()}$STAGING_SUFFIX"
 

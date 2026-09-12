@@ -27,7 +27,13 @@ class RetranscribeTest {
     private fun qualityMap(
         flags: List<String>,
         punctuation: Double,
-    ): Map<String, Any?> = mapOf("flags" to flags, "punctuation_per_word" to punctuation)
+        meanWordProbability: Double? = null,
+    ): Map<String, Any?> =
+        mapOf(
+            "flags" to flags,
+            "punctuation_per_word" to punctuation,
+            "mean_word_probability" to meanWordProbability,
+        )
 
     private fun healthyJson(): String =
         whisperJson(
@@ -331,6 +337,51 @@ class RetranscribeTest {
 
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
         assertEquals("the word times of the decode on disk", Files.readString(sidecar))
+    }
+
+    /**
+     * Writing the sidecar is allowed to fail, so an episode can have a decode
+     * that produced word times, flags that say so, and no file to find them in.
+     * The stored score is what knows that; the missing file does not.
+     */
+    @Test
+    fun `a wordless re-decode is refused for an episode whose sidecar write failed`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra = mapOf("episode_quality" to qualityMap(listOf("low-confidence"), 0.15, meanWordProbability = 0.4)),
+            )
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(WORDLESS_JSON))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz")))
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    /**
+     * A full disk should cost the run this episode, not the word times of the
+     * decode it was going to replace. Blocked by putting a directory where the
+     * staged sidecar has to go, which is why this knows the staging name.
+     */
+    @Test
+    fun `a sidecar that cannot be written leaves the episode untouched`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val sidecar = "the word times of the decode on disk".toByteArray()
+        Files.write(dir.resolve("words.jsonl.gz"), sidecar)
+        val before = Files.readString(dir.resolve("transcript.json"))
+        Files.createDirectory(dir.resolve("words.jsonl.gz.${ProcessHandle.current().pid()}.new"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+        assertTrue(sidecar.contentEquals(Files.readAllBytes(dir.resolve("words.jsonl.gz"))))
     }
 
     @Test

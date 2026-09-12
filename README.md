@@ -597,7 +597,8 @@ leave it alone, never cost it the better decode. A transcript written before the
 gate has no score to compare against, so it is simply replaced.
 
 A re-decode that comes back with no word timestamps at all is refused outright when the
-episode already has them. Word times are not part of the score — `low-confidence` cannot
+decode on disk had them — judged by its recorded score rather than by whether
+`words.jsonl.gz` is there, since writing the sidecar is allowed to fail. Word times are not part of the score — `low-confidence` cannot
 even be raised without them — so such a decode looks like a clean one, and would both
 replace a transcript flagged for low confidence and take its `words.jsonl.gz` with it. It
 means the server ignored `token_timestamps`, and the warning says so.
@@ -608,9 +609,14 @@ belongs to is there. `words.jsonl.gz` addresses cues by position, so either file
 beside the other's transcript mis-times every word — silently and for good, since an
 episode that has a `transcript.json` is one nothing revisits. Interrupted anywhere in
 between, the episode is left visibly missing a sidecar instead of quietly holding the
-wrong one. Staged files are named per process, because two instances sharing a data
-directory select the same episodes: `--retranscribe-flagged` scans the whole tree,
-whatever podcasts its config names.
+wrong one. If the new sidecar cannot be written at all — a full disk, an I/O error — the episode is
+left exactly as it was rather than committed without one.
+
+Staged files are named per process, because two instances sharing a data directory select
+the same episodes: `--retranscribe-flagged` scans the whole tree, whatever podcasts its
+config names. That stops one run moving another's half-written file, and nothing more —
+the swap is two moves, not one, and nothing here locks, so **do not point two runs at the
+same episode**: they can interleave into a transcript and a sidecar from different decodes.
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.

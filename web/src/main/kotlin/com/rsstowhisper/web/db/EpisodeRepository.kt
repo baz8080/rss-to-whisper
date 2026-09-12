@@ -3,6 +3,7 @@ package com.rsstowhisper.web.db
 import com.rsstowhisper.web.models.DurationCategory
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
+import com.rsstowhisper.web.models.PodcastSummary
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
@@ -28,6 +29,11 @@ class EpisodeRepository {
     private var cachedFilterQuery: String? = null
     private var cachedFilterOptions: FilterOptions? = null
     private var cachedFilterAtMillis: Long = 0
+
+    // Same single-entry, short-TTL shape as the filter cache above, and for the
+    // same reason: this one scans the whole episodes table.
+    private var cachedSummaries: List<PodcastSummary>? = null
+    private var cachedSummariesAtMillis: Long = 0
 
     @PostConstruct
     fun init() {
@@ -206,6 +212,58 @@ class EpisodeRepository {
         cachedFilterAtMillis = now
         return options
     }
+
+    /**
+     * One row per podcast, for the overview page.
+     *
+     * Scans the whole table, so it is cached like the filter options are.
+     * Episodes with no duration contribute 0 to the total rather than nulling
+     * it, which is what `SUM` over a nullable column does anyway.
+     */
+    @Synchronized
+    fun getPodcastSummaries(): List<PodcastSummary> {
+        val now = System.currentTimeMillis()
+        cachedSummaries?.let { if (now - cachedSummariesAtMillis < FILTER_CACHE_TTL_MILLIS) return it }
+
+        val sql =
+            """SELECT podcast_title,
+                      MAX(podcast_image) AS podcast_image,
+                      COUNT(*) AS episode_count,
+                      COALESCE(SUM(episode_duration), 0) AS total_duration,
+                      MIN(episode_published_on) AS earliest,
+                      MAX(episode_published_on) AS latest
+               FROM episodes
+               WHERE podcast_title IS NOT NULL
+               GROUP BY podcast_title
+               ORDER BY podcast_title"""
+
+        val summaries =
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    val out = mutableListOf<PodcastSummary>()
+                    while (rs.next()) {
+                        out +=
+                            PodcastSummary(
+                                title = rs.getString("podcast_title"),
+                                image = rs.getString("podcast_image"),
+                                episodeCount = rs.getInt("episode_count"),
+                                totalDurationSeconds = rs.getLong("total_duration"),
+                                earliestPublishedOn = rs.getString("earliest"),
+                                latestPublishedOn = rs.getString("latest"),
+                            )
+                    }
+                    out
+                }
+            }
+
+        cachedSummaries = summaries
+        cachedSummariesAtMillis = now
+        return summaries
+    }
+
+    /** When index.py last wrote the database, which is when the corpus last changed. */
+    fun indexBuiltAt(): java.time.Instant? =
+        runCatching { java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(dbPath)).toInstant() }.getOrNull()
 
     // FTS5 MATCH parses its right-hand side as a query language, so raw user
     // input like `c++` or an unbalanced quote raises a SQLException that would

@@ -90,6 +90,33 @@ data class FilterOptions(
     val years: List<String> = emptyList(),
 )
 
+/**
+ * One podcast's corner of the corpus, for the overview page.
+ *
+ * `podcast_title` is the join key everywhere -- there is no podcast id -- so it
+ * is both the identity here and what the link filters on.
+ */
+data class PodcastSummary(
+    val title: String,
+    val image: String?,
+    val episodeCount: Int,
+    val totalDurationSeconds: Long,
+    val earliestPublishedOn: String?,
+    val latestPublishedOn: String?,
+) {
+    /** Hours to one decimal: the totals run to thousands, where minutes are noise. */
+    val totalHours: String get() = "%.1f".format(totalDurationSeconds / 3600.0)
+
+    /** A single-episode show, or one whose episodes all share a date, reads better as one date. */
+    val dateRange: String?
+        get() =
+            when {
+                earliestPublishedOn == null || latestPublishedOn == null -> null
+                earliestPublishedOn == latestPublishedOn -> earliestPublishedOn
+                else -> "$earliestPublishedOn – $latestPublishedOn"
+            }
+}
+
 enum class DurationCategory(val label: String, val maxSeconds: Int?) {
     SHORT("Short (< 15 min)", 900),
     MEDIUM("Medium (15–45 min)", 2700),

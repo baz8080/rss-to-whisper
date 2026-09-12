@@ -3,6 +3,7 @@ package com.rsstowhisper.web
 import com.rsstowhisper.web.db.EpisodeRepository
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
+import com.rsstowhisper.web.models.PodcastSummary
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
@@ -12,10 +13,13 @@ import io.mockk.mockk
 import io.mockk.slot
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.IContext
+import java.time.Instant
 
 class SearchResourceTest {
     private val repository: EpisodeRepository = mockk()
@@ -337,6 +341,55 @@ class SearchResourceTest {
         search("space")
 
         assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    // --- podcasts overview (W4) ---
+
+    @Test
+    fun `podcasts page passes summaries and totals to the template`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(
+                PodcastSummary("Podcast A", "https://img/a.png", 2, 2400, "2024-01-01", "2024-01-03"),
+                PodcastSummary("Podcast B", null, 3, 3600, "2023-01-02", "2024-01-04"),
+            )
+        every { repository.indexBuiltAt() } returns Instant.parse("2024-06-01T10:30:00Z")
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns "<html>podcasts</html>"
+
+        val response = resource.podcasts()
+
+        assertEquals(200, response.status)
+        assertEquals(5, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+        assertNotNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    @Test
+    fun `each podcast links to a search filtered to it`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A & B", null, 1, 0, null, null))
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        @Suppress("UNCHECKED_CAST")
+        val urls = ctxSlot.captured.getVariable("searchUrls") as Map<String, String>
+        assertEquals("/search?podcast=Podcast%20A%20%26%20B", urls["Podcast A & B"])
+    }
+
+    /** A database that has never been written has no build time; the page still renders. */
+    @Test
+    fun `a missing index build time is passed through as null`() {
+        every { repository.getPodcastSummaries() } returns emptyList()
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
     }
 
     /**

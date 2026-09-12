@@ -28,6 +28,8 @@ import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
 import java.net.URI
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 @Path("/")
 @ApplicationScoped
@@ -111,6 +113,27 @@ class SearchResource {
     }
 
     @GET
+    @Path("/podcasts")
+    @Produces(MediaType.TEXT_HTML)
+    fun podcasts(): Response {
+        val summaries = repository.getPodcastSummaries()
+        val ctx =
+            Context().apply {
+                setVariable("summaries", summaries)
+                setVariable("totalEpisodes", summaries.sumOf { it.episodeCount })
+                setVariable("totalHours", "%,.0f".format(summaries.sumOf { it.totalDurationSeconds } / 3600.0))
+                // Thymeleaf cannot call top-level Kotlin functions here, so the
+                // link for each row is built now rather than in the template.
+                setVariable(
+                    "searchUrls",
+                    summaries.associate { it.title to buildSearchUrl(SearchFilters(podcasts = setOf(it.title))) },
+                )
+                setVariable("indexBuiltAt", repository.indexBuiltAt()?.let { INDEX_BUILT_FORMAT.format(it) })
+            }
+        return Response.ok(templateEngine.process("podcasts", ctx), MediaType.TEXT_HTML).build()
+    }
+
+    @GET
     @Path("/episode/{id}")
     @Produces(MediaType.TEXT_HTML)
     fun episode(
@@ -146,5 +169,12 @@ class SearchResource {
             }
 
         return Response.ok(templateEngine.process("episode", ctx), MediaType.TEXT_HTML).build()
+    }
+
+    companion object {
+        // The database file's own mtime, so the server's zone is the honest one
+        // to render it in -- it is a fact about this machine's filesystem.
+        private val INDEX_BUILT_FORMAT: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
     }
 }

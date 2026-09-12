@@ -131,6 +131,17 @@ domain-specific contaminates transcripts. The default in `Transcriber.kt` was
 checked against a repaired episode — zero occurrences of any prompt fragment,
 word count within 5% of the original.
 
+**The prompt only rides with the language it is written in.** The default is
+English prose, so a podcast set to another `language` decodes without it — an
+English prompt on French audio is the same vocabulary contamination as a
+domain-specific one, and `carry_initial_prompt` would apply it to every window.
+Under `language: auto` it is worse: the prompt would skew whisper's own language
+detection toward English before it decoded anything, breaking the very thing
+`auto` is for. A non-English feed therefore gives up this lever; see
+the `language` key in [`pods.yaml`](#podsyaml). To supply a prompt in another language,
+`Transcriber` takes `initialPrompt` with a matching `promptLanguage`, though
+nothing in `pods.yaml` reaches those yet.
+
 ### `vad=false` — sent explicitly, and off
 
 Not merely omitted. A request that omits `vad` inherits whatever the server was
@@ -387,7 +398,7 @@ launch from a quiet one.
 - `min_episode_duration_seconds` — skip episodes shorter than this (optional, default `150`; set to `0` to disable)
 - `recover_orphans` — transcribe episodes that aged out of their feed before they were processed (optional, default `true`; see [Orphan recovery](#orphan-recovery))
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
-- `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`)
+- `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Anything other than `en` decodes without the initial prompt; see [`prompt` and `carry_initial_prompt`](#prompt-and-carry_initial_prompt--the-single-biggest-lever)
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 
 `name` becomes the show's directory name, so changing it moves every episode of

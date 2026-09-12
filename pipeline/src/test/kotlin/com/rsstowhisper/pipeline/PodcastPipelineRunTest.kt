@@ -574,7 +574,7 @@ class PodcastPipelineRunTest {
 
     // ---------- quality gate ----------
 
-    /** Twenty identical cues: a repetition loop, which is what the gate is for. */
+    /** Identical cues repeated: the loop the gate exists to catch. */
     private fun loopingJson(): String =
         whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "And that is the thing about it, really.") }.toTypedArray())
 
@@ -647,7 +647,6 @@ class PodcastPipelineRunTest {
         assertEquals(1, txSvc.calls.size)
     }
 
-    /** Both decodes bad: the episode is still written, and still carries its flags. */
     @Test
     fun `a transcript flagged twice is written anyway with its flags recorded`(
         @TempDir tempDir: Path,
@@ -665,6 +664,36 @@ class PodcastPipelineRunTest {
         assertEquals(2, txSvc.calls.size)
         @Suppress("UNCHECKED_CAST")
         val quality = transcriptJson(tempDir)["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
+    /**
+     * A retry that comes back with nothing must not replace a real transcript.
+     * Before no-speech was a flag, the empty decode scored clean and won on flag
+     * count, and the episode ended up with no transcript.json at all.
+     */
+    @Test
+    fun `an empty retry does not discard the first decode`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), """{"task":"transcribe","segments":[]}"""),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size)
+        val json = transcriptJson(tempDir)
+        assertTrue(
+            "And that is the thing about it" in json["episode_transcript"].toString(),
+            "the flagged first decode should have been kept and written",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val quality = json["episode_quality"] as Map<String, Any?>
         assertEquals(listOf("repetition-loop"), quality["flags"])
     }
 

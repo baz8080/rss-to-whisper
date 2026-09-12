@@ -131,6 +131,17 @@ domain-specific contaminates transcripts. The default in `Transcriber.kt` was
 checked against a repaired episode — zero occurrences of any prompt fragment,
 word count within 5% of the original.
 
+**The prompt only rides with the language it is written in.** The default is
+English prose, so a podcast set to another `language` decodes without it — an
+English prompt on French audio is the same vocabulary contamination as a
+domain-specific one, and `carry_initial_prompt` would apply it to every window.
+Under `language: auto` it is worse: the prompt would skew whisper's own language
+detection toward English before it decoded anything, breaking the very thing
+`auto` is for. A non-English feed therefore gives up this lever; see
+the `language` key in [`pods.yaml`](#podsyaml). To supply a prompt in another language,
+`Transcriber` takes `initialPrompt` with a matching `promptLanguage`, though
+nothing in `pods.yaml` reaches those yet.
+
 ### `vad=false` — sent explicitly, and off
 
 Not merely omitted. A request that omits `vad` inherits whatever the server was
@@ -521,6 +532,7 @@ under `episode_quality`:
 
 | Flag | Trips when | Measured |
 | --- | --- | --- |
+| `no-speech` | the decode produced no words at all | every other check needs words to measure, so without this an empty decode scores clean |
 | `unpunctuated` | punctuation per word below `0.03` | healthy episodes sit near `0.15` |
 | `shredded-cues` | under `1.0` seconds per cue, with at least 50 cues | a shredded episode measured `0.74` against `2.42` re-decoded |
 | `repetition-loop` | one 4-gram repeats over 5% of the words, or 4+ consecutive cues are identical | greedy decoding hit 0.7%–5.0% of episodes per show |
@@ -531,6 +543,12 @@ better of the two — fewer flags, and on a tie the more punctuated one. Whisper
 deterministic, and the repair passes that inspired this cleared 57 of 57 repetition
 cases, most on the first re-decode. A retry doubles decode time for the 1–5% of
 episodes that trip a flag.
+
+`no-speech` is why the retry is a comparison rather than a preference: an empty decode
+trips none of the other checks, so without a flag of its own it would score clean, win on
+flag count, and replace a real transcript. It also means an episode that decodes to
+nothing gets its one retry before the recovery path writes `recovery-failed` and
+abandons it for good.
 
 If the kept decode is still flagged it is written anyway, with its flags recorded, and
 a warning goes to the error log — the transcript is still worth having, and

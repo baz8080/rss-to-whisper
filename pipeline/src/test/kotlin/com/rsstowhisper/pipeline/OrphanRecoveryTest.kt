@@ -354,13 +354,15 @@ class OrphanRecoveryTest {
             buildPipeline(dataDir, listOf(podcast), settledFeed(dataDir), vtt = """{"segments":[]}""")
 
         pipeline.run()
-        assertEquals(1, tx.calls.size)
+        // Two calls, not one: an empty decode is flagged, so the quality gate
+        // spends its one retry before the marker abandons the episode for good.
+        assertEquals(2, tx.calls.size)
         assertFalse(Files.exists(orphan.resolve("transcript.json")))
         assertTrue(Files.exists(orphan.resolve("recovery-failed")))
 
         // Without the marker this episode would be re-uploaded to whisper on every run, forever.
         pipeline.run()
-        assertEquals(1, tx.calls.size)
+        assertEquals(2, tx.calls.size)
     }
 
     @Test

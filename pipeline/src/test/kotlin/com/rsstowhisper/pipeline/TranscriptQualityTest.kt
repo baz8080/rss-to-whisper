@@ -11,13 +11,10 @@ import kotlin.test.assertTrue
 
 class TranscriptQualityTest {
     /**
-     * Cues of ordinary punctuated prose, 3 seconds apart, which is what a
-     * healthy decode of this corpus looks like.
-     *
-     * The words are drawn pseudo-randomly from a vocabulary rather than cycled
+     * Words are drawn pseudo-randomly from a vocabulary rather than cycled
      * through a handful of fixed sentences: repeating even four sentences over
-     * sixty cues is a repetition loop by the measure under test, and would make
-     * this fixture trip the very flag the healthy case exists to not trip.
+     * sixty cues is a repetition loop by the measure under test, so a simpler
+     * fixture trips the very flag this case exists to not trip.
      */
     private fun healthy(cueCount: Int = 60): WhisperTranscription = transcription(healthyTexts(cueCount), secondsPerCue = 3.0)
 
@@ -89,8 +86,7 @@ class TranscriptQualityTest {
 
     @Test
     fun `a repetition loop is flagged`() {
-        // The same cue text twenty times, which is what greedy decoding
-        // locking onto a phrase looks like in the corpus.
+        // What greedy decoding locking onto a phrase looks like in the corpus.
         val looping = List(20) { " And that is the thing about it, really." }
         val report = TranscriptQuality.score(transcription(looping))
 
@@ -114,7 +110,7 @@ class TranscriptQualityTest {
 
     @Test
     fun `a shredded episode is flagged`() {
-        // 200 cues of one word each, 0.5s apart: the measured failure was 0.74s per cue.
+        // The measured failure was 0.74s per cue.
         val shredded = List(200) { " word" }
         val report = TranscriptQuality.score(transcription(shredded, secondsPerCue = 0.5))
 
@@ -154,12 +150,36 @@ class TranscriptQualityTest {
     }
 
     @Test
-    fun `an empty transcription flags nothing rather than dividing by zero`() {
+    fun `an empty transcription is flagged rather than dividing by zero`() {
         val report = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
 
-        assertEquals(emptyList(), report.flags)
+        assertEquals(listOf(TranscriptQuality.FLAG_NO_SPEECH), report.flags)
         assertEquals(0, report.wordCount)
         assertEquals(0, report.cueCount)
+    }
+
+    /** Cues can be present and still carry nothing to measure. */
+    @Test
+    fun `cues with no words are flagged as no speech`() {
+        val report = TranscriptQuality.score(transcription(List(60) { "   " }))
+
+        assertTrue(TranscriptQuality.FLAG_NO_SPEECH in report.flags, "flags were ${report.flags}")
+        assertEquals(0, report.wordCount)
+    }
+
+    /**
+     * The reason no-speech is a flag at all: every other check needs words, so
+     * an unflagged empty decode would win the retry comparison on flag count
+     * and throw away a real transcript.
+     */
+    @Test
+    fun `an empty decode never beats a real one`() {
+        val empty = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
+        val looping = TranscriptQuality.score(transcription(List(20) { " And that is the thing about it, really." }))
+
+        assertTrue(looping.isFlagged, "control: the looping decode should be flagged")
+        assertFalse(empty.isBetterThan(looping))
+        assertTrue(looping.isBetterThan(empty))
     }
 
     @Test

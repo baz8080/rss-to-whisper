@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Podcasts</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.classless.min.css"/>
+    <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+
+<div class="podcasts-page">
+
+    <a href="/search" class="back-link">&#x2190; Back to search</a>
+
+    <h2>Podcasts</h2>
+
+    <p class="corpus-summary">
+        <span th:text="${#lists.size(summaries)}"></span>
+        <span th:text="${#lists.size(summaries) == 1 ? 'podcast' : 'podcasts'}">podcasts</span>
+        &#xB7; <span th:text="${totalEpisodes}"></span> episodes
+        &#xB7; <span th:text="${totalHours}"></span> hours
+        <th:block th:if="${indexBuiltAt != null}">
+            &#xB7; index built <span th:text="${indexBuiltAt}"></span>
+        </th:block>
+    </p>
+
+    <p th:if="${#lists.isEmpty(summaries)}">
+        Nothing indexed yet. Run <code>index.py</code> over the data directory.
+    </p>
+
+    <div class="podcast-list">
+        <article class="podcast-card" th:each="podcast : ${summaries}">
+            <!--/* Feed-supplied artwork: th:src escapes it, and no referrer is
+                   sent to a third-party host just to render a thumbnail. */-->
+            <img class="podcast-art"
+                 th:if="${podcast.image != null}"
+                 th:src="${podcast.image}"
+                 th:alt="${podcast.title}"
+                 referrerpolicy="no-referrer"
+                 loading="lazy"/>
+            <div class="podcast-card-body">
+                <h3>
+                    <a th:href="${searchUrls.get(podcast.title)}" th:text="${podcast.title}"></a>
+                </h3>
+                <div class="meta">
+                    <span th:text="${podcast.episodeCount}"></span>
+                    <span th:text="${podcast.episodeCount == 1 ? 'episode' : 'episodes'}">episodes</span>
+                    <span th:text="${podcast.totalHours} + ' hours'"></span>
+                    <span th:if="${podcast.dateRange != null}" th:text="${podcast.dateRange}"></span>
+                </div>
+            </div>
+        </article>
+    </div>
+
+</div>
+
+</body>
+</html>

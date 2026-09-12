@@ -454,6 +454,49 @@ class EpisodeRepositoryTest {
     }
 
     @Nested
+    inner class PodcastSummaries {
+        @Test
+        fun `one row per podcast, ordered by title`() {
+            val summaries = repo.getPodcastSummaries()
+            assertEquals(listOf("Podcast A", "Podcast B"), summaries.map { it.title })
+        }
+
+        @Test
+        fun `counts and durations are summed per podcast`() {
+            val a = repo.getPodcastSummaries().single { it.title == "Podcast A" }
+            assertEquals(2, a.episodeCount)
+            assertEquals(2400L, a.totalDurationSeconds) // 600 + 1800
+            assertEquals("0.7", a.totalHours)
+        }
+
+        /** ep4 has no duration; it must still count as an episode. */
+        @Test
+        fun `an episode with no duration contributes zero rather than nulling the sum`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals(2, b.episodeCount)
+            assertEquals(3600L, b.totalDurationSeconds)
+        }
+
+        @Test
+        fun `the date range spans the earliest and latest episode`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals("2023-01-02", b.earliestPublishedOn)
+            assertEquals("2024-01-04", b.latestPublishedOn)
+            assertEquals("2023-01-02 – 2024-01-04", b.dateRange)
+        }
+
+        @Test
+        fun `the summaries are cached between calls`() {
+            assertSame(repo.getPodcastSummaries(), repo.getPodcastSummaries())
+        }
+
+        @Test
+        fun `the index build time comes from the database file`() {
+            assertNotNull(repo.indexBuiltAt())
+        }
+    }
+
+    @Nested
     inner class BrokenFtsTable {
         // index.py drops episodes_fts at the start of a reindex and only
         // recreates it at the end, so the web server can meet a database whose

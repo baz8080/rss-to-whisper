@@ -405,3 +405,54 @@ a.tag-pill-active:hover {
 .sort-group select {
     margin-bottom: 0;
 }
+
+/* Podcasts overview */
+.podcasts-page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem 2rem;
+}
+.corpus-summary {
+    color: var(--pico-muted-color);
+    font-size: 0.9rem;
+}
+.corpus-nav {
+    font-size: 0.85rem;
+    margin: 0 0 1rem;
+}
+.podcast-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.podcast-card {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin: 0;
+    padding: 0.75rem 1rem;
+}
+.podcast-art {
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 6px;
+}
+.podcast-card-body h3 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+}
+.podcast-card .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+.podcast-name a {
+    text-decoration: none;
+}
+.podcast-name a:hover {
+    text-decoration: underline;
+}

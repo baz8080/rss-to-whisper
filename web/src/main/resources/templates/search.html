@@ -210,6 +210,8 @@
 
             <span class="htmx-indicator" id="loading" aria-busy="true">Searching&#x2026;</span>
 
+            <p class="corpus-nav"><a href="/podcasts">Browse podcasts &#x2192;</a></p>
+
             <!-- Results summary -->
             <p class="results-info" th:if="${result.totalCount > 0}">
                 <span th:text="${result.totalCount}"></span> results
@@ -229,8 +231,12 @@
 
             <!-- Episode cards -->
             <article class="episode-card" th:each="episode : ${result.episodes}">
-                <div class="podcast-name"
-                     th:text="${episode.podcastTitle != null ? episode.podcastTitle : 'Unknown Podcast'}"></div>
+                <div class="podcast-name">
+                    <a th:if="${episode.podcastTitle != null}"
+                       th:href="'/search?podcast=' + ${#uris.escapeQueryParam(episode.podcastTitle)}"
+                       th:text="${episode.podcastTitle}"></a>
+                    <span th:if="${episode.podcastTitle == null}">Unknown Podcast</span>
+                </div>
                 <h3>
                     <a th:href="'/episode/' + ${episode.id} + ${episodeQuerySuffix}"
                        th:text="${episode.episodeTitle != null ? episode.episodeTitle : 'Untitled'}"></a>

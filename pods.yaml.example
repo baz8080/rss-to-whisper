@@ -33,6 +33,14 @@ exclude_title_keywords:
 - replay
 - from the archives
 
+# What whisper decodes in. An ISO 639-1 code, or "auto" to detect it from the
+# audio. A podcast can override this; everything else inherits it.
+#
+# Note: the initial prompt that fixes unpunctuated decodes is English prose, so
+# it is only sent when decoding English. A feed set to anything else gives up
+# that lever rather than being biased toward English. See the README.
+language: en
+
 # Skip episodes shorter than this. Below ~150s a feed is almost entirely
 # trailers, promos and hiatus notices. Feeds without an itunes:duration are
 # never filtered on length. Set to 0 to disable.
@@ -53,3 +61,9 @@ podcasts:
 - name: A Short-Form Show
   url: https://example.com/feed.rss
   min_episode_duration_seconds: 0
+
+# A feed in another language overrides the global setting rather than forcing
+# every other show to be detected.
+- name: Une Emission Francaise
+  url: https://example.com/fr.rss
+  language: fr

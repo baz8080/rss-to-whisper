@@ -187,7 +187,9 @@ class PodcastPipeline(
                         continue
                     }
                     val transcription =
-                        WhisperTranscription.parse(transcribeEpisode(episode.mp3Info.filePath, episode.episodeDirPath))
+                        WhisperTranscription.parse(
+                            transcribeEpisode(episode.mp3Info.filePath, episode.episodeDirPath, podcast),
+                        )
                     writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, transcription)
                 } catch (e: Exception) {
                     // An Error on the prefetch thread arrives wrapped, and must still end the run.
@@ -464,7 +466,7 @@ class PodcastPipeline(
         logger.info("Recovering ${parsed.dirName}")
         val transcription =
             try {
-                WhisperTranscription.parse(transcribeEpisode(audioPath, episodeDirPath))
+                WhisperTranscription.parse(transcribeEpisode(audioPath, episodeDirPath, podcast))
             } catch (e: Exception) {
                 // No marker: a server that is down now may transcribe this fine tomorrow.
                 logger.error("Could not transcribe ${parsed.dirName}", e)
@@ -573,11 +575,12 @@ class PodcastPipeline(
     private fun transcribeEpisode(
         audioPath: Path,
         episodePath: Path,
+        podcast: PodcastConfig,
     ): String {
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
 
-        val vtt = transcriber.transcribe(audioPath)
+        val vtt = transcriber.transcribe(audioPath, podcast.language ?: config.language)
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.

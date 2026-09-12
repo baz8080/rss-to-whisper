@@ -55,6 +55,14 @@ open class Transcriber(
      */
     private val initialPrompt: String = DEFAULT_INITIAL_PROMPT,
     /**
+     * The language [initialPrompt] is written in.
+     *
+     * A prompt is not language-neutral, so it only rides with a decode in its
+     * own language -- see the guard in [transcribe]. Supplying a prompt in
+     * another language means setting this to match it.
+     */
+    private val promptLanguage: String = DEFAULT_LANGUAGE,
+    /**
      * Beam width. whisper.cpp runs
      * `strategy = beam_size > 1 ? BEAM_SEARCH : GREEDY`, and the server
      * defaults to greedy while whisper-cli defaults to 5 -- so adopting the
@@ -90,7 +98,10 @@ open class Transcriber(
      * format from the content and resamples to 16 kHz mono itself, so the mp3 can
      * go straight up without a local ffmpeg pass.
      */
-    open fun transcribe(audioPath: Path): String {
+    open fun transcribe(
+        audioPath: Path,
+        language: String = DEFAULT_LANGUAGE,
+    ): String {
         val bodyBuilder =
             MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -99,7 +110,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-                .addFormDataPart("language", "en")
+                .addFormDataPart("language", language)
                 // verbose_json rather than vtt: per-word start/end are gated on
                 // token_timestamps, which is already on below, so the decode
                 // ALREADY computes these times and VTT discards them. A cue is
@@ -128,13 +139,27 @@ open class Transcriber(
                 .addFormDataPart("split_on_word", "true")
                 .addFormDataPart("beam_size", beamSize.toString())
 
-        if (initialPrompt.isNotBlank()) {
+        // The prompt rides only with the language it is written in. It biases
+        // VOCABULARY as well as style (see [initialPrompt]), so conditioning a
+        // French decode on English prose is exactly the contamination that
+        // comment exists to avoid -- and it would be carried into every window.
+        // For "auto" it is worse than useless: an English prompt skews whisper's
+        // own language detection toward English before it decodes anything, so
+        // the detection the setting exists to enable is what it would break.
+        val promptApplies = language.equals(promptLanguage, ignoreCase = true)
+        if (initialPrompt.isNotBlank() && promptApplies) {
             bodyBuilder.addFormDataPart("prompt", initialPrompt)
             // Without this the prompt conditions only the FIRST window, so an
             // episode that degrades part-way through still degrades -- which is
             // exactly what a whole-episode failure looks like. 13/13 fixed with
             // it, 12/13 without.
             bodyBuilder.addFormDataPart("carry_initial_prompt", "true")
+        } else if (initialPrompt.isNotBlank()) {
+            logger.debug(
+                "Decoding as {}; the initial prompt is {} so it is not being sent",
+                language,
+                promptLanguage,
+            )
         }
 
         val requestBody = bodyBuilder.build()
@@ -157,6 +182,13 @@ open class Transcriber(
 
     companion object {
         const val DEFAULT_MAX_LEN = 200
+
+        /**
+         * Whisper takes an ISO 639-1 code, or "auto" to detect from the audio.
+         * Every feed in the corpus is English, so that stays the default and a
+         * podcast opts out of it rather than into it.
+         */
+        const val DEFAULT_LANGUAGE = "en"
 
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5

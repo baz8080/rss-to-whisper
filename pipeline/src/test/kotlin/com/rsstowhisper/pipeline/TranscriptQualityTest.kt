@@ -182,6 +182,27 @@ class TranscriptQualityTest {
         assertTrue(looping.isBetterThan(empty))
     }
 
+    /**
+     * One flag is all an empty decode can trip, so on flag count alone it beats
+     * any decode bad enough to trip two -- and the episode that had a real, if
+     * poor, transcript ends up with none. On the orphan path that is permanent:
+     * an empty result writes the marker that abandons the episode for good.
+     */
+    @Test
+    fun `an empty decode never beats a real one, however badly the real one scored`() {
+        val empty = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
+        val awful = TranscriptQuality.score(transcription(List(20) { " and that is the thing about it really" }))
+
+        assertEquals(
+            listOf(TranscriptQuality.FLAG_UNPUNCTUATED, TranscriptQuality.FLAG_REPETITION_LOOP),
+            awful.flags,
+            "control: the bad decode should trip more flags than the empty one",
+        )
+        assertEquals(listOf(TranscriptQuality.FLAG_NO_SPEECH), empty.flags)
+        assertFalse(empty.isBetterThan(awful))
+        assertTrue(awful.isBetterThan(empty))
+    }
+
     @Test
     fun `fewer flags wins, and punctuation breaks the tie`() {
         val clean = TranscriptQuality.score(healthy())

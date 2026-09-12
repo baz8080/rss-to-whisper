@@ -539,16 +539,19 @@ under `episode_quality`:
 | `low-confidence` | over 20% of words scored under `p = 0.3` | skipped entirely for episodes decoded before word timestamps existed |
 
 When a decode is flagged the pipeline decodes the episode **once more** and keeps the
-better of the two — fewer flags, and on a tie the more punctuated one. Whisper is not
+better of the two: a decode that produced speech always beats one that did not, then
+fewer flags wins, and on a tie the more punctuated one. Whisper is not
 deterministic, and the repair passes that inspired this cleared 57 of 57 repetition
 cases, most on the first re-decode. A retry doubles decode time for the 1–5% of
 episodes that trip a flag.
 
 `no-speech` is why the retry is a comparison rather than a preference: an empty decode
 trips none of the other checks, so without a flag of its own it would score clean, win on
-flag count, and replace a real transcript. It also means an episode that decodes to
-nothing gets its one retry before the recovery path writes `recovery-failed` and
-abandons it for good.
+flag count, and replace a real transcript. One flag is not enough on its own, though —
+it still beat a decode bad enough to trip two — so an empty decode loses to any decode
+with speech in it before flags are counted at all. A poor transcript is worth more than
+none, and on the recovery path none is permanent: an episode that decodes to nothing
+gets its one retry and then `recovery-failed` abandons it for good.
 
 If the kept decode is still flagged it is written anyway, with its flags recorded, and
 a warning goes to the error log — the transcript is still worth having, and

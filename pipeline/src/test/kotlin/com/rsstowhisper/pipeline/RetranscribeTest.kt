@@ -378,10 +378,13 @@ class RetranscribeTest {
         Files.createDirectory(dir.resolve("words.jsonl.gz.${ProcessHandle.current().pid()}.new"))
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
 
-        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+        val messages = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))) }
 
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
         assertTrue(sidecar.contentEquals(Files.readAllBytes(dir.resolve("words.jsonl.gz"))))
+        // An episode counted as re-transcribed is one nobody goes back to.
+        assertFalse(messages.any { it.startsWith("Re-transcribed Show/") }, messages.toString())
+        assertTrue(messages.any { it == "Re-transcribed 0 of 1 episodes" }, messages.toString())
     }
 
     @Test

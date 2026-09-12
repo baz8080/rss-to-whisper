@@ -646,9 +646,12 @@ rendered from the same `verbose_json` response that produced `words.jsonl.gz`.
 
 `words.jsonl.gz` is written **before** `transcript.json`, because the latter
 existing is what marks an episode done — so a crash between the two leaves the
-episode to be redone rather than permanently without its sidecar. A sidecar
-write failure is logged and not fatal: the transcript is the artifact the
-pipeline exists to produce.
+episode to be redone rather than permanently without its sidecar. A decode that
+could not write its sidecar leaves the episode undone for the same reason —
+writing `transcript.json` anyway would mark done an episode that will never get
+one. A decode that simply carries no word times, from a server that ignored
+`token_timestamps`, still writes its transcript; otherwise no episode could ever
+complete against such a server.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

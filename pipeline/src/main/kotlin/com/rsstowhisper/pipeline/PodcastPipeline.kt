@@ -187,7 +187,7 @@ class PodcastPipeline(
             scored.transcription.durationSeconds?.let { updated["episode_duration"] = it }
         }
 
-        writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true)
+        if (!writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true)) return false
         logger.info("Re-transcribed $label")
         return true
     }
@@ -669,6 +669,7 @@ class PodcastPipeline(
         writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
     }
 
+    /** False when nothing was written, so a caller cannot report an episode it still has to redo. */
     private fun writeTranscriptArtifacts(
         episodeDirPath: Path,
         label: String,
@@ -676,7 +677,7 @@ class PodcastPipeline(
         episodeDict: Map<String, Any?>,
         /** Re-transcription deliberately overwrites; everything else refuses to. */
         replace: Boolean = false,
-    ) {
+    ): Boolean {
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
         val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
 
@@ -686,7 +687,7 @@ class PodcastPipeline(
             // episode while this one was decoding it.
             if (Files.exists(jsonPath)) {
                 logger.warn("$label was transcribed by something else while this run was working on it")
-                return
+                return false
             }
 
             // Words FIRST. transcript.json existing is what marks an episode
@@ -695,9 +696,20 @@ class PodcastPipeline(
             // rather than leaving it permanently without its sidecar.
             // A crash that got as far as the sidecar can leave one behind, so a
             // decode with no word times has to clear it rather than adopt it.
-            if (!writeWords(transcription, wordsPath, label)) Files.deleteIfExists(wordsPath)
+            if (!writeWords(transcription, wordsPath, label)) {
+                Files.deleteIfExists(wordsPath)
+                // Writing transcript.json anyway would mark the episode done and
+                // leave it permanently without a sidecar -- which is the thing
+                // this ordering exists to avoid, so a failure that swallowed its
+                // exception must not walk past it either. Leaving the episode
+                // undone is what gets it redone.
+                if (transcription.words.isNotEmpty()) {
+                    logger.error("Not writing $label: its word timestamps could not be written")
+                    return false
+                }
+            }
             Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
-            return
+            return true
         }
 
         // Both files describe one decode, and the sidecar addresses cues by
@@ -720,12 +732,13 @@ class PodcastPipeline(
             // the word times of the decode it was going to replace.
             if (!haveWords && transcription.words.isNotEmpty()) {
                 logger.error("Not replacing $label: its word timestamps could not be written")
-                return
+                return false
             }
 
             Files.deleteIfExists(wordsPath)
             replaceWith(stagedJson, jsonPath)
             if (haveWords) replaceWith(stagedWords, wordsPath)
+            return true
         } finally {
             // Named per process, so anything left by a failure here is this
             // run's litter and nobody else's half-written file.

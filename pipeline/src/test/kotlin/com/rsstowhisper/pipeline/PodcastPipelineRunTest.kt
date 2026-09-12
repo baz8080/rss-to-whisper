@@ -634,6 +634,10 @@ class PodcastPipelineRunTest {
     private fun loopingJson(): String =
         whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "And that is the thing about it, really.") }.toTypedArray())
 
+    /** Looping AND unpunctuated: two flags, where [loopingJson] trips one. */
+    private fun twoFlagJson(): String =
+        whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "and that is the thing about it really") }.toTypedArray())
+
     private fun healthyJson(): String =
         whisperJson(
             Triple(0.0, 3.0, "So that is where the story begins, and it gets stranger."),
@@ -751,6 +755,36 @@ class PodcastPipelineRunTest {
         @Suppress("UNCHECKED_CAST")
         val quality = json["episode_quality"] as Map<String, Any?>
         assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
+    /**
+     * The punctuation tie-break saves the one-flag case above, because an empty
+     * decode has no punctuation either. It cannot save this one: two flags lose
+     * to the empty decode's one on count, before punctuation is ever consulted.
+     */
+    @Test
+    fun `an empty retry does not discard a first decode that scored worse still`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(twoFlagJson(), """{"task":"transcribe","segments":[]}"""),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size)
+        val json = transcriptJson(tempDir)
+        assertTrue(
+            "and that is the thing about it" in json["episode_transcript"].toString(),
+            "the worse first decode should still have been kept and written",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val quality = json["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("unpunctuated", "repetition-loop"), quality["flags"])
     }
 
     private fun transcriptJson(dataDir: Path): Map<String, Any?> {

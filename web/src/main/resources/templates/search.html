@@ -79,6 +79,13 @@
                   hx-include="#search-input"
                   hx-indicator="#loading">
 
+                <!--/* The active tags are links in the sidebar, and a form does not
+                       serialise links. Without these, ticking any checkbox re-submits
+                       without tag= and silently drops the tag filter. */-->
+                <input type="hidden" name="tag"
+                       th:each="tag : ${filters.tags}"
+                       th:value="${tag}"/>
+
                 <!--/* Relevance is meaningless without a query, and the
                        repository silently treats it as newest, so the control
                        only appears when it has something to do. */-->
@@ -253,7 +260,7 @@
                      th:if="${episode.snippetHtml != null}"
                      th:utext="${episode.snippetHtml}"></div>
 
-                <!-- Tags: each one adds itself to the current filters. -->
+                <!-- Tags -->
                 <div th:if="${not episode.tagList.isEmpty()}">
                     <a class="tag-pill"
                        th:each="tag : ${episode.tagList}"

@@ -131,6 +131,17 @@ domain-specific contaminates transcripts. The default in `Transcriber.kt` was
 checked against a repaired episode — zero occurrences of any prompt fragment,
 word count within 5% of the original.
 
+**The prompt only rides with the language it is written in.** The default is
+English prose, so a podcast set to another `language` decodes without it — an
+English prompt on French audio is the same vocabulary contamination as a
+domain-specific one, and `carry_initial_prompt` would apply it to every window.
+Under `language: auto` it is worse: the prompt would skew whisper's own language
+detection toward English before it decoded anything, breaking the very thing
+`auto` is for. A non-English feed therefore gives up this lever; see
+the `language` key in [`pods.yaml`](#podsyaml). To supply a prompt in another language,
+`Transcriber` takes `initialPrompt` with a matching `promptLanguage`, though
+nothing in `pods.yaml` reaches those yet.
+
 ### `vad=false` — sent explicitly, and off
 
 Not merely omitted. A request that omits `vad` inherits whatever the server was
@@ -521,6 +532,7 @@ under `episode_quality`:
 
 | Flag | Trips when | Measured |
 | --- | --- | --- |
+| `no-speech` | the decode produced no words at all | every other check needs words to measure, so without this an empty decode scores clean |
 | `unpunctuated` | punctuation per word below `0.03` | healthy episodes sit near `0.15` |
 | `shredded-cues` | under `1.0` seconds per cue, with at least 50 cues | a shredded episode measured `0.74` against `2.42` re-decoded |
 | `repetition-loop` | one 4-gram repeats over 5% of the words, or 4+ consecutive cues are identical | greedy decoding hit 0.7%–5.0% of episodes per show |
@@ -531,6 +543,12 @@ better of the two — fewer flags, and on a tie the more punctuated one. Whisper
 deterministic, and the repair passes that inspired this cleared 57 of 57 repetition
 cases, most on the first re-decode. A retry doubles decode time for the 1–5% of
 episodes that trip a flag.
+
+`no-speech` is why the retry is a comparison rather than a preference: an empty decode
+trips none of the other checks, so without a flag of its own it would score clean, win on
+flag count, and replace a real transcript. It also means an episode that decodes to
+nothing gets its one retry before the recovery path writes `recovery-failed` and
+abandons it for good.
 
 If the kept decode is still flagged it is written anyway, with its flags recorded, and
 a warning goes to the error log — the transcript is still worth having, and
@@ -550,9 +568,13 @@ gate recording flags, the loop closes:
 
 ```bash
 ./transcribe --retranscribe-flagged --retranscribe-limit 50
-./transcribe --retranscribe "Ask a Spaceman/2024-01-02-abcd1234-some-episode"
+./transcribe --retranscribe "Ask-a-Spaceman/2024-01-02-abcd1234-some-episode"
 ./transcribe --retranscribe-id abcd1234
 ```
+
+A path is the episode's directory as it sits on disk, so it carries the escaped podcast
+name (`Ask-a-Spaceman`, not `Ask a Spaceman`) — every character that is not a letter or
+a digit became a dash when the directory was created.
 
 `--retranscribe` and `--retranscribe-id` are repeatable, and any of the three skips the
 feeds entirely — every target is already on disk, and an episode that aged out of its
@@ -567,9 +589,34 @@ the best there is. `episode_duration` is replaced too, but only when
 `episode_metadata_recovered` is true, because that number came from the previous decode
 rather than from the feed.
 
-`words.jsonl.gz` is written first, then the JSON is staged beside the original and
-moved over it, so an interrupted run never leaves an episode with a truncated
-transcript — or none at all, which deleting first would risk.
+A re-decode is kept only if it scores at least as well as the transcript it would
+replace, by the same measure the quality gate's retry uses — fewer flags, then better
+punctuation. Whisper is not deterministic, so a redo can come back worse than what it
+overwrites, and that write is the only copy: re-transcribing can improve an episode or
+leave it alone, never cost it the better decode. A transcript written before the quality
+gate has no score to compare against, so it is simply replaced.
+
+A re-decode that comes back with no word timestamps at all is refused outright when the
+decode on disk had them — judged by its recorded score rather than by whether
+`words.jsonl.gz` is there, since writing the sidecar is allowed to fail. Word times are not part of the score — `low-confidence` cannot
+even be raised without them — so such a decode looks like a clean one, and would both
+replace a transcript flagged for low confidence and take its `words.jsonl.gz` with it. It
+means the server ignored `token_timestamps`, and the warning says so.
+
+Otherwise both files are staged beside their originals and moved into place, with the
+sidecar absent for the whole swap: cleared first, restored only once the transcript it
+belongs to is there. `words.jsonl.gz` addresses cues by position, so either file left
+beside the other's transcript mis-times every word — silently and for good, since an
+episode that has a `transcript.json` is one nothing revisits. Interrupted anywhere in
+between, the episode is left visibly missing a sidecar instead of quietly holding the
+wrong one. If the new sidecar cannot be written at all — a full disk, an I/O error — the episode is
+left exactly as it was rather than committed without one.
+
+Staged files are named per process, because two instances sharing a data directory select
+the same episodes: `--retranscribe-flagged` scans the whole tree, whatever podcasts its
+config names. That stops one run moving another's half-written file, and nothing more —
+the swap is two moves, not one, and nothing here locks, so **do not point two runs at the
+same episode**: they can interleave into a transcript and a sidecar from different decodes.
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.
@@ -599,9 +646,12 @@ rendered from the same `verbose_json` response that produced `words.jsonl.gz`.
 
 `words.jsonl.gz` is written **before** `transcript.json`, because the latter
 existing is what marks an episode done — so a crash between the two leaves the
-episode to be redone rather than permanently without its sidecar. A sidecar
-write failure is logged and not fatal: the transcript is the artifact the
-pipeline exists to produce.
+episode to be redone rather than permanently without its sidecar. A decode that
+could not write its sidecar leaves the episode undone for the same reason —
+writing `transcript.json` anyway would mark done an episode that will never get
+one. A decode that simply carries no word times, from a server that ignored
+`token_timestamps`, still writes its transcript; otherwise no episode could ever
+complete against such a server.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

@@ -35,6 +35,10 @@ exclude_title_keywords:
 
 # What whisper decodes in. An ISO 639-1 code, or "auto" to detect it from the
 # audio. A podcast can override this; everything else inherits it.
+#
+# Note: the initial prompt that fixes unpunctuated decodes is English prose, so
+# it is only sent when decoding English. A feed set to anything else gives up
+# that lever rather than being biased toward English. See the README.
 language: en
 
 # A transcript that scores as unpunctuated, looping or shredded is decoded a

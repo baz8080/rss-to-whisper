@@ -12,8 +12,7 @@ import com.rsstowhisper.external.WhisperTranscription
  * produced by the decoder going wrong rather than by an unusual episode.
  *
  * Every threshold below is a starting point measured on the real corpus, not a
- * tuned constant. They are together in one place so a run over the whole corpus
- * can move them without hunting.
+ * tuned constant; expect to move them after a run over the whole corpus.
  */
 object TranscriptQuality {
     /**
@@ -22,10 +21,6 @@ object TranscriptQuality {
      * 0.1611 after). The failure mode is not a low value, it is near zero:
      * whisper drops into a mode where it emits no punctuation and no capitals
      * for a whole episode, and 654 episodes hit it.
-     *
-     * That is not cosmetic. Whisper segments on sentence structure, so with no
-     * full stops the cue boundaries stop tracking speech and every timestamp
-     * derived from them becomes unreliable.
      */
     const val MIN_PUNCTUATION_PER_WORD = 0.03
 
@@ -57,17 +52,15 @@ object TranscriptQuality {
      */
     const val MAX_REPEATED_CUE_RUN = 4
 
-    /** Words the decoder itself was unsure of. */
     const val LOW_CONFIDENCE_PROBABILITY = 0.3
 
-    /** Share of words under [LOW_CONFIDENCE_PROBABILITY] that means the decode is guessing. */
     const val MAX_LOW_CONFIDENCE_SHARE = 0.2
 
-    /** The 4-gram width the repetition check slides. */
     private const val NGRAM = 4
 
     private val PUNCTUATION = setOf('.', ',', '!', '?', ';', ':')
 
+    const val FLAG_NO_SPEECH = "no-speech"
     const val FLAG_UNPUNCTUATED = "unpunctuated"
     const val FLAG_SHREDDED_CUES = "shredded-cues"
     const val FLAG_REPETITION_LOOP = "repetition-loop"
@@ -103,6 +96,10 @@ object TranscriptQuality {
             }
 
         val flags = mutableListOf<String>()
+        // Every check below needs words to measure, so a decode with none trips
+        // nothing and would otherwise score as clean -- which made an empty
+        // retry beat a real transcript on flag count alone.
+        if (wordCount == 0) flags += FLAG_NO_SPEECH
         if (wordCount > 0 && punctuationPerWord < MIN_PUNCTUATION_PER_WORD) flags += FLAG_UNPUNCTUATED
         if (cues.size >= MIN_CUES_FOR_CUE_RATE && secondsPerCue < MIN_SECONDS_PER_CUE) flags += FLAG_SHREDDED_CUES
         if (repeatedShare > MAX_REPEATED_SHARE || longestRepeatedCueRun >= MAX_REPEATED_CUE_RUN) {
@@ -124,8 +121,6 @@ object TranscriptQuality {
     }
 
     /**
-     * How much of the transcript the single most repeated 4-gram accounts for.
-     *
      * Only occurrences *after* the first count. Every transcript contains some
      * most-frequent 4-gram, so counting the first one would make the floor
      * `4 / wordCount` -- which on its own exceeds the threshold for anything
@@ -171,7 +166,7 @@ object TranscriptQuality {
     private val WHITESPACE = Regex("\\s+")
 }
 
-/** A decode and what it scored, so nothing downstream can write one without the other. */
+/** Paired so nothing downstream can write a transcript without its score. */
 data class ScoredTranscription(
     val transcription: WhisperTranscription,
     val quality: QualityReport,
@@ -197,15 +192,19 @@ data class QualityReport(
     val isFlagged: Boolean get() = flags.isNotEmpty()
 
     /**
-     * Better means fewer flags, and on a tie the more punctuated decode --
-     * punctuation is what the cue boundaries are derived from, so it is the
-     * measure with consequences beyond itself.
+     * Punctuation breaks a tie because the cue boundaries are derived from it,
+     * so it is the one measure with consequences beyond itself. Rounded to the
+     * precision [toMap] stores, or a report read back off disk loses to one in
+     * memory on digits it was never able to keep.
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {
             flags.size != other.flags.size -> flags.size < other.flags.size
-            else -> punctuationPerWord > other.punctuationPerWord
+            else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
+
+    val summary: String
+        get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"
 
     /** Snake_case to match every other key `index.py` may one day read. */
     fun toMap(): Map<String, Any?> =
@@ -222,4 +221,32 @@ data class QualityReport(
         )
 
     private fun round(value: Double): Double = Math.round(value * 10_000.0) / 10_000.0
+
+    companion object {
+        /**
+         * Reads back what [toMap] wrote, so a decode can be measured against
+         * the one already on disk. Null when there is no `flags` key at all,
+         * which is what a transcript written before the quality gate looks
+         * like -- unscored has to read as no baseline, not as a passing one.
+         *
+         * Only [flags] and [punctuationPerWord] decide [isBetterThan]; the rest
+         * are read best-effort so a partial map still compares.
+         */
+        fun fromMap(stored: Map<*, *>?): QualityReport? {
+            val flags = (stored?.get("flags") as? List<*>)?.map { it.toString() } ?: return null
+            return QualityReport(
+                punctuationPerWord = number(stored["punctuation_per_word"]) ?: 0.0,
+                secondsPerCue = number(stored["seconds_per_cue"]) ?: 0.0,
+                repeatedShare = number(stored["repeated_share"]) ?: 0.0,
+                longestRepeatedCueRun = number(stored["longest_repeated_cue_run"])?.toInt() ?: 0,
+                meanWordProbability = number(stored["mean_word_probability"]),
+                lowConfidenceShare = number(stored["low_confidence_share"]),
+                wordCount = number(stored["word_count"])?.toInt() ?: 0,
+                cueCount = number(stored["cue_count"])?.toInt() ?: 0,
+                flags = flags,
+            )
+        }
+
+        private fun number(value: Any?): Double? = (value as? Number)?.toDouble()
+    }
 }

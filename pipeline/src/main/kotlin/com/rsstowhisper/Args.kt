@@ -46,7 +46,6 @@ internal data class Args(
     val retranscribeLimit: Int = 0,
     val help: Boolean = false,
 ) {
-    /** Any target at all switches the run out of following feeds. */
     val isRetranscribe: Boolean
         get() = retranscribePaths.isNotEmpty() || retranscribeIds.isNotEmpty() || retranscribeFlagged
 }

@@ -92,6 +92,21 @@ class TranscriberTest {
         assertTrue(partNames.any { it.contains("name=\"beam_size\"") })
     }
 
+    @Test
+    fun `transcribe sends the requested language, defaulting to English`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp))
+        assertEquals(Transcriber.DEFAULT_LANGUAGE, partValue(requests.single(), "language"))
+
+        val french = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = french))
+            .transcribe(mp3File(tmp), "fr")
+        assertEquals("fr", partValue(french.single(), "language"))
+    }
+
     /**
      * The mp3 goes up as-is; the whisper.cpp server decodes and resamples it with
      * miniaudio, so there is no local ffmpeg pass and nothing named audio.wav.

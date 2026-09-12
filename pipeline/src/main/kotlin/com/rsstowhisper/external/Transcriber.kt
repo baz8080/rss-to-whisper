@@ -90,7 +90,10 @@ open class Transcriber(
      * format from the content and resamples to 16 kHz mono itself, so the mp3 can
      * go straight up without a local ffmpeg pass.
      */
-    open fun transcribe(audioPath: Path): String {
+    open fun transcribe(
+        audioPath: Path,
+        language: String = DEFAULT_LANGUAGE,
+    ): String {
         val bodyBuilder =
             MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -99,7 +102,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-                .addFormDataPart("language", "en")
+                .addFormDataPart("language", language)
                 // verbose_json rather than vtt: per-word start/end are gated on
                 // token_timestamps, which is already on below, so the decode
                 // ALREADY computes these times and VTT discards them. A cue is
@@ -157,6 +160,13 @@ open class Transcriber(
 
     companion object {
         const val DEFAULT_MAX_LEN = 200
+
+        /**
+         * Whisper takes an ISO 639-1 code, or "auto" to detect from the audio.
+         * Every feed in the corpus is English, so that stays the default and a
+         * podcast opts out of it rather than into it.
+         */
+        const val DEFAULT_LANGUAGE = "en"
 
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5

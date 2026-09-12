@@ -88,11 +88,15 @@ class AppConfigTest {
         assertTrue(config.recoverOrphans)
         assertEquals(0, config.orphanRecoveryLimit)
         assertEquals(AppConfig.DEFAULT_EXCLUDE_TITLE_KEYWORDS, config.excludeTitleKeywords)
-        assertEquals(2, config.podcasts.size)
+        assertEquals("en", config.language)
+        assertEquals(3, config.podcasts.size)
         assertEquals("Ask a Spaceman", config.podcasts[0].name)
         assertEquals(listOf("science", "space", "astrophysics"), config.podcasts[0].collections)
         assertEquals(null, config.podcasts[0].minEpisodeDurationSeconds)
         assertEquals(0, config.podcasts[1].minEpisodeDurationSeconds)
+        // Null is what makes the podcast inherit the top-level language.
+        assertEquals(null, config.podcasts[0].language)
+        assertEquals("fr", config.podcasts[2].language)
     }
 
     @Test

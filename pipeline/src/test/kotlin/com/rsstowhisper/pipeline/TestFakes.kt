@@ -66,8 +66,15 @@ internal class FakeTranscriber(
 ) : Transcriber(serverUrl) {
     val calls = mutableListOf<Path>()
 
-    override fun transcribe(audioPath: Path): String {
+    /** What each call asked whisper to decode as, in call order. */
+    val languages = mutableListOf<String>()
+
+    override fun transcribe(
+        audioPath: Path,
+        language: String,
+    ): String {
         calls.add(audioPath)
+        languages.add(language)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return vtt
@@ -126,6 +133,7 @@ internal fun buildPipeline(
     minEpisodeDurationSeconds: Int = 150,
     recoverOrphans: Boolean = true,
     orphanRecoveryLimit: Int = 0,
+    language: String = Transcriber.DEFAULT_LANGUAGE,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
     /** Supply one when the test needs a reference to it before the pipeline exists. */
@@ -139,6 +147,7 @@ internal fun buildPipeline(
             minEpisodeDurationSeconds = minEpisodeDurationSeconds,
             recoverOrphans = recoverOrphans,
             orphanRecoveryLimit = orphanRecoveryLimit,
+            language = language,
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))

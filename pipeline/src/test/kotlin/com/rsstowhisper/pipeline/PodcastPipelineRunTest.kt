@@ -537,4 +537,38 @@ class PodcastPipelineRunTest {
         while (feedSvc.downloads.size < count && System.currentTimeMillis() < deadline) Thread.sleep(5)
         assertEquals(count, feedSvc.downloads.size, "timed out waiting for $count downloads")
     }
+
+    @Test
+    fun `a podcast language overrides the top-level default`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed", language = "fr")),
+                makeFeed(makeEntry("My Episode")),
+                language = "de",
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf("fr"), txSvc.languages)
+    }
+
+    @Test
+    fun `a podcast without a language falls back to the top-level one`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                language = "de",
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf("de"), txSvc.languages)
+    }
 }

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.PropertyNamingStrategies
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.fasterxml.jackson.module.kotlin.readValue
+import com.rsstowhisper.external.Transcriber
 import java.io.File
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -19,6 +20,8 @@ data class AppConfig(
     val recoverOrphans: Boolean = true,
     /** 0 means no limit. Counted across the whole run, not per podcast. */
     val orphanRecoveryLimit: Int = 0,
+    /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
+    val language: String = Transcriber.DEFAULT_LANGUAGE,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {
@@ -107,4 +110,9 @@ data class PodcastConfig(
     val collections: List<String> = emptyList(),
     val excludes: List<String> = emptyList(),
     val minEpisodeDurationSeconds: Int? = null,
+    /**
+     * ISO 639-1 code for this feed, or "auto" to let whisper detect it.
+     * Null falls back to the top-level `language` in pods.yaml.
+     */
+    val language: String? = null,
 )

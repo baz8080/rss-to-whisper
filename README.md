@@ -568,9 +568,13 @@ gate recording flags, the loop closes:
 
 ```bash
 ./transcribe --retranscribe-flagged --retranscribe-limit 50
-./transcribe --retranscribe "Ask a Spaceman/2024-01-02-abcd1234-some-episode"
+./transcribe --retranscribe "Ask-a-Spaceman/2024-01-02-abcd1234-some-episode"
 ./transcribe --retranscribe-id abcd1234
 ```
+
+A path is the episode's directory as it sits on disk, so it carries the escaped podcast
+name (`Ask-a-Spaceman`, not `Ask a Spaceman`) — every character that is not a letter or
+a digit became a dash when the directory was created.
 
 `--retranscribe` and `--retranscribe-id` are repeatable, and any of the three skips the
 feeds entirely — every target is already on disk, and an episode that aged out of its
@@ -585,9 +589,21 @@ the best there is. `episode_duration` is replaced too, but only when
 `episode_metadata_recovered` is true, because that number came from the previous decode
 rather than from the feed.
 
-`words.jsonl.gz` is written first, then the JSON is staged beside the original and
-moved over it, so an interrupted run never leaves an episode with a truncated
-transcript — or none at all, which deleting first would risk.
+A re-decode is kept only if it scores at least as well as the transcript it would
+replace, by the same measure the quality gate's retry uses — fewer flags, then better
+punctuation. Whisper is not deterministic, so a redo can come back worse than what it
+overwrites, and that write is the only copy: re-transcribing can improve an episode or
+leave it alone, never cost it the better decode. A transcript written before the quality
+gate has no score to compare against, so it is simply replaced.
+
+Both files are staged beside their originals and moved over them back to back, so an
+interrupted run never leaves an episode with a truncated transcript — or none at all,
+which deleting first would risk. They move together because `words.jsonl.gz` addresses
+cues by position: a new transcript beside the old sidecar would mis-time every word,
+silently and for good, since an episode that has a `transcript.json` is one nothing
+revisits. If the new decode carries no word timestamps at all, the stale sidecar is
+deleted rather than left behind — a missing one is visible and can be rebuilt, a wrong
+one never announces itself.
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.

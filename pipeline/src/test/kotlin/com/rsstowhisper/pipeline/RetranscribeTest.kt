@@ -23,6 +23,18 @@ class RetranscribeTest {
                 .toTypedArray(),
         )
 
+    /** Segments with no per-word times, which is what a server decoding without token_timestamps returns. */
+    private fun wordlessJson(): String =
+        """{"task":"transcribe","segments":[""" +
+            """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
+            "]}"
+
+    /** The shape [TranscriptQuality] writes, which is what a re-decode is measured against. */
+    private fun qualityMap(
+        flags: List<String>,
+        punctuation: Double,
+    ): Map<String, Any?> = mapOf("flags" to flags, "punctuation_per_word" to punctuation)
+
     private fun healthyJson(): String =
         whisperJson(
             Triple(0.0, 3.0, "So that is where the story begins, and it gets stranger."),
@@ -261,6 +273,62 @@ class RetranscribeTest {
 
         assertTrue(Files.exists(dir.resolve("words.jsonl.gz")))
         assertFalse(Files.exists(dir.resolve("transcript.json.new")))
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz.new")))
+    }
+
+    /**
+     * Whisper is not deterministic, so a redo can come back worse than the
+     * transcript it would overwrite -- and that write is the only copy.
+     */
+    @Test
+    fun `a re-decode that scores worse than what is on disk is discarded`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, extra = mapOf("episode_quality" to qualityMap(emptyList(), 0.15)))
+        val before = Files.readString(dir.resolve("transcript.json"))
+        // Both decodes loop, so the quality gate's retry cannot rescue it either.
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(loopingJson(), loopingJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertEquals(2, txSvc.calls.size)
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    /** Unscored is not the same as passing: there is nothing to lose the decode to. */
+    @Test
+    fun `a transcript written before the quality gate is replaced without comparison`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, extra = mapOf("episode_quality" to null))
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(loopingJson(), loopingJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        val after = readTranscript(dir)
+        assertTrue("old transcript" !in after["episode_transcript"].toString())
+        assertEquals(listOf("repetition-loop"), (after["episode_quality"] as Map<*, *>)["flags"])
+    }
+
+    /**
+     * The sidecar addresses cues by position, so one left over from a decode
+     * that is gone mis-times every word -- and nothing downstream can tell.
+     */
+    @Test
+    fun `a re-decode carrying no word timestamps clears the stale sidecar`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        Files.writeString(dir.resolve("words.jsonl.gz"), "stale sidecar from the previous decode")
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(wordlessJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue("no word times" in readTranscript(dir)["episode_transcript"].toString())
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz")))
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz.new")))
     }
 
     @Test

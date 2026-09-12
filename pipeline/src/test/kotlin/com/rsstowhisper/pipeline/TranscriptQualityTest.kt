@@ -198,6 +198,25 @@ class TranscriptQualityTest {
         assertFalse(lessPunctuated.isBetterThan(clean))
     }
 
+    /** A re-transcription compares its new decode against the score read back off disk. */
+    @Test
+    fun `a report read back from its map compares the same way`() {
+        val clean = TranscriptQuality.score(healthy())
+        val looping = TranscriptQuality.score(transcription(List(20) { " And that is the thing about it, really." }))
+
+        val restored = QualityReport.fromMap(clean.toMap())!!
+
+        assertEquals(clean.toMap(), restored.toMap())
+        assertTrue(restored.isBetterThan(looping))
+        assertFalse(looping.isBetterThan(restored))
+    }
+
+    @Test
+    fun `a transcript with no recorded score is no baseline at all`() {
+        assertNull(QualityReport.fromMap(null))
+        assertNull(QualityReport.fromMap(emptyMap<String, Any?>()))
+    }
+
     @Test
     fun `the report serialises every measure under a snake_case key`() {
         val map = TranscriptQuality.score(healthy()).toMap()

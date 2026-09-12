@@ -17,6 +17,16 @@ internal val USAGE =
       --no-quality-retry     Keep the first decode whatever it scores
       -h, --help             Show this message
 
+    Re-transcription (any of these skips the feeds entirely and redoes episodes
+    already on disk, keeping every field of transcript.json but the transcript):
+
+      --retranscribe <dir>       <podcast dir>/<episode dir>; repeatable
+      --retranscribe-id <hex8>   The id in an episode directory name; repeatable
+      --retranscribe-flagged     Every episode with episode_quality flags. Reads
+                                 every transcript.json, which is slow on a
+                                 network volume
+      --retranscribe-limit <n>   Cap --retranscribe-flagged; 0 means no limit
+
     Options override .env, which overrides pods.yaml. Give a second instance its
     own --config and --whisper-url to run two feeds against two whisper servers.
     """.trimIndent()
@@ -30,8 +40,16 @@ internal data class Args(
     val recoverOrphans: Boolean? = null,
     val orphanRecoveryLimit: Int? = null,
     val qualityRetry: Boolean? = null,
+    val retranscribePaths: List<String> = emptyList(),
+    val retranscribeIds: List<String> = emptyList(),
+    val retranscribeFlagged: Boolean = false,
+    val retranscribeLimit: Int = 0,
     val help: Boolean = false,
-)
+) {
+    /** Any target at all switches the run out of following feeds. */
+    val isRetranscribe: Boolean
+        get() = retranscribePaths.isNotEmpty() || retranscribeIds.isNotEmpty() || retranscribeFlagged
+}
 
 internal fun parseArgs(argv: Array<String>): Args {
     var args = Args()
@@ -50,6 +68,12 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--orphan-limit" -> args.copy(orphanRecoveryLimit = intValueFor(flag, argv, ++i))
                 "--quality-retry" -> args.copy(qualityRetry = true)
                 "--no-quality-retry" -> args.copy(qualityRetry = false)
+                "--retranscribe" ->
+                    args.copy(retranscribePaths = args.retranscribePaths + valueFor(flag, argv, ++i))
+                "--retranscribe-id" ->
+                    args.copy(retranscribeIds = args.retranscribeIds + valueFor(flag, argv, ++i))
+                "--retranscribe-flagged" -> args.copy(retranscribeFlagged = true)
+                "--retranscribe-limit" -> args.copy(retranscribeLimit = intValueFor(flag, argv, ++i))
                 "-h", "--help" -> args.copy(help = true)
                 else ->
                     if (flag.startsWith("-")) {

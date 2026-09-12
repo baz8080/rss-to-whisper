@@ -363,6 +363,7 @@ below supply the three required values.
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
 | `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
+| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -541,6 +542,37 @@ The thresholds above are starting points measured on the real corpus, not tuned
 constants. They live together at the top of
 `pipeline/src/main/kotlin/com/rsstowhisper/pipeline/TranscriptQuality.kt`, each with the
 number it came from.
+
+### Re-transcribing an episode
+
+Redoing an episode used to mean deleting its `transcript.json` by hand. With the quality
+gate recording flags, the loop closes:
+
+```bash
+./transcribe --retranscribe-flagged --retranscribe-limit 50
+./transcribe --retranscribe "Ask a Spaceman/2024-01-02-abcd1234-some-episode"
+./transcribe --retranscribe-id abcd1234
+```
+
+`--retranscribe` and `--retranscribe-id` are repeatable, and any of the three skips the
+feeds entirely — every target is already on disk, and an episode that aged out of its
+feed has nothing left to fetch. `--retranscribe-flagged` reads every `transcript.json`
+under the data directory, which is slow on a network volume; `--retranscribe-limit`
+caps it, since a first pass over the corpus can select hundreds.
+
+Each target needs its `audio.mp3`; one without it is reported and skipped. The rewrite
+keeps every existing field and replaces only `episode_transcript` and `episode_quality`
+— all the rest came from a feed entry that may no longer exist, so what is on disk is
+the best there is. `episode_duration` is replaced too, but only when
+`episode_metadata_recovered` is true, because that number came from the previous decode
+rather than from the feed.
+
+`words.jsonl.gz` is written first, then the JSON is staged beside the original and
+moved over it, so an interrupted run never leaves an episode with a truncated
+transcript — or none at all, which deleting first would risk.
+
+An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
+finds rather than guessing which was meant.
 
 ### Error log
 

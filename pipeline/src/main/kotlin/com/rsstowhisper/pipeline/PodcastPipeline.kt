@@ -17,8 +17,10 @@ import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
@@ -73,6 +75,93 @@ class PodcastPipeline(
             processPodcast(podcast, dataDir)
         }
         return true
+    }
+
+    /**
+     * Decodes episodes that already have a transcript, and replaces it.
+     *
+     * The only way to redo an episode used to be deleting its `transcript.json`
+     * by hand. With the quality gate recording flags, the loop closes: find the
+     * flagged episodes, decode them again.
+     *
+     * No feed is fetched. Every target is already on disk, and for one that
+     * aged out of its feed there is nothing left to fetch.
+     */
+    fun retranscribe(request: RetranscribeRequest): Boolean {
+        val dataDir = Path.of(config.dataDirectory)
+        if (!Files.isWritable(dataDir)) {
+            logger.error("The data_dir is missing, or not writable. Cannot continue")
+            return false
+        }
+
+        val targets = RetranscribeTargets.find(dataDir, request)
+        if (targets.isEmpty()) {
+            logger.error("Nothing matched the re-transcription request")
+            return false
+        }
+
+        logger.info("Re-transcribing ${targets.size} episodes")
+        var done = 0
+        for (target in targets) {
+            try {
+                if (retranscribeEpisode(target)) done++
+            } catch (e: Exception) {
+                logger.error("Could not re-transcribe ${target.fileName}", e)
+            }
+        }
+        logger.info("Re-transcribed $done of ${targets.size} episodes")
+        return true
+    }
+
+    private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
+        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
+        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
+            logger.error("Cannot re-transcribe $label: it has no audio")
+            return false
+        }
+
+        val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
+        val existing =
+            if (Files.exists(jsonPath)) {
+                @Suppress("UNCHECKED_CAST")
+                jsonMapper.readValue(Files.readString(jsonPath), Map::class.java) as Map<String, Any?>
+            } else {
+                // Nothing to preserve, and the feed path is what should pick it
+                // up -- redoing it here would write a transcript with no metadata.
+                logger.error("Cannot re-transcribe $label: it has no transcript.json")
+                return false
+            }
+
+        val scored = transcribeEpisode(audioPath, episodeDirPath, podcastFor(episodeDirPath), label)
+        if (scored.transcription.isEmpty) {
+            logger.warn("Re-transcription of $label found no speech; keeping the existing transcript")
+            return false
+        }
+
+        // Every other field was derived from a feed entry that may no longer
+        // exist, so the existing values are the best there are. The duration is
+        // the exception, and only for a recovered episode: that number came
+        // from the previous decode, so this decode supersedes it.
+        val updated = existing.toMutableMap()
+        updated["episode_transcript"] = scored.transcription.vtt
+        updated["episode_quality"] = scored.quality.toMap()
+        if (existing["episode_metadata_recovered"] == true) {
+            updated["episode_duration"] = scored.transcription.durationSeconds
+        }
+
+        writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true)
+        logger.info("Re-transcribed $label")
+        return true
+    }
+
+    /** Matches the directory back to its feed so the decode keeps the podcast's language. */
+    private fun podcastFor(episodeDirPath: Path): PodcastConfig {
+        val podcastDir = episodeDirPath.parent.fileName.toString()
+        return config.podcasts.firstOrNull { escapeFilename(it.name).equals(podcastDir, ignoreCase = true) }
+            // A podcast dropped from pods.yaml still has episodes on disk, and
+            // a null language falls through to the top-level one.
+            ?: PodcastConfig(name = podcastDir, url = "")
     }
 
     private fun processPodcast(
@@ -543,12 +632,14 @@ class PodcastPipeline(
         label: String,
         transcription: WhisperTranscription,
         episodeDict: Map<String, Any?>,
+        /** Re-transcription deliberately overwrites; everything else refuses to. */
+        replace: Boolean = false,
     ) {
         // Re-checked here rather than only at the callers: transcription takes minutes,
         // and a second instance over the same data directory may have finished this
         // episode while this one was decoding it.
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
-        if (Files.exists(jsonPath)) {
+        if (!replace && Files.exists(jsonPath)) {
             logger.warn("$label was transcribed by something else while this run was working on it")
             return
         }
@@ -558,7 +649,24 @@ class PodcastPipeline(
         // last means a crash in between leaves the episode to be redone
         // rather than leaving it permanently without its sidecar.
         writeWords(transcription, episodeDirPath, label)
-        Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
+
+        if (!replace) {
+            Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
+            return
+        }
+
+        // Written beside the original and moved over it, so a crash mid-write
+        // never leaves the episode with a truncated transcript -- or none at
+        // all, which is what deleting first would risk.
+        val staged = episodeDirPath.resolve("$TRANSCRIPT_FILENAME.new")
+        Files.writeString(staged, jsonMapper.writeValueAsString(episodeDict))
+        try {
+            Files.move(staged, jsonPath, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            // Some network volumes refuse an atomic move across the same
+            // directory. A plain replace is still better than a partial write.
+            Files.move(staged, jsonPath, StandardCopyOption.REPLACE_EXISTING)
+        }
     }
 
     private fun writeWords(

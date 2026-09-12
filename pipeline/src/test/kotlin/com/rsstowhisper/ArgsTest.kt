@@ -3,6 +3,7 @@ package com.rsstowhisper
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -92,5 +93,45 @@ class ArgsTest {
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--orphan-limit")) }
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--orphan-limit", "lots")) }
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--orphan-limit", "-1")) }
+    }
+
+    @Test
+    fun `re-transcription targets are repeatable and switch the run mode`() {
+        val args =
+            parseArgs(
+                arrayOf(
+                    "--retranscribe",
+                    "Show/2024-01-01-abcd1234-a",
+                    "--retranscribe",
+                    "Show/2024-01-02-beefcafe-b",
+                    "--retranscribe-id",
+                    "abcd1234",
+                    "--retranscribe-limit",
+                    "5",
+                ),
+            )
+
+        assertEquals(
+            listOf("Show/2024-01-01-abcd1234-a", "Show/2024-01-02-beefcafe-b"),
+            args.retranscribePaths,
+        )
+        assertEquals(listOf("abcd1234"), args.retranscribeIds)
+        assertEquals(5, args.retranscribeLimit)
+        assertTrue(args.isRetranscribe)
+    }
+
+    @Test
+    fun `a run with no re-transcription target follows the feeds`() {
+        assertFalse(parseArgs(arrayOf("--verbose")).isRetranscribe)
+        // A limit on its own says nothing about what to redo.
+        assertFalse(parseArgs(arrayOf("--retranscribe-limit", "5")).isRetranscribe)
+        assertTrue(parseArgs(arrayOf("--retranscribe-flagged")).isRetranscribe)
+    }
+
+    @Test
+    fun `quality retry is tri-state so pods yaml can still decide`() {
+        assertNull(parseArgs(arrayOf()).qualityRetry)
+        assertEquals(true, parseArgs(arrayOf("--quality-retry")).qualityRetry)
+        assertEquals(false, parseArgs(arrayOf("--no-quality-retry")).qualityRetry)
     }
 }

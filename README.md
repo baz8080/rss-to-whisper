@@ -305,6 +305,9 @@ cp .env.example .env
 ```ini
 APP_DB_PATH=/path/to/podcasts.db
 APP_AUDIO_BASE_URL=http://your-nas:9280
+# Optional. The pipeline's data directory, which enables word-level highlighting
+# on the episode page; see Word timings below. Omit it and the feature stays hidden.
+APP_DATA_DIRECTORY=/path/to/data_directory
 ```
 
 Quarkus picks up `.env` automatically. Alternatively, override properties inline:
@@ -337,6 +340,32 @@ java -Dapp.db.path=/data/podcasts.db \
 | `/search` | Full-text search with filters for duration, podcast, collection, tag, year and episode type, and a relevance/newest/oldest sort |
 | `/episode/{id}` | One episode: metadata, audio player, and the transcript as clickable cues. `?q=` highlights the query's matches and steps between them; `#t=<seconds>` opens on a cue and starts playback there |
 | `/podcasts` | What the corpus holds: one card per podcast with artwork, episode count, total hours and date range, plus when `index.py` last wrote the database |
+
+### Word timings
+
+The pipeline writes `words.jsonl.gz` beside every episode's audio: one line per word
+with its start, end and the decoder's own confidence. Set `APP_DATA_DIRECTORY` to that
+tree and the episode page can use it.
+
+With it set, the transcript gains a **Mark low confidence** toggle, and playback
+highlights the current word rather than only the current cue. Words whisper scored
+below `p = 0.4` are faded when the toggle is on, so a reader can see where the decoder
+was guessing. Dimming is opt-in: a transcript permanently mottled with faded words is
+harder to read than one that never shows its confidence at all.
+
+The sidecar is roughly 60 KB per episode, so it is never fetched on page load — the
+first play pulls it, and so does ticking the toggle. Episodes transcribed before word
+timestamps were emitted have no sidecar; the route returns 404 and the page falls back
+silently.
+
+The file is served by the web module from beside the audio, rather than fetched from
+the audio host: the path is derived from a column already in hand, it needs no CORS
+grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets the
+browser inflate it instead of the page carrying a decompressor. Paths are resolved
+under the data directory and anything escaping it is refused.
+
+On a line the search query matched, the `<mark>` highlighting wins and the line is
+not split into words — word timing is the lesser feature there.
 
 ### JSON API
 

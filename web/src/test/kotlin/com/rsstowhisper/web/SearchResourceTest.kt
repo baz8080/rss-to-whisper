@@ -11,16 +11,21 @@ import com.rsstowhisper.web.models.TranscriptLine
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Response
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.IContext
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Instant
 
 class SearchResourceTest {
@@ -36,6 +41,7 @@ class SearchResourceTest {
             it.repository = repository
             it.templateEngine = templateEngine
             it.audioBaseUrl = "http://audio.example.com/" // trailing slash — to verify trimming
+            it.dataDirectory = "" // word timings off unless a test turns them on
         }
 
     // --- index ---
@@ -452,6 +458,82 @@ class SearchResourceTest {
         assertEquals(MediaType.APPLICATION_JSON_TYPE, response.mediaType)
     }
 
+    // --- word timings (W6) ---
+
+    @Test
+    fun `words route is 404 when no data directory is configured`() {
+        resource.dataDirectory = ""
+
+        assertEquals(404, resource.episodeWords("ep1").status)
+        // Never even looked the episode up: the feature is off.
+        verify(exactly = 0) { repository.getEpisodeById(any()) }
+    }
+
+    @Test
+    fun `words route is 404 when the episode has no sidecar`(
+        @TempDir tmp: Path,
+    ) {
+        resource.dataDirectory = tmp.toString()
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1").status)
+    }
+
+    @Test
+    fun `words route serves the sidecar as gzip`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        val payload = byteArrayOf(1, 2, 3)
+        Files.write(dir.resolve("words.jsonl.gz"), payload)
+        resource.dataDirectory = tmp.toString()
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1")
+
+        assertEquals(200, response.status)
+        assertEquals("gzip", response.getHeaderString("Content-Encoding"))
+        assertArrayEquals(payload, response.entity as ByteArray)
+    }
+
+    /**
+     * The path comes from the database, but a value reaching outside the data
+     * directory must not be servable whatever wrote it there.
+     */
+    @Test
+    fun `words route refuses a path that escapes the data directory`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        Files.write(outside.resolve("words.jsonl.gz"), byteArrayOf(9))
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        resource.dataDirectory = dataDir.toString()
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "../outside/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1").status)
+    }
+
+    @Test
+    fun `the episode page offers the words url only when a data directory is set`() {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
+
+        resource.dataDirectory = ""
+        resource.episode("ep1", "")
+        assertNull(ctxSlot.captured.getVariable("wordsUrl"))
+
+        resource.dataDirectory = "/data"
+        resource.episode("ep1", "")
+        assertEquals("/episode/ep1/words", ctxSlot.captured.getVariable("wordsUrl"))
+    }
+
     /**
      * Named defaults rather than a positional call in every test: `search()`
      * has grown a parameter with almost every filter added, and each one used
@@ -494,6 +576,7 @@ class SearchResourceTest {
     private fun minimalEpisode(
         summary: String? = null,
         transcript: String? = null,
+        relativeAudioPath: String? = null,
     ) = Episode(
         id = "ep1",
         podcastTitle = null,
@@ -509,7 +592,7 @@ class SearchResourceTest {
         episodeSeason = null,
         episodeType = null,
         episodeDuration = null,
-        episodeRelativeAudioPath = null,
+        episodeRelativeAudioPath = relativeAudioPath,
         allTags = null,
         transcript = transcript,
     )

@@ -37,6 +37,12 @@ exclude_title_keywords:
 # audio. A podcast can override this; everything else inherits it.
 language: en
 
+# A transcript that scores as unpunctuated, looping or shredded is decoded a
+# second time, and the better of the two is kept. Costs a second decode for the
+# 1-5% of episodes that trip a flag. Either way the score is recorded in
+# transcript.json under episode_quality.
+quality_retry: true
+
 # Skip episodes shorter than this. Below ~150s a feed is almost entirely
 # trailers, promos and hiatus notices. Feeds without an itunes:duration are
 # never filtered on length. Set to 0 to disable.

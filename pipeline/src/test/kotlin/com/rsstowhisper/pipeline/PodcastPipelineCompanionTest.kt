@@ -543,7 +543,7 @@ class PodcastPipelineCompanionTest {
         val recovered = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", "p.mp3", null)!!
 
         assertEquals(fromFeed.keys + "episode_metadata_recovered", recovered.keys)
-        assertEquals(25, recovered.size)
+        assertEquals(26, recovered.size)
     }
 
     @Test

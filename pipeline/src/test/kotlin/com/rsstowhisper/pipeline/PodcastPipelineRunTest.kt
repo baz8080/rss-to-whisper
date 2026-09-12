@@ -368,7 +368,7 @@ class PodcastPipelineRunTest {
                 podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed")),
             )
         val feedSvc = FakeFeedService(mapOf("https://feed" to makeFeed(makeEntry("E"))))
-        val txSvc = FakeTranscriber(FAKE_SERVER_URL, MINIMAL_VTT)
+        val txSvc = FakeTranscriber(FAKE_SERVER_URL, listOf(MINIMAL_VTT))
         val pipeline =
             PodcastPipeline(
                 config = config,
@@ -570,5 +570,108 @@ class PodcastPipelineRunTest {
         pipeline.run()
 
         assertEquals(listOf("de"), txSvc.languages)
+    }
+
+    // ---------- quality gate ----------
+
+    /** Twenty identical cues: a repetition loop, which is what the gate is for. */
+    private fun loopingJson(): String =
+        whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "And that is the thing about it, really.") }.toTypedArray())
+
+    private fun healthyJson(): String =
+        whisperJson(
+            Triple(0.0, 3.0, "So that is where the story begins, and it gets stranger."),
+            Triple(3.0, 6.0, "We looked at the data again, carefully, and found something odd."),
+        )
+
+    @Test
+    fun `a flagged transcript is decoded once more and the better one is kept`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), healthyJson()),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size, "expected exactly one retry")
+        val json = transcriptJson(tempDir)
+        assertTrue(
+            "We looked at the data again" in json["episode_transcript"].toString(),
+            "the retry's transcript should have been the one written",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val quality = json["episode_quality"] as Map<String, Any?>
+        assertEquals(emptyList<String>(), quality["flags"])
+    }
+
+    @Test
+    fun `--no-quality-retry keeps the first decode and makes one call`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), healthyJson()),
+                qualityRetry = false,
+            )
+
+        pipeline.run()
+
+        assertEquals(1, txSvc.calls.size)
+        @Suppress("UNCHECKED_CAST")
+        val quality = transcriptJson(tempDir)["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
+    @Test
+    fun `a healthy transcript is not decoded twice`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(healthyJson()),
+            )
+
+        pipeline.run()
+
+        assertEquals(1, txSvc.calls.size)
+    }
+
+    /** Both decodes bad: the episode is still written, and still carries its flags. */
+    @Test
+    fun `a transcript flagged twice is written anyway with its flags recorded`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), loopingJson()),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size)
+        @Suppress("UNCHECKED_CAST")
+        val quality = transcriptJson(tempDir)["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
+    private fun transcriptJson(dataDir: Path): Map<String, Any?> {
+        val episodeDir = Files.list(dataDir.resolve("Show")).use { it.toList() }.single()
+        @Suppress("UNCHECKED_CAST")
+        return com.fasterxml.jackson.databind.ObjectMapper()
+            .readValue(Files.readString(episodeDir.resolve("transcript.json")), Map::class.java) as Map<String, Any?>
     }
 }

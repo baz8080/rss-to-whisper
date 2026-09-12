@@ -186,11 +186,14 @@ class PodcastPipeline(
                         logger.debug("${entry.title} was transcribed while this run was busy; skipping")
                         continue
                     }
-                    val transcription =
-                        WhisperTranscription.parse(
-                            transcribeEpisode(episode.mp3Info.filePath, episode.episodeDirPath, podcast),
+                    val scored =
+                        transcribeEpisode(
+                            episode.mp3Info.filePath,
+                            episode.episodeDirPath,
+                            podcast,
+                            entry.title ?: episode.episodeDirPath.fileName.toString(),
                         )
-                    writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, transcription)
+                    writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)
                 } catch (e: Exception) {
                     // An Error on the prefetch thread arrives wrapped, and must still end the run.
                     val cause = (e as? ExecutionException)?.cause ?: e
@@ -464,14 +467,15 @@ class PodcastPipeline(
         }
 
         logger.info("Recovering ${parsed.dirName}")
-        val transcription =
+        val scored =
             try {
-                WhisperTranscription.parse(transcribeEpisode(audioPath, episodeDirPath, podcast))
+                transcribeEpisode(audioPath, episodeDirPath, podcast, parsed.dirName)
             } catch (e: Exception) {
                 // No marker: a server that is down now may transcribe this fine tomorrow.
                 logger.error("Could not transcribe ${parsed.dirName}", e)
                 return false
             }
+        val transcription = scored.transcription
 
         if (transcription.isEmpty) {
             markRecoveryFailed(episodeDirPath, "whisper returned no speech")
@@ -487,6 +491,7 @@ class PodcastPipeline(
                 relativeAudioPath = Path.of(dataDir).relativize(audioPath).toString(),
                 durationSeconds = transcription.durationSeconds,
                 collections = podcast.collections,
+                quality = scored.quality,
             ) ?: return false
 
         writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
@@ -517,8 +522,9 @@ class PodcastPipeline(
         mp3Info: Mp3Info,
         episodeDirPath: Path,
         collections: List<String>,
-        transcription: WhisperTranscription,
+        scored: ScoredTranscription,
     ) {
+        val transcription = scored.transcription
         if (Files.exists(episodeDirPath.resolve(TRANSCRIPT_FILENAME))) return
         if (transcription.isEmpty) {
             logger.warn("Transcription for ${entry.title} came back empty; not writing transcript.json")
@@ -526,7 +532,8 @@ class PodcastPipeline(
         }
 
         val episodeDict =
-            buildEpisodeDict(feed, entry, transcription.vtt, mp3Info.localFilePath, collections) ?: return
+            buildEpisodeDict(feed, entry, transcription.vtt, mp3Info.localFilePath, collections, scored.quality)
+                ?: return
 
         writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
     }
@@ -572,15 +579,59 @@ class PodcastPipeline(
         }
     }
 
+    /**
+     * The single place a decode happens, so both the feed path and the recovery
+     * path get the same scoring and the same retry.
+     *
+     * Whisper is not deterministic, and the README's external repair passes
+     * cleared most loops on their first re-decode (57 of 57 repetition cases,
+     * most on the first attempt), so one retry is worth the doubled decode time
+     * for the 1-5% of episodes that trip a flag.
+     */
     private fun transcribeEpisode(
         audioPath: Path,
         episodePath: Path,
         podcast: PodcastConfig,
-    ): String {
+        label: String,
+    ): ScoredTranscription {
+        val first = decodeAndScore(audioPath, episodePath, podcast)
+        if (!first.quality.isFlagged || !config.qualityRetry) return warnIfFlagged(first, label)
+
+        logger.info("$label scored ${first.quality.flags}; decoding it once more")
+        val second =
+            try {
+                decodeAndScore(audioPath, episodePath, podcast)
+            } catch (e: Exception) {
+                // The first decode is still a usable transcript; a failed retry
+                // must not cost the episode entirely.
+                logger.warn("Retry of $label failed; keeping the first decode", e)
+                return warnIfFlagged(first, label)
+            }
+
+        val best = if (second.quality.isBetterThan(first.quality)) second else first
+        return warnIfFlagged(best, label)
+    }
+
+    /** WARN so it reaches the error log and the run's warning tally rather than only scrollback. */
+    private fun warnIfFlagged(
+        scored: ScoredTranscription,
+        label: String,
+    ): ScoredTranscription {
+        if (scored.quality.isFlagged) {
+            logger.warn("$label is still flagged after scoring: ${scored.quality.flags.joinToString(", ")}")
+        }
+        return scored
+    }
+
+    private fun decodeAndScore(
+        audioPath: Path,
+        episodePath: Path,
+        podcast: PodcastConfig,
+    ): ScoredTranscription {
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
 
-        val vtt = transcriber.transcribe(audioPath, podcast.language ?: config.language)
+        val json = transcriber.transcribe(audioPath, podcast.language ?: config.language)
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.
@@ -590,7 +641,8 @@ class PodcastPipeline(
         val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
         logger.debug("Transcribed in: ${"%.2f".format(elapsedMinutes)} Minutes")
 
-        return vtt
+        val transcription = WhisperTranscription.parse(json)
+        return ScoredTranscription(transcription, TranscriptQuality.score(transcription))
     }
 
     companion object {
@@ -664,6 +716,7 @@ class PodcastPipeline(
             transcript: String,
             relativeAudioPath: String,
             collections: List<String>? = null,
+            quality: QualityReport? = null,
         ): Map<String, Any?>? {
             if (transcript.isEmpty()) return null
 
@@ -703,6 +756,7 @@ class PodcastPipeline(
                         "episode_duration" to parseDuration(entryItunes),
                         "episode_transcript" to transcript,
                         "episode_relative_audio_path" to relativeAudioPath,
+                        "episode_quality" to quality?.toMap(),
                     )
             } catch (e: Exception) {
                 logger.error("Error getting podcast metadata", e)
@@ -743,6 +797,7 @@ class PodcastPipeline(
             relativeAudioPath: String,
             durationSeconds: Int?,
             collections: List<String>? = null,
+            quality: QualityReport? = null,
         ): Map<String, Any?>? {
             if (transcript.isEmpty()) return null
 
@@ -766,6 +821,7 @@ class PodcastPipeline(
                         "episode_transcript" to transcript,
                         "episode_relative_audio_path" to relativeAudioPath,
                         "episode_metadata_recovered" to true,
+                        "episode_quality" to quality?.toMap(),
                     )
             } catch (e: Exception) {
                 logger.error("Error recovering metadata for ${parsed.dirName}", e)

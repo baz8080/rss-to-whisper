@@ -22,6 +22,8 @@ data class AppConfig(
     val orphanRecoveryLimit: Int = 0,
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
+    /** Decode a flagged transcript once more and keep the better of the two. */
+    val qualityRetry: Boolean = true,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {
@@ -80,6 +82,7 @@ data class AppConfig(
                 verbose = args.verbose ?: envVerbose ?: raw.verbose,
                 recoverOrphans = args.recoverOrphans ?: raw.recoverOrphans,
                 orphanRecoveryLimit = args.orphanRecoveryLimit ?: raw.orphanRecoveryLimit,
+                qualityRetry = args.qualityRetry ?: raw.qualityRetry,
             )
         }
 

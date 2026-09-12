@@ -362,6 +362,7 @@ below supply the three required values.
 | `--verbose` / `--no-verbose` | `PIPELINE_VERBOSE` |
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
+| `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -388,6 +389,7 @@ launch from a quiet one.
 - `recover_orphans` — transcribe episodes that aged out of their feed before they were processed (optional, default `true`; see [Orphan recovery](#orphan-recovery))
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
 - `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`)
+- `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 
 `name` becomes the show's directory name, so changing it moves every episode of
@@ -492,6 +494,54 @@ directories absent from the feed are opened. `--no-recover-orphans` turns it off
 `--orphan-limit <n>` bounds how many a single run will transcribe, which is worth setting
 when the backlog is large enough to crowd out new episodes.
 
+### Transcript quality gate
+
+Three failure modes were previously only ever found by an external pass reading the
+finished corpus: an episode decoded with no punctuation at all, a greedy-style
+repetition loop, and cues shredded into one- and two-word fragments. The pipeline now
+scores every transcript as it writes it, and records the score in `transcript.json`
+under `episode_quality`:
+
+```json
+"episode_quality": {
+  "punctuation_per_word": 0.1611,
+  "seconds_per_cue": 2.42,
+  "repeated_share": 0.0,
+  "longest_repeated_cue_run": 1,
+  "mean_word_probability": 0.87,
+  "low_confidence_share": 0.04,
+  "word_count": 8123,
+  "cue_count": 1044,
+  "flags": []
+}
+```
+
+`flags` is empty for a healthy decode, and otherwise names what tripped:
+
+| Flag | Trips when | Measured |
+| --- | --- | --- |
+| `unpunctuated` | punctuation per word below `0.03` | healthy episodes sit near `0.15` |
+| `shredded-cues` | under `1.0` seconds per cue, with at least 50 cues | a shredded episode measured `0.74` against `2.42` re-decoded |
+| `repetition-loop` | one 4-gram repeats over 5% of the words, or 4+ consecutive cues are identical | greedy decoding hit 0.7%–5.0% of episodes per show |
+| `low-confidence` | over 20% of words scored under `p = 0.3` | skipped entirely for episodes decoded before word timestamps existed |
+
+When a decode is flagged the pipeline decodes the episode **once more** and keeps the
+better of the two — fewer flags, and on a tie the more punctuated one. Whisper is not
+deterministic, and the repair passes that inspired this cleared 57 of 57 repetition
+cases, most on the first re-decode. A retry doubles decode time for the 1–5% of
+episodes that trip a flag.
+
+If the kept decode is still flagged it is written anyway, with its flags recorded, and
+a warning goes to the error log — the transcript is still worth having, and
+`episode_quality.flags` is what a later re-transcription pass selects on.
+
+Turn the retry off with `--no-quality-retry`, or `quality_retry: false` in `pods.yaml`.
+
+The thresholds above are starting points measured on the real corpus, not tuned
+constants. They live together at the top of
+`pipeline/src/main/kotlin/com/rsstowhisper/pipeline/TranscriptQuality.kt`, each with the
+number it came from.
+
 ### Error log
 
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, rolling daily
@@ -512,6 +562,8 @@ For each episode, the following files are created:
 
 The `episode_transcript` field in `transcript.json` is a raw WebVTT string,
 rendered from the same `verbose_json` response that produced `words.jsonl.gz`.
+`episode_quality` alongside it records how that decode scored; see
+[Transcript quality gate](#transcript-quality-gate).
 
 `words.jsonl.gz` is written **before** `transcript.json`, because the latter
 existing is what marks an episode done — so a crash between the two leaves the

@@ -26,6 +26,19 @@ data class Word(
 )
 
 /**
+ * One cue, as the segment it was rendered from rather than as re-parsed VTT.
+ *
+ * Kept so anything scoring a transcript works from the numbers the decode
+ * produced. Re-parsing the rendered VTT would round every time to a
+ * millisecond and re-derive boundaries this already knows.
+ */
+data class Cue(
+    val start: Double,
+    val end: Double,
+    val text: String,
+)
+
+/**
  * A parsed `verbose_json` response.
  *
  * The server can return WebVTT directly, and did until now. It is derived here
@@ -38,6 +51,7 @@ data class WhisperTranscription(
     val vtt: String,
     val words: List<Word>,
     val lastCueEnd: Double? = null,
+    val cues: List<Cue> = emptyList(),
 ) {
     val isEmpty: Boolean get() = vtt.isBlank() || vtt.trim() == VTT_HEADER
 
@@ -88,18 +102,21 @@ data class WhisperTranscription(
 
             val vtt = StringBuilder(VTT_HEADER).append("\n\n")
             val words = mutableListOf<Word>()
+            val cues = mutableListOf<Cue>()
             var lastCueEnd: Double? = null
             segments.forEachIndexed { index, segment ->
                 val start = segment.path("start").asDouble()
                 val end = segment.path("end").asDouble()
+                val text = segment.path("text").asText()
                 lastCueEnd = end
+                cues += Cue(start, end, text)
                 vtt.append(timestamp(start)).append(" --> ").append(timestamp(end)).append('\n')
-                vtt.append(segment.path("text").asText()).append("\n\n")
+                vtt.append(text).append("\n\n")
                 segment.path("words").forEach { word ->
                     words += word.toWord(index) ?: return@forEach
                 }
             }
-            return WhisperTranscription(vtt.toString(), words, lastCueEnd)
+            return WhisperTranscription(vtt.toString(), words, lastCueEnd, cues)
         }
 
         /**

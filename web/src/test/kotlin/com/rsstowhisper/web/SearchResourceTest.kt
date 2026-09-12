@@ -244,7 +244,7 @@ class SearchResourceTest {
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
 
-    // --- tag filtering (W1) ---
+    // --- tag filtering ---
 
     @Test
     fun `search exposes a base url tag pills can append to`() {
@@ -254,7 +254,7 @@ class SearchResourceTest {
 
         search("climate", page = 3)
 
-        // Page reset to 1, and ending in & so the template can append tag=...
+        // Page 1, though 3 was asked for.
         assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
     }
 
@@ -281,7 +281,7 @@ class SearchResourceTest {
         @Suppress("UNCHECKED_CAST")
         val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
         assertEquals(setOf("space", "science"), removeUrls.keys)
-        // Each link drops its own tag and keeps the other, back at page 1.
+        // Page 1 again, though 2 was asked for.
         assertEquals("/search?tag=science", removeUrls["space"])
         assertEquals("/search?tag=space", removeUrls["science"])
     }
@@ -298,9 +298,60 @@ class SearchResourceTest {
         assertEquals(setOf("space"), captured.captured.tags)
     }
 
+    /**
+     * The select is what serialises `sort`, so hiding it while a date sort is
+     * applied means the next checkbox click submits without it and the results
+     * silently flip back to newest-first.
+     */
+    @Test
+    fun `the sort control is shown whenever a sort is in effect, query or not`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "", sort = "oldest")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "", sort = "relevance")
+        assertEquals(false, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "climate", sort = "relevance")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+    }
+
+    /** Without a query every row scores the same, so offering it is offering nothing. */
+    @Test
+    fun `relevance is not offered without a query`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "")
+        assertEquals(listOf(SortOrder.NEWEST, SortOrder.OLDEST), ctxSlot.captured.getVariable("sortOptions"))
+
+        search(query = "climate")
+        assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    /**
+     * A query can narrow the corpus to one year while a different year is
+     * filtered on, and the options come back narrowed by that query -- leaving
+     * no checkbox to untick the filter that is emptying the results.
+     */
+    @Test
+    fun `an active year stays in the options even when the query excludes it`() {
+        stubSearchDependencies(years = listOf("2024"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", years = listOf("2019"))
+
+        assertEquals(listOf("2024", "2019"), ctxSlot.captured.getVariable("yearOptions"))
+    }
+
     // --- helpers ---
 
-    // --- sort and year (W2) ---
+    // --- sort and year ---
 
     @Test
     fun `sort and years reach the repository`() {
@@ -369,14 +420,14 @@ class SearchResourceTest {
             htmxRequest,
         )
 
-    private fun stubSearchDependencies() {
+    private fun stubSearchDependencies(years: List<String> = emptyList()) {
         every { repository.search(any()) } returns emptySearchResult()
-        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions(years)
     }
 
     private fun emptySearchResult() = SearchResult(emptyList(), 0, 1, 10)
 
-    private fun emptyFilterOptions() = FilterOptions(emptyList(), emptyList(), emptyList())
+    private fun emptyFilterOptions(years: List<String> = emptyList()) = FilterOptions(emptyList(), emptyList(), emptyList(), years)
 
     private fun minimalEpisode(
         summary: String? = null,

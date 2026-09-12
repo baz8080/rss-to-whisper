@@ -79,10 +79,14 @@
                   hx-include="#search-input"
                   hx-indicator="#loading">
 
-                <!--/* Relevance is meaningless without a query, and the
-                       repository silently treats it as newest, so the control
-                       only appears when it has something to do. */-->
-                <div class="filter-group sort-group" th:if="${not #strings.isEmpty(filters.query)}">
+                <!--/* The active tags are links in the sidebar, and a form does not
+                       serialise links. Without these, ticking any checkbox re-submits
+                       without tag= and silently drops the tag filter. */-->
+                <input type="hidden" name="tag"
+                       th:each="tag : ${filters.tags}"
+                       th:value="${tag}"/>
+
+                <div class="filter-group sort-group" th:if="${showSort}">
                     <label for="sort-select"><strong>Sort</strong></label>
                     <select id="sort-select" name="sort">
                         <option th:each="option : ${sortOptions}"
@@ -140,10 +144,10 @@
                 </details>
 
                 <details class="filter-group"
-                         th:if="${filterOptions.years.size() > 1}">
+                         th:if="${yearOptions.size() > 1 or not filters.years.isEmpty()}">
                     <summary>Year</summary>
                     <div class="filter-list">
-                        <label th:each="year : ${filterOptions.years}">
+                        <label th:each="year : ${yearOptions}">
                             <input type="checkbox" name="year"
                                    th:value="${year}"
                                    th:checked="${filters.years.contains(year)}"/>
@@ -253,7 +257,7 @@
                      th:if="${episode.snippetHtml != null}"
                      th:utext="${episode.snippetHtml}"></div>
 
-                <!-- Tags: each one adds itself to the current filters. -->
+                <!-- Tags -->
                 <div th:if="${not episode.tagList.isEmpty()}">
                     <a class="tag-pill"
                        th:each="tag : ${episode.tagList}"

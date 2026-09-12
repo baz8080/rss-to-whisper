@@ -151,9 +151,8 @@ fun buildSearchUrl(filters: SearchFilters): String {
  * parameter to it.
  *
  * Tag pills are built in the template because the tags come from each result
- * card, so the set is not known here. Ending the base in `?` or `&` as
- * appropriate keeps the result a well-formed URL either way, rather than the
- * `/search?&tag=x` that appending blind would produce.
+ * card, so the set is not known here. Appending blind would give `/search?&tag=x`
+ * when nothing else is filtered.
  */
 fun appendableSearchUrl(filters: SearchFilters): String {
     val url = buildSearchUrl(filters)

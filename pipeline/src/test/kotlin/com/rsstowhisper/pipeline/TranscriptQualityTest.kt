@@ -150,12 +150,36 @@ class TranscriptQualityTest {
     }
 
     @Test
-    fun `an empty transcription flags nothing rather than dividing by zero`() {
+    fun `an empty transcription is flagged rather than dividing by zero`() {
         val report = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
 
-        assertEquals(emptyList(), report.flags)
+        assertEquals(listOf(TranscriptQuality.FLAG_NO_SPEECH), report.flags)
         assertEquals(0, report.wordCount)
         assertEquals(0, report.cueCount)
+    }
+
+    /** Cues can be present and still carry nothing to measure. */
+    @Test
+    fun `cues with no words are flagged as no speech`() {
+        val report = TranscriptQuality.score(transcription(List(60) { "   " }))
+
+        assertTrue(TranscriptQuality.FLAG_NO_SPEECH in report.flags, "flags were ${report.flags}")
+        assertEquals(0, report.wordCount)
+    }
+
+    /**
+     * The reason no-speech is a flag at all: every other check needs words, so
+     * an unflagged empty decode would win the retry comparison on flag count
+     * and throw away a real transcript.
+     */
+    @Test
+    fun `an empty decode never beats a real one`() {
+        val empty = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
+        val looping = TranscriptQuality.score(transcription(List(20) { " And that is the thing about it, really." }))
+
+        assertTrue(looping.isFlagged, "control: the looping decode should be flagged")
+        assertFalse(empty.isBetterThan(looping))
+        assertTrue(looping.isBetterThan(empty))
     }
 
     @Test

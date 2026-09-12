@@ -531,6 +531,7 @@ under `episode_quality`:
 
 | Flag | Trips when | Measured |
 | --- | --- | --- |
+| `no-speech` | the decode produced no words at all | every other check needs words to measure, so without this an empty decode scores clean |
 | `unpunctuated` | punctuation per word below `0.03` | healthy episodes sit near `0.15` |
 | `shredded-cues` | under `1.0` seconds per cue, with at least 50 cues | a shredded episode measured `0.74` against `2.42` re-decoded |
 | `repetition-loop` | one 4-gram repeats over 5% of the words, or 4+ consecutive cues are identical | greedy decoding hit 0.7%–5.0% of episodes per show |
@@ -541,6 +542,12 @@ better of the two — fewer flags, and on a tie the more punctuated one. Whisper
 deterministic, and the repair passes that inspired this cleared 57 of 57 repetition
 cases, most on the first re-decode. A retry doubles decode time for the 1–5% of
 episodes that trip a flag.
+
+`no-speech` is why the retry is a comparison rather than a preference: an empty decode
+trips none of the other checks, so without a flag of its own it would score clean, win on
+flag count, and replace a real transcript. It also means an episode that decodes to
+nothing gets its one retry before the recovery path writes `recovery-failed` and
+abandons it for good.
 
 If the kept decode is still flagged it is written anyway, with its flags recorded, and
 a warning goes to the error log — the transcript is still worth having, and

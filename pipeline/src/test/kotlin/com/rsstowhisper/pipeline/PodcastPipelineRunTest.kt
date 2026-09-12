@@ -667,6 +667,36 @@ class PodcastPipelineRunTest {
         assertEquals(listOf("repetition-loop"), quality["flags"])
     }
 
+    /**
+     * A retry that comes back with nothing must not replace a real transcript.
+     * Before no-speech was a flag, the empty decode scored clean and won on flag
+     * count, and the episode ended up with no transcript.json at all.
+     */
+    @Test
+    fun `an empty retry does not discard the first decode`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), """{"task":"transcribe","segments":[]}"""),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size)
+        val json = transcriptJson(tempDir)
+        assertTrue(
+            "And that is the thing about it" in json["episode_transcript"].toString(),
+            "the flagged first decode should have been kept and written",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val quality = json["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
     private fun transcriptJson(dataDir: Path): Map<String, Any?> {
         val episodeDir = Files.list(dataDir.resolve("Show")).use { it.toList() }.single()
         @Suppress("UNCHECKED_CAST")

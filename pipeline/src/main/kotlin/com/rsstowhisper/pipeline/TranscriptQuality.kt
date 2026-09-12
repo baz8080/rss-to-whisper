@@ -60,6 +60,7 @@ object TranscriptQuality {
 
     private val PUNCTUATION = setOf('.', ',', '!', '?', ';', ':')
 
+    const val FLAG_NO_SPEECH = "no-speech"
     const val FLAG_UNPUNCTUATED = "unpunctuated"
     const val FLAG_SHREDDED_CUES = "shredded-cues"
     const val FLAG_REPETITION_LOOP = "repetition-loop"
@@ -95,6 +96,10 @@ object TranscriptQuality {
             }
 
         val flags = mutableListOf<String>()
+        // Every check below needs words to measure, so a decode with none trips
+        // nothing and would otherwise score as clean -- which made an empty
+        // retry beat a real transcript on flag count alone.
+        if (wordCount == 0) flags += FLAG_NO_SPEECH
         if (wordCount > 0 && punctuationPerWord < MIN_PUNCTUATION_PER_WORD) flags += FLAG_UNPUNCTUATED
         if (cues.size >= MIN_CUES_FOR_CUE_RATE && secondsPerCue < MIN_SECONDS_PER_CUE) flags += FLAG_SHREDDED_CUES
         if (repeatedShare > MAX_REPEATED_SHARE || longestRepeatedCueRun >= MAX_REPEATED_CUE_RUN) {

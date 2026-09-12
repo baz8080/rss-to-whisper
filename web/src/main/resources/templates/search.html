@@ -79,6 +79,13 @@
                   hx-include="#search-input"
                   hx-indicator="#loading">
 
+                <!--/* The active tags are links in the sidebar, and a form does not
+                       serialise links. Without these, ticking any checkbox re-submits
+                       without tag= and silently drops the tag filter. */-->
+                <input type="hidden" name="tag"
+                       th:each="tag : ${filters.tags}"
+                       th:value="${tag}"/>
+
                 <details class="filter-group" open="open">
                     <summary>Duration</summary>
                     <div class="filter-list">

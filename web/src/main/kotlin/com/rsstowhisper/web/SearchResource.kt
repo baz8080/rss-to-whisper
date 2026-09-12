@@ -2,6 +2,7 @@ package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.appendableSearchUrl
 import com.rsstowhisper.web.models.buildSearchUrl
@@ -112,6 +113,58 @@ class SearchResource {
         }
     }
 
+    /**
+     * The same search as `/search`, as JSON, so the corpus is usable from a
+     * shell or a notebook.
+     */
+    @GET
+    @Path("/api/search")
+    @Produces(MediaType.APPLICATION_JSON)
+    fun apiSearch(
+        @QueryParam("q") @DefaultValue("") query: String,
+        @QueryParam("duration") durations: List<String>,
+        @QueryParam("podcast") podcasts: List<String>,
+        @QueryParam("collection") collections: List<String>,
+        @QueryParam("tag") tags: List<String>,
+        @QueryParam("episodeType") episodeTypes: List<String>,
+        @QueryParam("year") years: List<String>,
+        @QueryParam("sort") @DefaultValue("relevance") sort: String,
+        @QueryParam("page") @DefaultValue("1") page: Int,
+        @QueryParam("pageSize") @DefaultValue("10") pageSize: Int,
+    ): SearchResult =
+        repository.search(
+            SearchFilters(
+                query = query.trim(),
+                durations = durations.toSet(),
+                podcasts = podcasts.toSet(),
+                collections = collections.toSet(),
+                tags = tags.toSet(),
+                episodeTypes = episodeTypes.toSet(),
+                years = years.toSet(),
+                sort = SortOrder.parse(sort),
+                page = page.coerceAtLeast(1),
+                // Capped: the transcript is not in this payload, but an
+                // unbounded page size still lets one request read the corpus.
+                pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
+            ),
+        )
+
+    /** The full episode, transcript included -- which `/api/search` deliberately omits. */
+    @GET
+    @Path("/api/episode/{id}")
+    @Produces(MediaType.APPLICATION_JSON)
+    fun apiEpisode(
+        @PathParam("id") id: String,
+    ): Response {
+        val episode =
+            repository.getEpisodeById(id)
+                ?: return Response.status(Response.Status.NOT_FOUND)
+                    .entity(mapOf("error" to "Episode not found", "id" to id))
+                    .type(MediaType.APPLICATION_JSON)
+                    .build()
+        return Response.ok(episode, MediaType.APPLICATION_JSON).build()
+    }
+
     @GET
     @Path("/podcasts")
     @Produces(MediaType.TEXT_HTML)
@@ -172,6 +225,9 @@ class SearchResource {
     }
 
     companion object {
+        /** One page of the API cannot be made to return the whole corpus. */
+        internal const val MAX_API_PAGE_SIZE = 100
+
         // The database file's own mtime, so the server's zone is the honest one
         // to render it in -- it is a fact about this machine's filesystem.
         private val INDEX_BUILT_FORMAT: DateTimeFormatter =

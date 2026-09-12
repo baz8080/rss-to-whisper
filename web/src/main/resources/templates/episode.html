@@ -120,7 +120,7 @@
                  th:data-start-ms="${line.millis}">
                 <span class="transcript-time"
                       th:onclick="'seekAudio(' + ${line.seconds} + ')'"
-                      th:title="'Jump to ' + ${line.display}"
+                      th:title="'Play from ' + ${line.display} + ' and link to it'"
                       th:text="${line.display}"></span>
                 <!--/* highlightedHtml is escaped by highlightMatches; only its <mark> tags are markup */-->
                 <span class="transcript-text" th:if="${line.matched}" th:utext="${line.highlightedHtml}"></span>
@@ -149,11 +149,38 @@
             trackEl.src = URL.createObjectURL(blob);
         }
 
-        function seekAudio(seconds) {
-            if (audioEl) {
+        // The address bar always holds the last cue clicked, so a passage can be
+        // copied out of it. replaceState rather than pushState: stepping through
+        // a transcript should not fill the back button with its own cues.
+        function rememberPosition(seconds) {
+            history.replaceState(null, '', location.pathname + location.search + '#t=' + Math.floor(seconds));
+        }
+
+        const audioSrcBase = audioEl ? audioEl.src.split('#')[0] : null;
+
+        // The player is preload="none", so before metadata arrives currentTime
+        // does not stick -- browsers differ on whether it is remembered, clamped
+        // or dropped. A media fragment is honoured natively by all of them and
+        // survives the load, with a one-shot listener as the fallback for any
+        // that ignore it.
+        function startAudioAt(seconds) {
+            if (!audioEl) return;
+            if (audioEl.readyState >= 1) {
                 audioEl.currentTime = seconds;
-                if (audioEl.paused) audioEl.play();
+                return;
             }
+            audioEl.src = audioSrcBase + '#t=' + seconds;
+            audioEl.addEventListener('loadedmetadata', function once() {
+                audioEl.removeEventListener('loadedmetadata', once);
+                if (Math.abs(audioEl.currentTime - seconds) > 0.5) audioEl.currentTime = seconds;
+            });
+        }
+
+        function seekAudio(seconds) {
+            if (!audioEl) return;
+            rememberPosition(seconds);
+            startAudioAt(seconds);
+            if (audioEl.paused) audioEl.play();
         }
 
         // Highlight the active transcript line as audio plays.
@@ -162,6 +189,11 @@
 
         if (audioEl && lineEls.length > 0) {
             audioEl.addEventListener('timeupdate', function () {
+                // Assigning src -- which arming a #t= fragment does -- resets
+                // currentTime to 0 and fires this with no media loaded. That is
+                // not playback, and acting on it would drag the highlight back
+                // to the first cue of the episode.
+                if (audioEl.readyState === 0) return;
                 const line = findActiveLine(audioEl.currentTime * 1000);
                 if (line !== activeLine) {
                     if (activeLine) activeLine.classList.remove('active');
@@ -190,7 +222,7 @@
         const matchEls = Array.from(document.querySelectorAll('.transcript-line.match'));
         let currentMatch = -1;
 
-        function gotoMatch(index) {
+        function gotoMatch(index, scroll) {
             if (matchEls.length === 0) return;
             index = ((index % matchEls.length) + matchEls.length) % matchEls.length;
             if (currentMatch >= 0) matchEls[currentMatch].classList.remove('current-match');
@@ -198,12 +230,39 @@
             const el = matchEls[currentMatch];
             el.classList.add('current-match');
             // Centred, so the sticky player never covers the line.
-            el.scrollIntoView({block: 'center', behavior: 'smooth'});
+            if (scroll !== false) el.scrollIntoView({block: 'center', behavior: 'smooth'});
             const position = document.getElementById('match-position');
             if (position) position.textContent = String(currentMatch + 1);
         }
 
-        if (matchEls.length > 0) gotoMatch(0);
+        // A shared link names the passage its sender meant, so it outranks the
+        // first search match. The navigator is still primed, so n and p work
+        // from the first match onward.
+        const startAt = timeFromHash();
+        if (matchEls.length > 0) gotoMatch(0, startAt === null);
+        if (startAt !== null) openAtTime(startAt);
+
+        function timeFromHash() {
+            const match = /(?:^|[#&])t=(\d+(?:\.\d+)?)/.exec(location.hash);
+            return match ? parseFloat(match[1]) : null;
+        }
+
+        // Scroll to the cue and mark it, and arm the player to begin there --
+        // without autoplaying, which browsers block and readers do not expect.
+        function openAtTime(seconds) {
+            // Armed first: the assignment can raise events, and none of them
+            // should arrive after the cue below has been marked. preload="none"
+            // means nothing is fetched until the reader presses play, and the
+            // fragment is what makes that play start here.
+            if (audioEl) audioEl.src = audioSrcBase + '#t=' + seconds;
+            const line = findActiveLine(seconds * 1000);
+            if (line) {
+                if (activeLine) activeLine.classList.remove('active');
+                line.classList.add('active');
+                activeLine = line;
+                line.scrollIntoView({block: 'center'});
+            }
+        }
 
         document.addEventListener('keydown', function (e) {
             const tag = document.activeElement.tagName;

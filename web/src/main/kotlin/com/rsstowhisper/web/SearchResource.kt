@@ -2,6 +2,7 @@ package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.appendableSearchUrl
 import com.rsstowhisper.web.models.buildSearchUrl
 import com.rsstowhisper.web.models.episodeQuerySuffix
@@ -55,6 +56,8 @@ class SearchResource {
         @QueryParam("collection") collections: List<String>,
         @QueryParam("tag") tags: List<String>,
         @QueryParam("episodeType") episodeTypes: List<String>,
+        @QueryParam("year") years: List<String>,
+        @QueryParam("sort") @DefaultValue("relevance") sort: String,
         @QueryParam("page") @DefaultValue("1") page: Int,
         @HeaderParam("HX-Request") htmxRequest: String?,
     ): String {
@@ -66,6 +69,8 @@ class SearchResource {
                 collections = collections.toSet(),
                 tags = tags.toSet(),
                 episodeTypes = episodeTypes.toSet(),
+                years = years.toSet(),
+                sort = SortOrder.parse(sort),
                 page = page.coerceAtLeast(1),
             )
         val result = repository.search(filters)
@@ -82,6 +87,21 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
+                // Both controls carry their own state: the select serialises
+                // `sort`, the checkboxes serialise `year`. Hide either while its
+                // filter is active and the next form submit drops that filter --
+                // silently reordering or rewidening the results.
+                setVariable("showSort", filters.query.isNotBlank() || filters.sort != SortOrder.RELEVANCE)
+                // Relevance is not on offer without a query: every row scores the
+                // same, so it would read as a choice that does nothing.
+                setVariable(
+                    "sortOptions",
+                    if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
+                )
+                // A query can narrow the corpus to one year while a different
+                // year is filtered on, which would otherwise leave no checkbox
+                // to untick.
+                setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
                 // Page 1 on both: changing the tags changes the result set, so
                 // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))

@@ -58,14 +58,36 @@ data class SearchFilters(
     val collections: Set<String> = emptySet(),
     val tags: Set<String> = emptySet(),
     val episodeTypes: Set<String> = emptySet(),
+    val years: Set<String> = emptySet(),
+    val sort: SortOrder = SortOrder.RELEVANCE,
     val page: Int = 1,
     val pageSize: Int = 10,
-)
+) {
+    /**
+     * Relevance means nothing without a query -- every row would score the
+     * same -- so a filter-only search is newest-first whatever was asked for.
+     */
+    val effectiveSort: SortOrder
+        get() = if (query.isBlank() && sort == SortOrder.RELEVANCE) SortOrder.NEWEST else sort
+}
+
+enum class SortOrder(val param: String, val label: String) {
+    RELEVANCE("relevance", "Best match"),
+    NEWEST("newest", "Newest first"),
+    OLDEST("oldest", "Oldest first"),
+    ;
+
+    companion object {
+        /** Unknown values fall back rather than failing: the parameter is user-typed. */
+        fun parse(value: String?): SortOrder = entries.firstOrNull { it.param.equals(value?.trim(), ignoreCase = true) } ?: RELEVANCE
+    }
+}
 
 data class FilterOptions(
     val podcasts: List<String>,
     val collections: List<String>,
     val episodeTypes: List<String>,
+    val years: List<String> = emptyList(),
 )
 
 enum class DurationCategory(val label: String, val maxSeconds: Int?) {
@@ -97,7 +119,8 @@ data class SearchTerm(val words: List<String>, val prefix: Boolean = false)
 
 fun SearchFilters.hasActiveFilters(): Boolean =
     query.isNotBlank() || durations.isNotEmpty() || podcasts.isNotEmpty() ||
-        collections.isNotEmpty() || tags.isNotEmpty() || episodeTypes.isNotEmpty()
+        collections.isNotEmpty() || tags.isNotEmpty() || episodeTypes.isNotEmpty() ||
+        years.isNotEmpty()
 
 // URLEncoder targets form encoding, where a space becomes '+'. Whether '+' is
 // decoded back to a space in a *query string* is up to the server, so spaces are
@@ -116,6 +139,9 @@ fun buildSearchUrl(filters: SearchFilters): String {
     filters.collections.forEach { params.add("collection=${urlEncode(it)}") }
     filters.tags.forEach { params.add("tag=${urlEncode(it)}") }
     filters.episodeTypes.forEach { params.add("episodeType=${urlEncode(it)}") }
+    filters.years.forEach { params.add("year=${urlEncode(it)}") }
+    // Omitted when it is the default, so the common URL stays short.
+    if (filters.sort != SortOrder.RELEVANCE) params.add("sort=${filters.sort.param}")
     if (filters.page > 1) params.add("page=${filters.page}")
     return "/search?${params.joinToString("&")}"
 }

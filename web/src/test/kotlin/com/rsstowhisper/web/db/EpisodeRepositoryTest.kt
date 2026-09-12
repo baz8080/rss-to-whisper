@@ -3,6 +3,7 @@ package com.rsstowhisper.web.db
 import com.rsstowhisper.web.models.SNIPPET_MARK_END
 import com.rsstowhisper.web.models.SNIPPET_MARK_START
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.renderSnippet
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -103,7 +104,9 @@ class EpisodeRepositoryTest {
             id = "ep3",
             podcastTitle = "Podcast B",
             episodeTitle = "Physics Trailer",
-            publishedOn = "2024-01-02",
+            // A different year from the rest, so the year filter and the date
+            // sorts have something to distinguish.
+            publishedOn = "2023-01-02",
             duration = 3600,
             collections = "science",
             tags = "physics",
@@ -130,7 +133,7 @@ class EpisodeRepositoryTest {
         id: String,
         podcastTitle: String,
         episodeTitle: String,
-        publishedOn: String,
+        publishedOn: String?,
         duration: Int?,
         collections: String?,
         tags: String?,
@@ -167,7 +170,7 @@ class EpisodeRepositoryTest {
         fun `no query returns all episodes ordered by published date descending`() {
             val result = repo.search(SearchFilters())
             assertEquals(4, result.totalCount)
-            assertEquals(listOf("ep4", "ep2", "ep3", "ep1"), result.episodes.map { it.id })
+            assertEquals(listOf("ep4", "ep2", "ep1", "ep3"), result.episodes.map { it.id })
         }
 
         @Test
@@ -357,6 +360,96 @@ class EpisodeRepositoryTest {
                 val result = repo.search(SearchFilters(episodeTypes = setOf("trailer")))
                 assertEquals(1, result.totalCount)
                 assertEquals("ep3", result.episodes.single().id)
+            }
+        }
+
+        @Nested
+        inner class SortAndYear {
+            @Test
+            fun `newest first orders by publication date descending`() {
+                val result = repo.search(SearchFilters(sort = SortOrder.NEWEST))
+                assertEquals(listOf("ep4", "ep2", "ep1", "ep3"), result.episodes.map { it.id })
+            }
+
+            @Test
+            fun `oldest first reverses it`() {
+                val result = repo.search(SearchFilters(sort = SortOrder.OLDEST))
+                assertEquals(listOf("ep3", "ep1", "ep2", "ep4"), result.episodes.map { it.id })
+            }
+
+            /** Every row scores the same without a query, so relevance means newest. */
+            @Test
+            fun `relevance without a query falls back to newest`() {
+                val relevance = repo.search(SearchFilters(sort = SortOrder.RELEVANCE)).episodes.map { it.id }
+                val newest = repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.map { it.id }
+                assertEquals(newest, relevance)
+            }
+
+            @Test
+            fun `a date sort still applies with a query`() {
+                val result = repo.search(SearchFilters(query = "programming", sort = SortOrder.OLDEST))
+                assertEquals(listOf("ep1", "ep2"), result.episodes.map { it.id })
+                assertEquals(2, result.totalCount)
+            }
+
+            /**
+             * A feed item with no pubDate is written with a null date, and
+             * SQLite sorts NULLs first under ASC -- so an episode of unknown age
+             * would head the oldest-first list. DESC already puts them last.
+             */
+            @Test
+            fun `an episode with no date sorts last either way`() {
+                DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                    insert(
+                        conn,
+                        id = "undated",
+                        podcastTitle = "Podcast A",
+                        episodeTitle = "No Date",
+                        publishedOn = null,
+                        duration = 100,
+                        collections = null,
+                        tags = null,
+                        type = null,
+                        transcriptPlain = "no date at all",
+                    )
+                }
+
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.OLDEST)).episodes.last().id)
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.last().id)
+            }
+
+            @Test
+            fun `the year filter restricts to that year`() {
+                val result = repo.search(SearchFilters(years = setOf("2023")))
+                assertEquals(listOf("ep3"), result.episodes.map { it.id })
+                assertEquals(1, result.totalCount)
+            }
+
+            @Test
+            fun `several years are combined`() {
+                val result = repo.search(SearchFilters(years = setOf("2023", "2024")))
+                assertEquals(4, result.totalCount)
+            }
+
+            @Test
+            fun `a year with no episodes returns nothing`() {
+                assertEquals(0, repo.search(SearchFilters(years = setOf("1999"))).totalCount)
+            }
+
+            @Test
+            fun `the year filter combines with a query`() {
+                val result = repo.search(SearchFilters(query = "programming", years = setOf("2024")))
+                assertEquals(2, result.totalCount)
+            }
+
+            @Test
+            fun `filter options list the years present, newest first`() {
+                assertEquals(listOf("2024", "2023"), repo.getFilterOptions("").years)
+            }
+
+            @Test
+            fun `filter options narrow the years to those matching the query`() {
+                assertEquals(listOf("2023"), repo.getFilterOptions("quantum").years)
             }
         }
 

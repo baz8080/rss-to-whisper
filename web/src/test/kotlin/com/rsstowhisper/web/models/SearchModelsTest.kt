@@ -551,4 +551,45 @@ class SearchModelsTest {
         @Test
         fun `display formats timestamp with hours`() = assertEquals("1:00:00", TranscriptLine(3_600_000L, "").display)
     }
+
+    // --- sort and year in URLs ---
+
+    @Test
+    fun `buildSearchUrl carries years and a non-default sort`() {
+        val url =
+            buildSearchUrl(
+                SearchFilters(query = "space", years = setOf("2024"), sort = SortOrder.OLDEST),
+            )
+        assertEquals("/search?q=space&year=2024&sort=oldest", url)
+    }
+
+    /** The default is left out so the everyday URL stays short. */
+    @Test
+    fun `buildSearchUrl omits relevance`() {
+        assertEquals("/search?q=space", buildSearchUrl(SearchFilters(query = "space", sort = SortOrder.RELEVANCE)))
+    }
+
+    @Test
+    fun `SortOrder parses its parameter and falls back on anything else`() {
+        assertEquals(SortOrder.NEWEST, SortOrder.parse("newest"))
+        assertEquals(SortOrder.OLDEST, SortOrder.parse("OLDEST"))
+        assertEquals(SortOrder.RELEVANCE, SortOrder.parse("relevance"))
+        // The parameter is user-typed, so nonsense falls back rather than failing.
+        assertEquals(SortOrder.RELEVANCE, SortOrder.parse("sideways"))
+        assertEquals(SortOrder.RELEVANCE, SortOrder.parse(null))
+    }
+
+    @Test
+    fun `relevance means newest when there is no query to rank by`() {
+        assertEquals(SortOrder.NEWEST, SearchFilters(query = "").effectiveSort)
+        assertEquals(SortOrder.RELEVANCE, SearchFilters(query = "space").effectiveSort)
+        // An explicit choice is never overridden.
+        assertEquals(SortOrder.OLDEST, SearchFilters(query = "", sort = SortOrder.OLDEST).effectiveSort)
+    }
+
+    @Test
+    fun `a year filter counts as an active filter`() {
+        assertTrue(SearchFilters(years = setOf("2024")).hasActiveFilters())
+        assertFalse(SearchFilters().hasActiveFilters())
+    }
 }

@@ -106,6 +106,27 @@ class OrphanRecoveryTest {
         assertTrue(json["episode_relative_audio_path"].asText().isNotBlank())
     }
 
+    /** Blocked by putting a directory where the sidecar has to go. */
+    @Test
+    fun `an orphan whose sidecar cannot be written is not counted as recovered`(
+        @TempDir dataDir: Path,
+    ) {
+        val orphan = orphanDir(dataDir, "2019-01-01-deadbeef-An-Old-Episode", "audio.mp3" to "bytes")
+        val (pipeline, _, _) =
+            buildPipeline(
+                dataDir,
+                listOf(podcast),
+                makeFeed(liveEntry()),
+                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve("words.jsonl.gz")) },
+            )
+
+        pipeline.run()
+
+        assertFalse(Files.exists(orphan.resolve("transcript.json")))
+        val summaries = logged.list.map { it.formattedMessage }.filter { it.contains("recovered,") }
+        assertTrue(summaries.any { it.contains("0 recovered") }, summaries.toString())
+    }
+
     @Test
     fun `writes null, not empty strings, for everything the feed would have supplied`(
         @TempDir dataDir: Path,

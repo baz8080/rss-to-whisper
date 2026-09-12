@@ -620,8 +620,9 @@ class PodcastPipeline(
                 quality = scored.quality,
             ) ?: return false
 
-        writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
-        return true
+        // Counting an orphan recovered when nothing was written both misreports
+        // the run and spends a slot of orphan_recovery_limit on it.
+        return writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
     }
 
     /**

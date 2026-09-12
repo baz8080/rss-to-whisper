@@ -87,7 +87,21 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
-                setVariable("sortOptions", SortOrder.entries)
+                // Both controls carry their own state: the select serialises
+                // `sort`, the checkboxes serialise `year`. Hide either while its
+                // filter is active and the next form submit drops that filter --
+                // silently reordering or rewidening the results.
+                setVariable("showSort", filters.query.isNotBlank() || filters.sort != SortOrder.RELEVANCE)
+                // Relevance is not on offer without a query: every row scores the
+                // same, so it would read as a choice that does nothing.
+                setVariable(
+                    "sortOptions",
+                    if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
+                )
+                // A query can narrow the corpus to one year while a different
+                // year is filtered on, which would otherwise leave no checkbox
+                // to untick.
+                setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
                 // Page 1 on both: changing the tags changes the result set, so
                 // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))

@@ -330,6 +330,30 @@ java -Dapp.db.path=/data/podcasts.db \
      -jar web/build/quarkus-app/quarkus-run.jar
 ```
 
+### Pages
+
+| Path | What it is |
+| --- | --- |
+| `/search` | Full-text search with filters for duration, podcast, collection, tag, year and episode type, and a relevance/newest/oldest sort |
+| `/episode/{id}` | One episode: metadata, audio player, and the transcript as clickable cues. `?q=` highlights the query's matches and steps between them; `#t=<seconds>` opens on a cue and starts playback there |
+| `/podcasts` | What the corpus holds: one card per podcast with artwork, episode count, total hours and date range, plus when `index.py` last wrote the database |
+
+### JSON API
+
+For reading the corpus from a shell or a notebook:
+
+```bash
+curl 'http://localhost:8080/api/search?q=climate+change&sort=newest&pageSize=5'
+curl 'http://localhost:8080/api/episode/abcd1234'
+```
+
+`/api/search` takes the same parameters as `/search` (`q`, `duration`, `podcast`,
+`collection`, `tag`, `year`, `episodeType`, `sort`, `page`) plus `pageSize`, capped at 100.
+It returns the result page with `totalCount`, `totalPages`, `hasNext` and `hasPrevious`, and
+each episode carries a plain-text `snippetText` of the matched passage. The transcript is
+not in that payload; `/api/episode/{id}` returns one episode with it, or a 404 with a JSON
+body.
+
 ## Pipeline configuration
 
 ### Environment (`.env`)

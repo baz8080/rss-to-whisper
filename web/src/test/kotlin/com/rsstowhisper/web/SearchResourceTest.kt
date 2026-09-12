@@ -11,10 +11,12 @@ import com.rsstowhisper.web.models.TranscriptLine
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.thymeleaf.TemplateEngine
@@ -390,6 +392,64 @@ class SearchResourceTest {
         resource.podcasts()
 
         assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    // --- JSON API (W7) ---
+
+    @Test
+    fun `api search returns the result object itself`() {
+        val captured = slot<SearchFilters>()
+        val expected = SearchResult(listOf(minimalEpisode()), 1, 1, 10)
+        every { repository.search(capture(captured)) } returns expected
+
+        val result =
+            resource.apiSearch("kotlin", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "newest", 1, 10)
+
+        assertSame(expected, result)
+        assertEquals("kotlin", captured.captured.query)
+        assertEquals(SortOrder.NEWEST, captured.captured.sort)
+    }
+
+    /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */
+    @Test
+    fun `api search caps the page size`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10_000)
+
+        assertEquals(SearchResource.MAX_API_PAGE_SIZE, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api search coerces a nonsense page and page size up to one`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", -3, 0)
+
+        assertEquals(1, captured.captured.page)
+        assertEquals(1, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api episode returns the episode with its transcript`() {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode(transcript = "WEBVTT")
+
+        val response = resource.apiEpisode("ep1")
+
+        assertEquals(200, response.status)
+        assertEquals("WEBVTT", (response.entity as Episode).transcript)
+    }
+
+    @Test
+    fun `api episode returns 404 as json for an unknown id`() {
+        every { repository.getEpisodeById("nope") } returns null
+
+        val response = resource.apiEpisode("nope")
+
+        assertEquals(404, response.status)
+        assertEquals(MediaType.APPLICATION_JSON_TYPE, response.mediaType)
     }
 
     /**

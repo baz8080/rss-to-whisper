@@ -193,13 +193,18 @@ data class QualityReport(
 
     /**
      * Punctuation breaks a tie because the cue boundaries are derived from it,
-     * so it is the one measure with consequences beyond itself.
+     * so it is the one measure with consequences beyond itself. Rounded to the
+     * precision [toMap] stores, or a report read back off disk loses to one in
+     * memory on digits it was never able to keep.
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {
             flags.size != other.flags.size -> flags.size < other.flags.size
-            else -> punctuationPerWord > other.punctuationPerWord
+            else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
+
+    val summary: String
+        get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"
 
     /** Snake_case to match every other key `index.py` may one day read. */
     fun toMap(): Map<String, Any?> =
@@ -216,4 +221,32 @@ data class QualityReport(
         )
 
     private fun round(value: Double): Double = Math.round(value * 10_000.0) / 10_000.0
+
+    companion object {
+        /**
+         * Reads back what [toMap] wrote, so a decode can be measured against
+         * the one already on disk. Null when there is no `flags` key at all,
+         * which is what a transcript written before the quality gate looks
+         * like -- unscored has to read as no baseline, not as a passing one.
+         *
+         * Only [flags] and [punctuationPerWord] decide [isBetterThan]; the rest
+         * are read best-effort so a partial map still compares.
+         */
+        fun fromMap(stored: Map<*, *>?): QualityReport? {
+            val flags = (stored?.get("flags") as? List<*>)?.map { it.toString() } ?: return null
+            return QualityReport(
+                punctuationPerWord = number(stored["punctuation_per_word"]) ?: 0.0,
+                secondsPerCue = number(stored["seconds_per_cue"]) ?: 0.0,
+                repeatedShare = number(stored["repeated_share"]) ?: 0.0,
+                longestRepeatedCueRun = number(stored["longest_repeated_cue_run"])?.toInt() ?: 0,
+                meanWordProbability = number(stored["mean_word_probability"]),
+                lowConfidenceShare = number(stored["low_confidence_share"]),
+                wordCount = number(stored["word_count"])?.toInt() ?: 0,
+                cueCount = number(stored["cue_count"])?.toInt() ?: 0,
+                flags = flags,
+            )
+        }
+
+        private fun number(value: Any?): Double? = (value as? Number)?.toDouble()
+    }
 }

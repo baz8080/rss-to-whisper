@@ -27,6 +27,62 @@ class PodcastPipelineRunTest {
         assertTrue(feedSvc.requestedUrls.isEmpty())
     }
 
+    /**
+     * The feed path writes the sidecar before transcript.json, so a crash
+     * between the two leaves a sidecar with no transcript. The decode that
+     * redoes the episode must not adopt it -- it describes a decode that was
+     * thrown away, and the sidecar addresses cues by position.
+     */
+    @Test
+    fun `a decode with no word timestamps clears a sidecar an earlier crash left behind`(
+        @TempDir tempDir: Path,
+    ) {
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+        val (first, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
+        first.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        assertTrue(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+        Files.delete(episodeDir.resolve("transcript.json"))
+
+        val (second, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")), vtt = WORDLESS_JSON)
+        second.run()
+
+        assertTrue(Files.exists(episodeDir.resolve("transcript.json")))
+        assertFalse(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+    }
+
+    /**
+     * writeWords swallows its exception, so without the check the run would go
+     * on to write transcript.json and mark done an episode that will never get
+     * its sidecar -- which is what writing words first exists to prevent.
+     * Blocked by putting a directory where the sidecar has to go.
+     */
+    @Test
+    fun `an episode whose sidecar cannot be written is left for the next run`(
+        @TempDir tempDir: Path,
+    ) {
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+        val (blocked, _, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                makeFeed(makeEntry("My Episode")),
+                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve("words.jsonl.gz")) },
+            )
+        blocked.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        assertFalse(Files.exists(episodeDir.resolve("transcript.json")))
+
+        Files.deleteIfExists(episodeDir.resolve("words.jsonl.gz"))
+        val (retry, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
+        retry.run()
+
+        assertTrue(Files.exists(episodeDir.resolve("transcript.json")))
+        assertTrue(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+    }
+
     @Test
     fun `run returns true when there is nothing to do`(
         @TempDir tempDir: Path,

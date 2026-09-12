@@ -3,6 +3,7 @@ package com.rsstowhisper
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
 import com.rsstowhisper.pipeline.PodcastPipeline
+import com.rsstowhisper.pipeline.RetranscribeRequest
 import org.slf4j.LoggerFactory
 import kotlin.system.exitProcess
 
@@ -37,7 +38,19 @@ fun main(argv: Array<String>) {
     val tally = installRunTally()
 
     val pipeline = PodcastPipeline(config)
-    val ok = pipeline.run()
+    val ok =
+        if (args.isRetranscribe) {
+            pipeline.retranscribe(
+                RetranscribeRequest(
+                    paths = args.retranscribePaths,
+                    ids = args.retranscribeIds,
+                    flagged = args.retranscribeFlagged,
+                    limit = args.retranscribeLimit,
+                ),
+            )
+        } else {
+            pipeline.run()
+        }
 
     println(tally.summary(logPath))
     if (!ok) {

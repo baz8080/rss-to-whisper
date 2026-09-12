@@ -374,6 +374,7 @@ below supply the three required values.
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
 | `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
+| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -560,6 +561,66 @@ constants. They live together at the top of
 `pipeline/src/main/kotlin/com/rsstowhisper/pipeline/TranscriptQuality.kt`, each with the
 number it came from.
 
+### Re-transcribing an episode
+
+Redoing an episode used to mean deleting its `transcript.json` by hand. With the quality
+gate recording flags, the loop closes:
+
+```bash
+./transcribe --retranscribe-flagged --retranscribe-limit 50
+./transcribe --retranscribe "Ask-a-Spaceman/2024-01-02-abcd1234-some-episode"
+./transcribe --retranscribe-id abcd1234
+```
+
+A path is the episode's directory as it sits on disk, so it carries the escaped podcast
+name (`Ask-a-Spaceman`, not `Ask a Spaceman`) — every character that is not a letter or
+a digit became a dash when the directory was created.
+
+`--retranscribe` and `--retranscribe-id` are repeatable, and any of the three skips the
+feeds entirely — every target is already on disk, and an episode that aged out of its
+feed has nothing left to fetch. `--retranscribe-flagged` reads every `transcript.json`
+under the data directory, which is slow on a network volume; `--retranscribe-limit`
+caps it, since a first pass over the corpus can select hundreds.
+
+Each target needs its `audio.mp3`; one without it is reported and skipped. The rewrite
+keeps every existing field and replaces only `episode_transcript` and `episode_quality`
+— all the rest came from a feed entry that may no longer exist, so what is on disk is
+the best there is. `episode_duration` is replaced too, but only when
+`episode_metadata_recovered` is true, because that number came from the previous decode
+rather than from the feed.
+
+A re-decode is kept only if it scores at least as well as the transcript it would
+replace, by the same measure the quality gate's retry uses — fewer flags, then better
+punctuation. Whisper is not deterministic, so a redo can come back worse than what it
+overwrites, and that write is the only copy: re-transcribing can improve an episode or
+leave it alone, never cost it the better decode. A transcript written before the quality
+gate has no score to compare against, so it is simply replaced.
+
+A re-decode that comes back with no word timestamps at all is refused outright when the
+decode on disk had them — judged by its recorded score rather than by whether
+`words.jsonl.gz` is there, since writing the sidecar is allowed to fail. Word times are not part of the score — `low-confidence` cannot
+even be raised without them — so such a decode looks like a clean one, and would both
+replace a transcript flagged for low confidence and take its `words.jsonl.gz` with it. It
+means the server ignored `token_timestamps`, and the warning says so.
+
+Otherwise both files are staged beside their originals and moved into place, with the
+sidecar absent for the whole swap: cleared first, restored only once the transcript it
+belongs to is there. `words.jsonl.gz` addresses cues by position, so either file left
+beside the other's transcript mis-times every word — silently and for good, since an
+episode that has a `transcript.json` is one nothing revisits. Interrupted anywhere in
+between, the episode is left visibly missing a sidecar instead of quietly holding the
+wrong one. If the new sidecar cannot be written at all — a full disk, an I/O error — the episode is
+left exactly as it was rather than committed without one.
+
+Staged files are named per process, because two instances sharing a data directory select
+the same episodes: `--retranscribe-flagged` scans the whole tree, whatever podcasts its
+config names. That stops one run moving another's half-written file, and nothing more —
+the swap is two moves, not one, and nothing here locks, so **do not point two runs at the
+same episode**: they can interleave into a transcript and a sidecar from different decodes.
+
+An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
+finds rather than guessing which was meant.
+
 ### Error log
 
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, rolling daily
@@ -585,9 +646,12 @@ rendered from the same `verbose_json` response that produced `words.jsonl.gz`.
 
 `words.jsonl.gz` is written **before** `transcript.json`, because the latter
 existing is what marks an episode done — so a crash between the two leaves the
-episode to be redone rather than permanently without its sidecar. A sidecar
-write failure is logged and not fatal: the transcript is the artifact the
-pipeline exists to produce.
+episode to be redone rather than permanently without its sidecar. A decode that
+could not write its sidecar leaves the episode undone for the same reason —
+writing `transcript.json` anyway would mark done an episode that will never get
+one. A decode that simply carries no word times, from a server that ignored
+`token_timestamps`, still writes its transcript; otherwise no episode could ever
+complete against such a server.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

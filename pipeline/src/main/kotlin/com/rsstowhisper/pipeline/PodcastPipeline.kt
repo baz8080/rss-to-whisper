@@ -17,8 +17,10 @@ import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
+import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
@@ -73,6 +75,130 @@ class PodcastPipeline(
             processPodcast(podcast, dataDir)
         }
         return true
+    }
+
+    /**
+     * Decodes episodes that already have a transcript, and replaces it.
+     *
+     * No feed is fetched. Every target is already on disk, and one that aged
+     * out of its feed has nothing left to fetch.
+     */
+    fun retranscribe(request: RetranscribeRequest): Boolean {
+        val dataDir = Path.of(config.dataDirectory)
+        if (!Files.isWritable(dataDir)) {
+            logger.error("The data_dir is missing, or not writable. Cannot continue")
+            return false
+        }
+
+        val targets = RetranscribeTargets.find(dataDir, request)
+        if (targets.isEmpty()) {
+            logger.error("Nothing matched the re-transcription request")
+            return false
+        }
+
+        logger.info("Re-transcribing ${targets.size} episodes")
+        var done = 0
+        for (target in targets) {
+            try {
+                if (retranscribeEpisode(target)) done++
+            } catch (e: Exception) {
+                logger.error("Could not re-transcribe ${target.fileName}", e)
+            }
+        }
+        logger.info("Re-transcribed $done of ${targets.size} episodes")
+        return true
+    }
+
+    private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
+        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
+        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
+            logger.error("Cannot re-transcribe $label: it has no audio")
+            return false
+        }
+
+        val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
+        val existing =
+            if (Files.exists(jsonPath)) {
+                @Suppress("UNCHECKED_CAST")
+                jsonMapper.readValue(Files.readString(jsonPath), Map::class.java) as Map<String, Any?>
+            } else {
+                // Nothing to preserve, and the feed path is what should pick it
+                // up -- redoing it here would write a transcript with no metadata.
+                logger.error("Cannot re-transcribe $label: it has no transcript.json")
+                return false
+            }
+
+        val previous = QualityReport.fromMap(existing["episode_quality"] as? Map<*, *>)
+
+        val scored = transcribeEpisode(audioPath, episodeDirPath, podcastFor(episodeDirPath), label)
+        if (scored.transcription.isEmpty) {
+            logger.warn("Re-transcription of $label found no speech; keeping the existing transcript")
+            return false
+        }
+
+        // Word times are not part of the score -- low-confidence cannot even be
+        // raised without them -- so a decode that came back with none reads as
+        // an improvement on a transcript flagged for low confidence, and would
+        // overwrite it and clear the flag. The server was asked for
+        // token_timestamps, so this is a server that ignored it.
+        //
+        // The stored score decides this, not the sidecar file: writing the
+        // sidecar is allowed to fail, which leaves an episode whose decode had
+        // word times and whose flags say so, with no file to find them in.
+        val hadWordTimes =
+            previous?.meanWordProbability != null ||
+                Files.exists(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME))
+        if (scored.transcription.words.isEmpty() && hadWordTimes) {
+            logger.warn(
+                "Re-transcription of $label came back with no word timestamps and would drop the ones it has; " +
+                    "keeping the existing transcript. Is token_timestamps still set on the server?",
+            )
+            return false
+        }
+
+        // Whisper is not deterministic, so a re-decode can come back worse than
+        // the transcript it would overwrite, and this write is the only copy of
+        // it. Judged the way transcribeEpisode judges its retry, so redoing an
+        // episode can improve it or leave it alone, never cost it a decode.
+        if (previous != null && previous.isBetterThan(scored.quality)) {
+            logger.warn(
+                "Re-transcription of $label scored worse than what is on disk " +
+                    "(${scored.quality.summary} against ${previous.summary}); keeping the existing transcript",
+            )
+            return false
+        }
+
+        // Every other field was derived from a feed entry that may no longer
+        // exist, so the existing values are the best there are. The duration is
+        // the exception, and only for a recovered episode: that number came
+        // from the previous decode, so this decode supersedes it -- but only if
+        // it produced one, since null drops the episode out of the web module's
+        // duration filters.
+        val updated = existing.toMutableMap()
+        updated["episode_transcript"] = scored.transcription.vtt
+        updated["episode_quality"] = scored.quality.toMap()
+        if (existing["episode_metadata_recovered"] == true) {
+            scored.transcription.durationSeconds?.let { updated["episode_duration"] = it }
+        }
+
+        if (!writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true)) return false
+        logger.info("Re-transcribed $label")
+        return true
+    }
+
+    /** Matches the directory back to its feed so the decode keeps the podcast's language. */
+    private fun podcastFor(episodeDirPath: Path): PodcastConfig {
+        val podcastDir = episodeDirPath.parent.fileName.toString()
+        config.podcasts.firstOrNull { escapeFilename(it.name).equals(podcastDir, ignoreCase = true) }
+            ?.let { return it }
+
+        // Renamed or dropped from pods.yaml, but its episodes are still on
+        // disk. The language then falls through to the top-level one, which is
+        // the wrong language for a feed that opted out of it, so say so rather
+        // than quietly decoding the episode as English.
+        logger.warn("No podcast in pods.yaml matches $podcastDir; re-transcribing it in the default language")
+        return PodcastConfig(name = podcastDir, url = "")
     }
 
     private fun processPodcast(
@@ -494,8 +620,9 @@ class PodcastPipeline(
                 quality = scored.quality,
             ) ?: return false
 
-        writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
-        return true
+        // Counting an orphan recovered when nothing was written both misreports
+        // the run and spends a slot of orphan_recovery_limit on it.
+        return writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
     }
 
     /**
@@ -538,44 +665,119 @@ class PodcastPipeline(
         writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
     }
 
+    /** False when nothing was written, so a caller cannot report an episode it still has to redo. */
     private fun writeTranscriptArtifacts(
         episodeDirPath: Path,
         label: String,
         transcription: WhisperTranscription,
         episodeDict: Map<String, Any?>,
-    ) {
-        // Re-checked here rather than only at the callers: transcription takes minutes,
-        // and a second instance over the same data directory may have finished this
-        // episode while this one was decoding it.
+        replace: Boolean = false,
+    ): Boolean {
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
-        if (Files.exists(jsonPath)) {
-            logger.warn("$label was transcribed by something else while this run was working on it")
-            return
+        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+
+        if (!replace) {
+            // Re-checked here rather than only at the callers: transcription takes minutes,
+            // and a second instance over the same data directory may have finished this
+            // episode while this one was decoding it.
+            if (Files.exists(jsonPath)) {
+                logger.warn("$label was transcribed by something else while this run was working on it")
+                return false
+            }
+
+            // Words FIRST. transcript.json existing is what marks an episode
+            // done, both here and for anything reading the tree, so writing it
+            // last means a crash in between leaves the episode to be redone
+            // rather than leaving it permanently without its sidecar.
+            // A crash that got as far as the sidecar can leave one behind, so a
+            // decode with no word times has to clear it rather than adopt it.
+            if (!writeWords(transcription, wordsPath, label)) {
+                Files.deleteIfExists(wordsPath)
+                // writeWords swallows its exception, so without this the run
+                // would walk straight past the ordering above.
+                if (transcription.words.isNotEmpty()) {
+                    logger.error("Not writing $label: its word timestamps could not be written")
+                    return false
+                }
+            }
+            Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
+            return true
         }
 
-        // Words FIRST. transcript.json existing is what marks an episode
-        // done, both here and for anything reading the tree, so writing it
-        // last means a crash in between leaves the episode to be redone
-        // rather than leaving it permanently without its sidecar.
-        writeWords(transcription, episodeDirPath, label)
-        Files.writeString(jsonPath, jsonMapper.writeValueAsString(episodeDict))
+        // The sidecar addresses cues by position, so either file left beside
+        // the other's transcript mis-times every word -- silently and for good,
+        // since an episode with a transcript.json is one nothing revisits. So
+        // it is absent for the whole swap, cleared first and restored last: an
+        // interrupted replace leaves it visibly missing rather than wrong.
+        val stagedJson = episodeDirPath.resolve("$TRANSCRIPT_FILENAME${stagingSuffix()}")
+        val stagedWords = episodeDirPath.resolve("${WhisperTranscription.WORDS_FILENAME}${stagingSuffix()}")
+        try {
+            Files.writeString(stagedJson, jsonMapper.writeValueAsString(episodeDict))
+            val haveWords = writeWords(transcription, stagedWords, label)
+            // The clear below would otherwise take the existing word times
+            // down with it. A full disk should cost the run this episode.
+            if (!haveWords && transcription.words.isNotEmpty()) {
+                logger.error("Not replacing $label: its word timestamps could not be written")
+                return false
+            }
+
+            Files.deleteIfExists(wordsPath)
+            replaceWith(stagedJson, jsonPath)
+            if (haveWords) replaceWith(stagedWords, wordsPath)
+            return true
+        } finally {
+            runCatching { Files.deleteIfExists(stagedJson) }
+            runCatching { Files.deleteIfExists(stagedWords) }
+        }
     }
 
+    /**
+     * Two instances over one data directory select the same episodes --
+     * `--retranscribe-flagged` scans the whole tree, whatever podcasts the
+     * config names -- so a shared staging name would let one move the other's
+     * half-written file over a transcript.
+     *
+     * It stops that, and nothing more: the swap is two moves, not one, so two
+     * instances re-transcribing the same episode can still interleave into a
+     * transcript and a sidecar from different decodes. Nothing here locks, so
+     * do not point two runs at the same episode.
+     */
+    private fun stagingSuffix(): String = ".${ProcessHandle.current().pid()}$STAGING_SUFFIX"
+
+    /** A move rather than a write, so an interrupted replace cannot truncate the target. */
+    private fun replaceWith(
+        staged: Path,
+        target: Path,
+    ) {
+        try {
+            Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+        } catch (_: AtomicMoveNotSupportedException) {
+            // Some network volumes refuse an atomic move across the same
+            // directory. A plain replace is still better than a partial write.
+            Files.move(staged, target, StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+
+    /** False when no sidecar was written, which is what tells a replace to clear the stale one. */
     private fun writeWords(
         transcription: WhisperTranscription,
-        episodeDirPath: Path,
+        path: Path,
         label: String,
-    ) {
+    ): Boolean {
         if (transcription.words.isEmpty()) {
             logger.warn("No word timestamps for $label; is token_timestamps still set?")
-            return
+            return false
         }
-        try {
-            transcription.writeWords(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME))
+        return try {
+            transcription.writeWords(path)
+            true
         } catch (e: Exception) {
             // Not fatal. The transcript is the artifact the pipeline exists to
             // produce; the sidecar is an enrichment and can be rebuilt.
             logger.error("Could not write word timestamps for $label", e)
+            // A half-written file would otherwise be moved into place as if it were whole.
+            runCatching { Files.deleteIfExists(path) }
+            false
         }
     }
 
@@ -647,6 +849,8 @@ class PodcastPipeline(
 
     companion object {
         internal const val TRANSCRIPT_FILENAME = "transcript.json"
+
+        internal const val STAGING_SUFFIX = ".new"
         internal const val AUDIO_FILENAME = "audio.mp3"
 
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */

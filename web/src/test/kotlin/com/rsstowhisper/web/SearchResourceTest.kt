@@ -1,26 +1,49 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.CorpusTotals
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
+import com.rsstowhisper.web.models.PodcastSummary
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.TranscriptLine
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
+import jakarta.ws.rs.core.EntityTag
+import jakarta.ws.rs.core.MediaType
+import jakarta.ws.rs.core.Request
 import jakarta.ws.rs.core.Response
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.IContext
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
+import java.util.Optional
 
 class SearchResourceTest {
     private val repository: EpisodeRepository = mockk()
 
     // TemplateEngine is a concrete class; MockK can subclass it.
     private val templateEngine: TemplateEngine = mockk()
+
+    // No conditional headers: every words test below wants the full body.
+    private val request: Request =
+        mockk {
+            every { evaluatePreconditions(any<EntityTag>()) } returns null
+        }
 
     // Construct the resource manually — all fields are lateinit var so we can
     // set them directly without the CDI container.
@@ -29,6 +52,7 @@ class SearchResourceTest {
             it.repository = repository
             it.templateEngine = templateEngine
             it.audioBaseUrl = "http://audio.example.com/" // trailing slash — to verify trimming
+            it.dataDirectory = Optional.empty() // word timings off unless a test turns them on
         }
 
     // --- index ---
@@ -48,7 +72,7 @@ class SearchResourceTest {
         every { templateEngine.process("search", any<IContext>()) } returns "<html>full</html>"
 
         val result =
-            resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+            search("")
 
         assertEquals("<html>full</html>", result)
     }
@@ -59,7 +83,7 @@ class SearchResourceTest {
         every { templateEngine.process("search", setOf("app"), any<IContext>()) } returns "<div>partial</div>"
 
         val result =
-            resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, "true")
+            search("", htmxRequest = "true")
 
         assertEquals("<div>partial</div>", result)
     }
@@ -71,7 +95,7 @@ class SearchResourceTest {
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
         every { templateEngine.process("search", any<IContext>()) } returns ""
 
-        resource.search("  kotlin  ", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("  kotlin  ")
 
         assertEquals("kotlin", captured.captured.query)
     }
@@ -83,7 +107,7 @@ class SearchResourceTest {
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
         every { templateEngine.process("search", any<IContext>()) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), -5, null)
+        search("", page = -5)
 
         assertEquals(1, captured.captured.page)
     }
@@ -227,7 +251,7 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("climate change", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("climate change")
 
         assertEquals("?q=climate%20change", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
@@ -238,25 +262,642 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("search", capture(ctxSlot)) } returns ""
 
-        resource.search("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1, null)
+        search("")
 
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
 
+    // --- tag filtering ---
+
+    @Test
+    fun `search exposes a base url tag pills can append to`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search("climate", page = 3)
+
+        // Page 1, though 3 was asked for.
+        assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
+    }
+
+    /** With no filters at all the base ends in ?, so appending still yields a valid URL. */
+    @Test
+    fun `the tag base url has no stray separator when nothing is filtered`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search("")
+
+        assertEquals("/search?", ctxSlot.captured.getVariable("tagBaseUrl"))
+    }
+
+    @Test
+    fun `search builds a remove link for every active tag`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search("", tags = listOf("space", "science"), page = 2)
+
+        @Suppress("UNCHECKED_CAST")
+        val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
+        assertEquals(setOf("space", "science"), removeUrls.keys)
+        // Page 1 again, though 2 was asked for.
+        assertEquals("/search?tag=science", removeUrls["space"])
+        assertEquals("/search?tag=space", removeUrls["science"])
+    }
+
+    @Test
+    fun `tags reach the repository as filters`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        search("", tags = listOf("space"))
+
+        assertEquals(setOf("space"), captured.captured.tags)
+    }
+
+    /**
+     * The select is what serialises `sort`, so hiding it while a date sort is
+     * applied means the next checkbox click submits without it and the results
+     * silently flip back to newest-first.
+     */
+    @Test
+    fun `the sort control is shown whenever a sort is in effect, query or not`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "", sort = "oldest")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "", sort = "relevance")
+        assertEquals(false, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "climate", sort = "relevance")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+    }
+
+    /** Without a query every row scores the same, so offering it is offering nothing. */
+    @Test
+    fun `relevance is not offered without a query`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "")
+        assertEquals(listOf(SortOrder.NEWEST, SortOrder.OLDEST), ctxSlot.captured.getVariable("sortOptions"))
+
+        search(query = "climate")
+        assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    /**
+     * A query can narrow the corpus to one year while a different year is
+     * filtered on, and the options come back narrowed by that query -- leaving
+     * no checkbox to untick the filter that is emptying the results.
+     */
+    @Test
+    fun `an active year stays in the options even when the query excludes it`() {
+        stubSearchDependencies(years = listOf("2024"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", years = listOf("2019"))
+
+        assertEquals(listOf("2024", "2019"), ctxSlot.captured.getVariable("yearOptions"))
+    }
+
     // --- helpers ---
 
-    private fun stubSearchDependencies() {
-        every { repository.search(any()) } returns emptySearchResult()
+    // --- sort and year ---
+
+    @Test
+    fun `sort and years reach the repository`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
         every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        search("space", years = listOf("2024", "2023"), sort = "oldest")
+
+        assertEquals(setOf("2024", "2023"), captured.captured.years)
+        assertEquals(SortOrder.OLDEST, captured.captured.sort)
+    }
+
+    /** The parameter is user-typed, so nonsense must not 500 the page. */
+    @Test
+    fun `an unknown sort falls back to relevance`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { templateEngine.process("search", any<IContext>()) } returns ""
+
+        search("space", sort = "sideways")
+
+        assertEquals(SortOrder.RELEVANCE, captured.captured.sort)
+    }
+
+    @Test
+    fun `search offers every sort option to the template`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search("space")
+
+        assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    // --- podcasts overview ---
+
+    @Test
+    fun `podcasts page passes summaries and totals to the template`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(
+                PodcastSummary("Podcast A", "https://img/a.png", 2, 2400, "2024-01-01", "2024-01-03"),
+                PodcastSummary("Podcast B", null, 3, 3600, "2023-01-02", "2024-01-04"),
+            )
+        every { repository.getCorpusTotals() } returns CorpusTotals(5, 7200)
+        every { repository.indexBuiltAt() } returns Instant.parse("2024-06-01T10:30:00Z")
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns "<html>podcasts</html>"
+
+        val response = resource.podcasts()
+
+        assertEquals(200, response.status)
+        assertEquals(5, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+        assertNotNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    @Test
+    fun `each podcast links to a search filtered to it`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A & B", null, 1, 0, null, null))
+        every { repository.getCorpusTotals() } returns CorpusTotals(1, 0)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        @Suppress("UNCHECKED_CAST")
+        val urls = ctxSlot.captured.getVariable("searchUrls") as Map<String, String>
+        assertEquals("/search?podcast=Podcast%20A%20%26%20B", urls["Podcast A & B"])
+    }
+
+    /**
+     * An episode whose feed gave no podcast title has no card to appear on, but
+     * it is still in the corpus: summing the cards would under-report the
+     * header against what /search returns.
+     */
+    @Test
+    fun `the corpus header counts episodes the cards leave out`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A", null, 2, 2400, "2024-01-01", "2024-01-03"))
+        every { repository.getCorpusTotals() } returns CorpusTotals(3, 7200)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertEquals(3, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+    }
+
+    /** Same hole the tags and years already closed: the podcasts page lands straight in it. */
+    @Test
+    fun `an active podcast stays in the options even when the query excludes it`() {
+        stubSearchDependencies(podcasts = listOf("Podcast B"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", podcasts = listOf("Podcast A"))
+
+        assertEquals(listOf("Podcast A", "Podcast B"), ctxSlot.captured.getVariable("podcastOptions"))
+    }
+
+    /**
+     * The last two facets with the old gating. Collections vanish when the query
+     * matches only untagged episodes; episode types when it matches only one
+     * kind -- either way the active filter goes with them.
+     */
+    @Test
+    fun `an active collection and episode type stay in their options`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", collections = listOf("science"), episodeTypes = listOf("trailer"))
+
+        assertEquals(listOf("science"), ctxSlot.captured.getVariable("collectionOptions"))
+        assertEquals(listOf("trailer"), ctxSlot.captured.getVariable("episodeTypeOptions"))
+    }
+
+    /** A database that has never been written has no build time; the page still renders. */
+    @Test
+    fun `a missing index build time is passed through as null`() {
+        every { repository.getPodcastSummaries() } returns emptyList()
+        every { repository.getCorpusTotals() } returns CorpusTotals(0, 0)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    // --- JSON API ---
+
+    @Test
+    fun `api search passes the result through, with the filters it was given`() {
+        val captured = slot<SearchFilters>()
+        val expected = SearchResult(listOf(minimalEpisode()), 1, 1, 10)
+        every { repository.search(capture(captured)) } returns expected
+
+        val result =
+            resource.apiSearch("kotlin", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "newest", 1, 10)
+
+        assertEquals(expected.totalCount, result.totalCount)
+        assertEquals(expected.episodes.map { it.id }, result.episodes.map { it.id })
+        assertEquals("kotlin", captured.captured.query)
+        assertEquals(SortOrder.NEWEST, captured.captured.sort)
+    }
+
+    /**
+     * Every page that renders episode_summary sanitises it first. An API
+     * consumer that drops it into the DOM would be running feed-supplied
+     * script, and nothing in the payload warns them.
+     */
+    @Test
+    fun `the api sanitises the feed-supplied summary`() {
+        val dangerous = minimalEpisode(summary = "<p>Fine</p><script>alert(1)</script>")
+        every { repository.search(any()) } returns SearchResult(listOf(dangerous), 1, 1, 10)
+        every { repository.getEpisodeById("abc") } returns dangerous
+
+        val searched =
+            resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10)
+                .episodes
+                .single()
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        for (summary in listOf(searched.episodeSummary, fetched.episodeSummary)) {
+            assertFalse(summary!!.contains("<script"), summary)
+            assertTrue(summary.contains("Fine"), summary)
+        }
+    }
+
+    /**
+     * Plenty of feeds write the summary as prose, and an HTML sanitiser turns
+     * its ampersands and quotes into entities. A summary is treated as markup
+     * only if it contains a `<`, which is the same rule the episode page uses
+     * -- so prose that happens to contain one, an address in angle brackets
+     * say, is sanitised and loses it. Feeds do that rarely enough that one rule
+     * shared with the page beats two that disagree.
+     */
+    @Test
+    fun `the api leaves a plain-text summary exactly as it is`() {
+        val prose = "Ben & Jerry's \"best\" episode: see https://x.test?a=1&b=2"
+        every { repository.getEpisodeById("abc") } returns minimalEpisode(summary = prose)
+
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        assertEquals(prose, fetched.episodeSummary)
+    }
+
+    /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */
+    @Test
+    fun `api search caps the page size`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10_000)
+
+        assertEquals(SearchResource.MAX_API_PAGE_SIZE, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api search coerces a nonsense page and page size up to one`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", -3, 0)
+
+        assertEquals(1, captured.captured.page)
+        assertEquals(1, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api episode returns the episode with its transcript`() {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode(transcript = "WEBVTT")
+
+        val response = resource.apiEpisode("ep1")
+
+        assertEquals(200, response.status)
+        assertEquals("WEBVTT", (response.entity as Episode).transcript)
+    }
+
+    @Test
+    fun `api episode returns 404 as json for an unknown id`() {
+        every { repository.getEpisodeById("nope") } returns null
+
+        val response = resource.apiEpisode("nope")
+
+        assertEquals(404, response.status)
+        assertEquals(MediaType.APPLICATION_JSON_TYPE, response.mediaType)
+    }
+
+    // --- word timings (W6) ---
+
+    @Test
+    fun `words route is 404 when no data directory is configured`() {
+        resource.dataDirectory = Optional.empty()
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+        // Never even looked the episode up: the feature is off.
+        verify(exactly = 0) { repository.getEpisodeById(any()) }
+    }
+
+    @Test
+    fun `words route is 404 when the episode has no sidecar`(
+        @TempDir tmp: Path,
+    ) {
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
+    @Test
+    fun `words route serves the sidecar as gzip`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        val payload = byteArrayOf(1, 2, 3)
+        Files.write(dir.resolve("words.jsonl.gz"), payload)
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", request)
+
+        assertEquals(200, response.status)
+        assertEquals("gzip", response.getHeaderString("Content-Encoding"))
+        assertArrayEquals(payload, response.entity as ByteArray)
+    }
+
+    /**
+     * The path comes from the database, but a value reaching outside the data
+     * directory must not be servable whatever wrote it there.
+     */
+    @Test
+    fun `words route refuses a path that escapes the data directory`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        Files.write(outside.resolve("words.jsonl.gz"), byteArrayOf(9))
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        resource.dataDirectory = Optional.of(dataDir.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "../outside/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
+    /**
+     * A library spread across disks links its show directories elsewhere. That
+     * is the operator's own layout, not a value escaping the tree, so it is
+     * followed -- the check above exists to stop a `..` in the database.
+     */
+    @Test
+    fun `words route follows a symlinked episode directory`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        Files.write(outside.resolve("words.jsonl.gz"), byteArrayOf(9))
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir.resolve("Show"))
+        Files.createSymbolicLink(dataDir.resolve("Show").resolve("ep"), outside)
+        resource.dataDirectory = Optional.of(dataDir.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", request)
+
+        assertEquals(200, response.status)
+        assertArrayEquals(byteArrayOf(9), response.entity as ByteArray)
+    }
+
+    /**
+     * The audio path resolving to the root itself: its parent is outside the
+     * tree, and the check has to be on the file that gets opened.
+     */
+    @Test
+    fun `words route refuses a path that resolves to the data directory itself`(
+        @TempDir tmp: Path,
+    ) {
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.write(tmp.resolve(SearchResource.WORDS_FILENAME), byteArrayOf(9))
+        resource.dataDirectory = Optional.of(dataDir.toString())
+
+        for (relative in listOf("", ".", "./")) {
+            every { repository.getEpisodeById("ep1") } returns minimalEpisode(relativeAudioPath = relative)
+            assertEquals(404, resource.episodeWords("ep1", request).status, "relative=<$relative>")
+        }
+    }
+
+    /**
+     * Directory symlinks are the layout this allows; a symlinked sidecar is
+     * what someone with a foothold in the tree would leave behind.
+     */
+    @Test
+    fun `words route refuses a sidecar that is itself a symlink out of the tree`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        val secret = outside.resolve("secret.gz")
+        Files.write(secret, byteArrayOf(9))
+        val episodeDir = tmp.resolve("data").resolve("Show").resolve("ep")
+        Files.createDirectories(episodeDir)
+        Files.createSymbolicLink(episodeDir.resolve(SearchResource.WORDS_FILENAME), secret)
+        resource.dataDirectory = Optional.of(tmp.resolve("data").toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
+    /** A data directory that is not there hides the feature rather than 404ing every episode. */
+    @Test
+    fun `words route is 404 when the data directory does not exist`(
+        @TempDir tmp: Path,
+    ) {
+        resource.dataDirectory = Optional.of(tmp.resolve("gone").toString())
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+        verify(exactly = 0) { repository.getEpisodeById(any()) }
+    }
+
+    @Test
+    fun `the episode page hides the words url when the data directory does not exist`(
+        @TempDir tmp: Path,
+    ) {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
+
+        resource.dataDirectory = Optional.of(tmp.resolve("gone").toString())
+        resource.episode("ep1", "")
+
+        assertNull(ctxSlot.captured.getVariable("wordsUrl"))
+    }
+
+    /**
+     * A re-transcribe rewrites the sidecar and the cue ordinals together, so a
+     * client holding the old one has to be told to ask again.
+     */
+    @Test
+    fun `words route revalidates rather than caching`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        Files.write(dir.resolve("words.jsonl.gz"), byteArrayOf(1, 2, 3))
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", request)
+
+        assertEquals("no-cache, no-transform", response.getHeaderString("Cache-Control"))
+        assertNotNull(response.entityTag)
+    }
+
+    /**
+     * Taken over the bytes, so rewriting the sidecar to a different body of the
+     * same length at the same mtime still changes the tag.
+     */
+    @Test
+    fun `the entity tag follows the content, not the file's stamp`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        val words = dir.resolve("words.jsonl.gz")
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        Files.write(words, byteArrayOf(1, 2, 3))
+        val stamp = Files.getLastModifiedTime(words)
+        val first = resource.episodeWords("ep1", request).entityTag
+
+        Files.write(words, byteArrayOf(4, 5, 6))
+        Files.setLastModifiedTime(words, stamp)
+        val second = resource.episodeWords("ep1", request).entityTag
+
+        assertNotEquals(first, second)
+    }
+
+    @Test
+    fun `words route answers a matching entity tag with 304`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        Files.write(dir.resolve("words.jsonl.gz"), byteArrayOf(1, 2, 3))
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        val unchanged: Request =
+            mockk {
+                every { evaluatePreconditions(any<EntityTag>()) } returns
+                    Response.notModified()
+            }
+
+        assertEquals(304, resource.episodeWords("ep1", unchanged).status)
+    }
+
+    @Test
+    fun `the episode page offers the words url only when a data directory is set`(
+        @TempDir tmp: Path,
+    ) {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
+
+        resource.dataDirectory = Optional.empty()
+        resource.episode("ep1", "")
+        assertNull(ctxSlot.captured.getVariable("wordsUrl"))
+
+        resource.dataDirectory = Optional.of(tmp.toString())
+        resource.episode("ep1", "")
+        assertEquals("/episode/ep1/words", ctxSlot.captured.getVariable("wordsUrl"))
+    }
+
+    /**
+     * Named defaults rather than a positional call in every test: `search()`
+     * has grown a parameter with almost every filter added, and each one used
+     * to mean editing all ten call sites here.
+     */
+    private fun search(
+        query: String = "",
+        durations: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+        collections: List<String> = emptyList(),
+        tags: List<String> = emptyList(),
+        episodeTypes: List<String> = emptyList(),
+        years: List<String> = emptyList(),
+        sort: String = "relevance",
+        page: Int = 1,
+        htmxRequest: String? = null,
+    ): String =
+        resource.search(
+            query,
+            durations,
+            podcasts,
+            collections,
+            tags,
+            episodeTypes,
+            years,
+            sort,
+            page,
+            htmxRequest,
+        )
+
+    private fun stubSearchDependencies(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) {
+        every { repository.search(any()) } returns emptySearchResult()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions(years, podcasts)
     }
 
     private fun emptySearchResult() = SearchResult(emptyList(), 0, 1, 10)
 
-    private fun emptyFilterOptions() = FilterOptions(emptyList(), emptyList(), emptyList())
+    private fun emptyFilterOptions(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) = FilterOptions(podcasts, emptyList(), emptyList(), years)
 
     private fun minimalEpisode(
         summary: String? = null,
         transcript: String? = null,
+        relativeAudioPath: String? = null,
     ) = Episode(
         id = "ep1",
         podcastTitle = null,
@@ -272,7 +913,7 @@ class SearchResourceTest {
         episodeSeason = null,
         episodeType = null,
         episodeDuration = null,
-        episodeRelativeAudioPath = null,
+        episodeRelativeAudioPath = relativeAudioPath,
         allTags = null,
         transcript = transcript,
     )

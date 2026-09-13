@@ -170,6 +170,22 @@ body {
     font-size: 0.8rem;
     margin: 0.1rem;
 }
+a.tag-pill {
+    text-decoration: none;
+    cursor: pointer;
+}
+a.tag-pill:hover {
+    background: #cbd5e1;
+    color: #1e293b;
+}
+.tag-pill-active {
+    background: #334155;
+    color: #f1f5f9;
+}
+a.tag-pill-active:hover {
+    background: #1e293b;
+    color: #ffffff;
+}
 .htmx-indicator {
     opacity: 0;
     transition: opacity 200ms ease-in;
@@ -375,4 +391,105 @@ body {
     .sidebar-filter-header {
         display: none;
     }
+}
+
+.sort-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin-bottom: 1rem;
+}
+.sort-group select {
+    margin-bottom: 0;
+}
+
+/* Podcasts overview */
+.podcasts-page {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 1.5rem 2rem;
+}
+.corpus-summary {
+    color: var(--pico-muted-color);
+    font-size: 0.9rem;
+}
+.corpus-nav {
+    font-size: 0.85rem;
+    margin: 0 0 1rem;
+}
+.podcast-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.podcast-card {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    margin: 0;
+    padding: 0.75rem 1rem;
+}
+.podcast-art {
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+    object-fit: cover;
+    border-radius: 6px;
+}
+.podcast-card-body h3 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+}
+.podcast-card .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+.podcast-name a {
+    text-decoration: none;
+}
+.podcast-name a:hover {
+    text-decoration: underline;
+}
+
+/* Word timings */
+.transcript-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+.word-controls label {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    margin: 0;
+    cursor: pointer;
+}
+.word-controls input {
+    margin: 0;
+}
+/* Pico styles a <small> following an input as form helper text: block, full
+   width, pulled up by a negative margin. In a flex row that lifts the caption
+   clear of its own checkbox and up under the sticky player. */
+.word-controls small {
+    margin: 0;
+    width: auto;
+}
+.word-controls input:disabled + small {
+    opacity: 0.6;
+}
+.word.current-word {
+    background: var(--pico-primary-focus, #b7d4ff);
+    border-radius: 3px;
+}
+/* Opt-in: a transcript permanently mottled with faded words is harder to read
+   than one that never shows its confidence at all. The word being spoken keeps
+   its full strength -- opacity would fade the highlight along with the text,
+   on exactly the words the reader turned this on to find. */
+.transcript.dim-low-confidence .word.low-confidence:not(.current-word) {
+    opacity: 0.45;
 }

@@ -316,6 +316,9 @@ cp .env.example .env
 ```ini
 APP_DB_PATH=/path/to/podcasts.db
 APP_AUDIO_BASE_URL=http://your-nas:9280
+# Optional. The pipeline's data directory, which enables word-level highlighting
+# on the episode page; see Word timings below. Omit it and the feature stays hidden.
+APP_DATA_DIRECTORY=/path/to/data_directory
 ```
 
 Quarkus picks up `.env` automatically. Alternatively, override properties inline:
@@ -340,6 +343,108 @@ java -Dapp.db.path=/data/podcasts.db \
      -Dapp.audio.base-url=http://nas:9280 \
      -jar web/build/quarkus-app/quarkus-run.jar
 ```
+
+### Pages
+
+| Path | What it is |
+| --- | --- |
+| `/search` | Full-text search with filters for duration, podcast, collection, tag, year and episode type, and a relevance/newest/oldest sort |
+| `/episode/{id}` | One episode: metadata, audio player, and the transcript as clickable cues. `?q=` highlights the query's matches and steps between them; `#t=<seconds>` opens on a cue and starts playback there |
+| `/podcasts` | What the corpus holds: one card per podcast with artwork, episode count, total hours and date range, plus when `index.py` last wrote the database |
+
+### Word timings
+
+The pipeline writes `words.jsonl.gz` beside every episode's audio: one line per word
+with its start, end and the decoder's own confidence. Set `APP_DATA_DIRECTORY` to that
+tree and the episode page can use it.
+
+With it set, the transcript gains a **Mark low confidence** toggle, and playback
+highlights the current word rather than only the current cue. Words whisper scored
+below `p = 0.4` are faded when the toggle is on, so a reader can see where the decoder
+was guessing. Dimming is opt-in: a transcript permanently mottled with faded words is
+harder to read than one that never shows its confidence at all.
+
+The sidecar is roughly 60 KB per episode, so it is never fetched on page load — the
+first play pulls it, and so does ticking the toggle. Episodes transcribed before word
+timestamps were emitted have no sidecar; the route returns 404 and the toggle says
+**No word timings** rather than sitting there doing nothing. Three other cases say
+something more useful than that:
+
+- a query that matched *every* line leaves nothing to split, so the toggle says
+  **Hidden on matched lines** and stays live — clearing the query brings the words back;
+- a sidecar written against a different decode of the episode says **Word timings out
+  of date**, which re-running `index.py` over the new transcript fixes. It is judged
+  whole rather than line by line: one cue in common, by ordinal or by coincidence, is
+  not agreement;
+- whisper does not always time every word, and the pipeline drops the ones it did not,
+  so a line the sidecar cannot rebuild keeps its own text. If that is every line, the
+  toggle says **Word timings incomplete**.
+
+A line is only ever split when its words rebuild it exactly, so the transcript itself is
+never rewritten by the sidecar.
+
+The file is served by the web module from `/episode/{id}/words`, rather than fetched
+from the audio host: the path is derived from a column already in hand, it needs no
+CORS grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets
+the browser inflate it instead of the page carrying a decompressor. It is sent gzipped
+whatever the request's `Accept-Encoding` says, since the file is only gzip on disk —
+`curl` it with `--compressed`.
+
+The data directory itself is resolved with `toRealPath`, so a tree that is a symlink
+still matches the paths built from it. The sidecar path is then normalised and must sit
+under that root — which is what refuses a `..` walking out of the tree, and a value that
+resolves to the root itself, whose parent would be outside it. *Directory* symlinks
+below the root are followed, so a library spread across disks can link its show
+directories onto another volume; the sidecar file itself is not followed, since that
+symlink buys the layout nothing and is the one someone with a foothold in the tree would
+leave behind. If the configured directory is not there at all, the feature stays hidden
+instead of being offered on every episode and then failing on each one.
+
+The response revalidates rather than being held: re-transcribing an episode rewrites
+the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar
+against a fresh transcript mis-times every word. The `ETag` is taken over the bytes
+that are actually sent — a validator derived from a `stat` can name a version the body
+is not, and `no-cache` would then pin that mismatch in the browser until the file next
+changed. The usual answer is a 304.
+
+On a line the search query matched, the `<mark>` highlighting wins and the line is
+not split into words — word timing is the lesser feature there.
+
+### JSON API
+
+For reading the corpus from a shell or a notebook:
+
+```bash
+curl 'http://localhost:8080/api/search?q=climate+change&sort=newest&pageSize=5'
+curl 'http://localhost:8080/api/episode/abcd1234'
+```
+
+`/api/search` takes the same parameters as `/search` (`q`, `duration`, `podcast`,
+`collection`, `tag`, `year`, `episodeType`, `sort`, `page`) plus `pageSize`, capped at 100.
+It returns the result page with `totalCount`, `totalPages`, `hasNext` and `hasPrevious`, and
+each episode carries a plain-text `snippetText` of the matched passage. The `transcript`
+field is absent from that payload rather than null, so a consumer can tell "not included"
+from "this episode has none"; `/api/episode/{id}` returns one episode with it, or a 404
+with a JSON body.
+
+`episodeSummary` comes from the feed. A summary containing a `<` is treated as HTML and
+sanitised before it goes out, the same rule the episode page uses; anything else is passed
+through untouched, since running prose through an HTML sanitiser turns its ampersands and
+quotes into entities. Prose that happens to contain a `<` — an address in angle brackets,
+say — is sanitised and loses it, on both the page and the API.
+
+What that sanitising buys is narrow: it strips scripting from markup so the value can be
+inserted as HTML. It does **not** make the value safe to drop into an HTML attribute —
+sanitised markup still contains quotes, and a prose summary is returned with its quotes
+intact, so either can break out of an unescaped `attr="..."`.
+
+**Every other feed-supplied string in the payload is raw** — `episodeTitle`,
+`podcastTitle`, `snippetText`, the links and the tags are whatever the feed said, because
+an API cannot know how a consumer will render them. Escape everything at render time for
+the context you are rendering into; the HTML pages here do it with `th:text`.
+
+A page number far enough past the end returns no rows rather than wrapping around to the
+first page.
 
 ## Pipeline configuration
 

@@ -118,10 +118,10 @@
                 </details>
 
                 <details class="filter-group" open="open"
-                         th:if="${filterOptions.podcasts.size() > 1}">
+                         th:if="${podcastOptions.size() > 1 or not filters.podcasts.isEmpty()}">
                     <summary>Podcast</summary>
                     <div class="filter-list">
-                        <label th:each="podcast : ${filterOptions.podcasts}">
+                        <label th:each="podcast : ${podcastOptions}">
                             <input type="checkbox" name="podcast"
                                    th:value="${podcast}"
                                    th:checked="${filters.podcasts.contains(podcast)}"/>

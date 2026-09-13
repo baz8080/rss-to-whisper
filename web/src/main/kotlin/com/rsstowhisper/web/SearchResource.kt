@@ -30,6 +30,7 @@ import org.thymeleaf.context.Context
 import java.net.URI
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Path("/")
 @ApplicationScoped
@@ -100,10 +101,12 @@ class SearchResource {
                     "sortOptions",
                     if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
                 )
-                // A query can narrow the corpus to one year while a different
-                // year is filtered on, which would otherwise leave no checkbox
-                // to untick.
+                // A query can narrow the corpus past the value being filtered
+                // on -- easy to reach from the podcasts page, which lands on
+                // /search?podcast=X -- and the options come back narrowed by that
+                // query, which would otherwise leave no checkbox to untick.
                 setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
+                setVariable("podcastOptions", (filterOptions.podcasts + filters.podcasts).distinct().sorted())
                 // Page 1 on both: changing the tags changes the result set, so
                 // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
@@ -131,11 +134,12 @@ class SearchResource {
     @Produces(MediaType.TEXT_HTML)
     fun podcasts(): Response {
         val summaries = repository.getPodcastSummaries()
+        val totals = repository.getCorpusTotals()
         val ctx =
             Context().apply {
                 setVariable("summaries", summaries)
-                setVariable("totalEpisodes", summaries.sumOf { it.episodeCount })
-                setVariable("totalHours", "%,.0f".format(summaries.sumOf { it.totalDurationSeconds } / 3600.0))
+                setVariable("totalEpisodes", totals.episodeCount)
+                setVariable("totalHours", "%,.0f".format(Locale.ROOT, totals.totalDurationSeconds / 3600.0))
                 // Thymeleaf cannot call top-level Kotlin functions here, so the
                 // link for each row is built now rather than in the template.
                 setVariable(

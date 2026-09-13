@@ -1,5 +1,6 @@
 package com.rsstowhisper.web.db
 
+import com.rsstowhisper.web.models.CorpusTotals
 import com.rsstowhisper.web.models.DurationCategory
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
@@ -34,6 +35,9 @@ class EpisodeRepository {
     // same reason: this one scans the whole episodes table.
     private var cachedSummaries: List<PodcastSummary>? = null
     private var cachedSummariesAtMillis: Long = 0
+
+    private var cachedTotals: CorpusTotals? = null
+    private var cachedTotalsAtMillis: Long = 0
 
     @PostConstruct
     fun init() {
@@ -208,6 +212,32 @@ class EpisodeRepository {
         cachedFilterOptions = options
         cachedFilterAtMillis = now
         return options
+    }
+
+    /**
+     * Counted over every episode, not summed from [getPodcastSummaries], which
+     * groups by title and so leaves out the ones the feed gave no podcast title
+     * -- the search page renders those as "Unknown Podcast", so they exist.
+     */
+    @Synchronized
+    fun getCorpusTotals(): CorpusTotals {
+        val now = System.currentTimeMillis()
+        cachedTotals?.let { if (now - cachedTotalsAtMillis < FILTER_CACHE_TTL_MILLIS) return it }
+
+        val sql = "SELECT COUNT(*) AS episode_count, COALESCE(SUM(episode_duration), 0) AS total_duration FROM episodes"
+        val totals =
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        CorpusTotals(rs.getInt("episode_count"), rs.getLong("total_duration"))
+                    } else {
+                        CorpusTotals(0, 0)
+                    }
+                }
+            }
+        cachedTotals = totals
+        cachedTotalsAtMillis = now
+        return totals
     }
 
     /**

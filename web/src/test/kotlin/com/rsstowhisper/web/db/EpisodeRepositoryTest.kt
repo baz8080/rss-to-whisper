@@ -131,7 +131,7 @@ class EpisodeRepositoryTest {
     private fun insert(
         conn: Connection,
         id: String,
-        podcastTitle: String,
+        podcastTitle: String?,
         episodeTitle: String,
         publishedOn: String?,
         duration: Int?,
@@ -485,6 +485,36 @@ class EpisodeRepositoryTest {
         fun `one row per podcast, ordered by title`() {
             val summaries = repo.getPodcastSummaries()
             assertEquals(listOf("Podcast A", "Podcast B"), summaries.map { it.title })
+        }
+
+        /**
+         * The search page renders a null podcast_title as "Unknown Podcast", so
+         * such episodes exist -- and GROUP BY podcast_title leaves them off the
+         * cards. The corpus header must still count them.
+         */
+        @Test
+        fun `corpus totals include an episode with no podcast title`() {
+            DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                insert(
+                    conn,
+                    id = "untitled",
+                    podcastTitle = null,
+                    episodeTitle = "No Podcast",
+                    publishedOn = "2024-02-02",
+                    duration = 3600,
+                    collections = null,
+                    tags = null,
+                    type = null,
+                    transcriptPlain = "orphaned from its feed",
+                )
+            }
+
+            val fromCards = repo.getPodcastSummaries().sumOf { it.episodeCount }
+            val totals = repo.getCorpusTotals()
+
+            assertEquals(4, fromCards, "the untitled episode has no card")
+            assertEquals(5, totals.episodeCount)
+            assertEquals(3600L, totals.totalDurationSeconds - repo.getPodcastSummaries().sumOf { it.totalDurationSeconds })
         }
 
         @Test

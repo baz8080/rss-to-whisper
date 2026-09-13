@@ -465,6 +465,23 @@ class SearchResourceTest {
         assertEquals(listOf("Podcast A", "Podcast B"), ctxSlot.captured.getVariable("podcastOptions"))
     }
 
+    /**
+     * The last two facets with the old gating. Collections vanish when the query
+     * matches only untagged episodes; episode types when it matches only one
+     * kind -- either way the active filter goes with them.
+     */
+    @Test
+    fun `an active collection and episode type stay in their options`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", collections = listOf("science"), episodeTypes = listOf("trailer"))
+
+        assertEquals(listOf("science"), ctxSlot.captured.getVariable("collectionOptions"))
+        assertEquals(listOf("trailer"), ctxSlot.captured.getVariable("episodeTypeOptions"))
+    }
+
     /** A database that has never been written has no build time; the page still renders. */
     @Test
     fun `a missing index build time is passed through as null`() {

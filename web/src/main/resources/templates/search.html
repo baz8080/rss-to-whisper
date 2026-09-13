@@ -131,10 +131,10 @@
                 </details>
 
                 <details class="filter-group"
-                         th:if="${not filterOptions.collections.isEmpty()}">
+                         th:if="${not collectionOptions.isEmpty()}">
                     <summary>Collections</summary>
                     <div class="filter-list">
-                        <label th:each="collection : ${filterOptions.collections}">
+                        <label th:each="collection : ${collectionOptions}">
                             <input type="checkbox" name="collection"
                                    th:value="${collection}"
                                    th:checked="${filters.collections.contains(collection)}"/>
@@ -176,10 +176,10 @@
                 </details>
 
                 <details class="filter-group"
-                         th:if="${filterOptions.episodeTypes.size() > 1}">
+                         th:if="${episodeTypeOptions.size() > 1 or not filters.episodeTypes.isEmpty()}">
                     <summary>Episode Type</summary>
                     <div class="filter-list">
-                        <label th:each="type : ${filterOptions.episodeTypes}">
+                        <label th:each="type : ${episodeTypeOptions}">
                             <input type="checkbox" name="episodeType"
                                    th:value="${type}"
                                    th:checked="${filters.episodeTypes.contains(type)}"/>

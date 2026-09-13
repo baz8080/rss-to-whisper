@@ -107,6 +107,14 @@ class SearchResource {
                 // query, which would otherwise leave no checkbox to untick.
                 setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
                 setVariable("podcastOptions", (filterOptions.podcasts + filters.podcasts).distinct().sorted())
+                setVariable(
+                    "collectionOptions",
+                    (filterOptions.collections + filters.collections).distinct().sorted(),
+                )
+                setVariable(
+                    "episodeTypeOptions",
+                    (filterOptions.episodeTypes + filters.episodeTypes).distinct().sorted(),
+                )
                 // Page 1 on both: changing the tags changes the result set, so
                 // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))

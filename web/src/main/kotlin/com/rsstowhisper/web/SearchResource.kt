@@ -31,6 +31,7 @@ import org.thymeleaf.context.Context
 import java.net.URI
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Path("/")
 @ApplicationScoped
@@ -90,9 +91,33 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
-                setVariable("sortOptions", SortOrder.entries)
-                // Adding a tag resets to page 1: the result set changes, so the
-                // old page number points at a different set of episodes.
+                // Both controls carry their own state: the select serialises
+                // `sort`, the checkboxes serialise `year`. Hide either while its
+                // filter is active and the next form submit drops that filter --
+                // silently reordering or rewidening the results.
+                setVariable("showSort", filters.query.isNotBlank() || filters.sort != SortOrder.RELEVANCE)
+                // Relevance is not on offer without a query: every row scores the
+                // same, so it would read as a choice that does nothing.
+                setVariable(
+                    "sortOptions",
+                    if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
+                )
+                // A query can narrow the corpus past the value being filtered
+                // on -- easy to reach from the podcasts page, which lands on
+                // /search?podcast=X -- and the options come back narrowed by that
+                // query, which would otherwise leave no checkbox to untick.
+                setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
+                setVariable("podcastOptions", (filterOptions.podcasts + filters.podcasts).distinct().sorted())
+                setVariable(
+                    "collectionOptions",
+                    (filterOptions.collections + filters.collections).distinct().sorted(),
+                )
+                setVariable(
+                    "episodeTypeOptions",
+                    (filterOptions.episodeTypes + filters.episodeTypes).distinct().sorted(),
+                )
+                // Page 1 on both: changing the tags changes the result set, so
+                // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
                 setVariable(
                     "tagRemoveUrls",
@@ -170,11 +195,12 @@ class SearchResource {
     @Produces(MediaType.TEXT_HTML)
     fun podcasts(): Response {
         val summaries = repository.getPodcastSummaries()
+        val totals = repository.getCorpusTotals()
         val ctx =
             Context().apply {
                 setVariable("summaries", summaries)
-                setVariable("totalEpisodes", summaries.sumOf { it.episodeCount })
-                setVariable("totalHours", "%,.0f".format(summaries.sumOf { it.totalDurationSeconds } / 3600.0))
+                setVariable("totalEpisodes", totals.episodeCount)
+                setVariable("totalHours", "%,.0f".format(Locale.ROOT, totals.totalDurationSeconds / 3600.0))
                 // Thymeleaf cannot call top-level Kotlin functions here, so the
                 // link for each row is built now rather than in the template.
                 setVariable(
@@ -228,8 +254,8 @@ class SearchResource {
         /** One page of the API cannot be made to return the whole corpus. */
         internal const val MAX_API_PAGE_SIZE = 100
 
-        // The database file's own mtime, so the server's zone is the honest one
-        // to render it in -- it is a fact about this machine's filesystem.
+        // A fact about this machine's filesystem, so the server's zone is the
+        // honest one to render it in.
         private val INDEX_BUILT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
     }

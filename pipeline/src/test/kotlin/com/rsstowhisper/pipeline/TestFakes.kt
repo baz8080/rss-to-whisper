@@ -1,5 +1,8 @@
 package com.rsstowhisper.pipeline
 
+import ch.qos.logback.classic.LoggerContext
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.AppenderBase
 import com.rometools.modules.itunes.EntryInformationImpl
 import com.rometools.modules.itunes.types.Duration
 import com.rometools.rome.feed.module.Module
@@ -11,6 +14,7 @@ import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.feed.FeedService
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
@@ -27,6 +31,38 @@ internal fun whisperJson(vararg cues: Triple<Double, Double, String>): String =
     }
 
 internal val MINIMAL_VTT = whisperJson(Triple(0.0, 1.0, "Hello world."))
+
+/**
+ * Every message logged while [block] runs. Some outcomes are only visible in
+ * the log -- an episode the run counted as done is one of them.
+ */
+internal fun logged(block: () -> Unit): List<String> {
+    val root =
+        (LoggerFactory.getILoggerFactory() as LoggerContext)
+            .getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
+    val messages = Collections.synchronizedList(mutableListOf<String>())
+    val appender =
+        object : AppenderBase<ILoggingEvent>() {
+            override fun append(event: ILoggingEvent) {
+                messages.add(event.formattedMessage)
+            }
+        }
+    appender.start()
+    root.addAppender(appender)
+    try {
+        block()
+    } finally {
+        root.detachAppender(appender)
+        appender.stop()
+    }
+    return messages.toList()
+}
+
+/** Segments with no per-word times, which is what a server decoding without token_timestamps returns. */
+internal val WORDLESS_JSON =
+    """{"task":"transcribe","segments":[""" +
+        """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
+        "]}"
 
 internal open class FakeFeedService(
     private val feeds: Map<String, SyndFeed?>,

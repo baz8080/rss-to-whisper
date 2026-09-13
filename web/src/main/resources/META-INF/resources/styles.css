@@ -170,7 +170,6 @@ body {
     font-size: 0.8rem;
     margin: 0.1rem;
 }
-/* Pills are links now. Keep them looking like pills rather than body links. */
 a.tag-pill {
     text-decoration: none;
     cursor: pointer;
@@ -394,8 +393,6 @@ a.tag-pill-active:hover {
     }
 }
 
-/* Sort control: a select rather than a details/summary group, since it is one
-   choice among three rather than a set of independent toggles. */
 .sort-group {
     display: flex;
     flex-direction: column;

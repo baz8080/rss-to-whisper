@@ -118,13 +118,16 @@ class EpisodeRepository {
                LIMIT ? OFFSET ?"""
             }
 
-        val offset = (filters.page - 1) * filters.pageSize
+        // Long: page comes off a query string, and Int would wrap to a
+        // negative offset that SQLite clamps back to 0 -- page one's rows,
+        // returned under whatever page number was asked for.
+        val offset = (filters.page.toLong() - 1) * filters.pageSize
         val episodes =
             conn.prepareStatement(selectSql).use { stmt ->
                 params.forEachIndexed { i, p -> setParam(stmt, i + 1, p) }
                 val paramOffset = params.size
                 stmt.setInt(paramOffset + 1, filters.pageSize)
-                stmt.setInt(paramOffset + 2, offset)
+                stmt.setLong(paramOffset + 2, offset)
                 stmt.executeQuery().use { rs ->
                     val results = mutableListOf<Episode>()
                     while (rs.next()) results.add(mapEpisode(rs))

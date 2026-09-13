@@ -1,5 +1,7 @@
 package com.rsstowhisper.web.models
 
+import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonInclude
 import org.owasp.html.PolicyFactory
 import org.owasp.html.Sanitizers
 import java.util.Locale
@@ -21,7 +23,12 @@ data class Episode(
     val episodeDuration: Int?,
     val episodeRelativeAudioPath: String?,
     val allTags: String?,
+    // The API gets [snippetText] instead.
+    @get:JsonIgnore
     val snippet: String? = null,
+    // Absent from /api/search rather than null: the search payload leaves the
+    // transcript out, and null would say the episode has none.
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val transcript: String? = null,
 ) {
     // Computed properties — accessible from Thymeleaf as episode.formattedDuration etc.
@@ -32,13 +39,26 @@ data class Episode(
             ?.map(String::trim)
             ?.filter(String::isNotBlank)
             ?: emptyList()
+
+    @get:JsonIgnore
     val audioPath: String? get() = episodeRelativeAudioPath
 
     // The raw snippet is feed-controlled text (it spans episode_title and
     // podcast_title as well as the transcript) with sentinel highlight markers.
     // Escape it, then turn only the sentinels into <mark> -- so a feed cannot
     // smuggle markup through by containing a literal "<mark>".
+    @get:JsonIgnore
     val snippetHtml: String? get() = snippet?.let { renderSnippet(it) }
+
+    /**
+     * The matched passage as plain text, for the JSON API.
+     *
+     * The stored snippet marks its matches with two control characters, which
+     * have no business in a JSON payload, and the HTML form is markup a script
+     * would only have to strip again.
+     */
+    val snippetText: String?
+        get() = snippet?.replace(SNIPPET_MARK_START, "")?.replace(SNIPPET_MARK_END, "")
 }
 
 data class SearchResult(

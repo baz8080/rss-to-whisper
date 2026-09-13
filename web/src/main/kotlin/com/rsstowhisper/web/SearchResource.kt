@@ -1,7 +1,9 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.appendableSearchUrl
 import com.rsstowhisper.web.models.buildSearchUrl
@@ -137,6 +139,69 @@ class SearchResource {
         }
     }
 
+    /** The same search as `/search`, for use from a shell or a notebook. */
+    @GET
+    @Path("/api/search")
+    @Produces(MediaType.APPLICATION_JSON)
+    fun apiSearch(
+        @QueryParam("q") @DefaultValue("") query: String,
+        @QueryParam("duration") durations: List<String>,
+        @QueryParam("podcast") podcasts: List<String>,
+        @QueryParam("collection") collections: List<String>,
+        @QueryParam("tag") tags: List<String>,
+        @QueryParam("episodeType") episodeTypes: List<String>,
+        @QueryParam("year") years: List<String>,
+        @QueryParam("sort") @DefaultValue("relevance") sort: String,
+        @QueryParam("page") @DefaultValue("1") page: Int,
+        @QueryParam("pageSize") @DefaultValue("10") pageSize: Int,
+    ): SearchResult {
+        val result =
+            repository.search(
+                SearchFilters(
+                    query = query.trim(),
+                    durations = durations.toSet(),
+                    podcasts = podcasts.toSet(),
+                    collections = collections.toSet(),
+                    tags = tags.toSet(),
+                    episodeTypes = episodeTypes.toSet(),
+                    years = years.toSet(),
+                    sort = SortOrder.parse(sort),
+                    page = page.coerceAtLeast(1),
+                    pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
+                ),
+            )
+        return result.copy(episodes = result.episodes.map(::withSafeSummary))
+    }
+
+    /**
+     * Some feeds write `episode_summary` as HTML and some as plain prose, so the
+     * episode page branches on it too. The markup is sanitised, because handing
+     * an API consumer feed-supplied script moves that obligation onto them
+     * silently. The prose is left exactly as it is: an HTML sanitiser turns
+     * "Ben & Jerry's" into entities and deletes anything inside angle brackets,
+     * which for a summary nobody will render as HTML is only damage.
+     */
+    private fun withSafeSummary(episode: Episode): Episode =
+        episode.copy(
+            episodeSummary = episode.episodeSummary?.let { if (it.contains('<')) sanitizeHtml(it) else it },
+        )
+
+    /** The full episode, transcript included -- which `/api/search` deliberately omits. */
+    @GET
+    @Path("/api/episode/{id}")
+    @Produces(MediaType.APPLICATION_JSON)
+    fun apiEpisode(
+        @PathParam("id") id: String,
+    ): Response {
+        val episode =
+            repository.getEpisodeById(id)
+                ?: return Response.status(Response.Status.NOT_FOUND)
+                    .entity(mapOf("error" to "Episode not found", "id" to id))
+                    .type(MediaType.APPLICATION_JSON)
+                    .build()
+        return Response.ok(withSafeSummary(episode), MediaType.APPLICATION_JSON).build()
+    }
+
     @GET
     @Path("/podcasts")
     @Produces(MediaType.TEXT_HTML)
@@ -198,6 +263,12 @@ class SearchResource {
     }
 
     companion object {
+        /**
+         * The transcript is not in the search payload, but an unbounded page
+         * size would still let one request read the whole corpus.
+         */
+        internal const val MAX_API_PAGE_SIZE = 100
+
         // A fact about this machine's filesystem, so the server's zone is the
         // honest one to render it in.
         private val INDEX_BUILT_FORMAT: DateTimeFormatter =

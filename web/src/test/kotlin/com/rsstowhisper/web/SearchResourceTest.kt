@@ -12,8 +12,10 @@ import com.rsstowhisper.web.models.TranscriptLine
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -494,6 +496,106 @@ class SearchResourceTest {
         resource.podcasts()
 
         assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    // --- JSON API ---
+
+    @Test
+    fun `api search passes the result through, with the filters it was given`() {
+        val captured = slot<SearchFilters>()
+        val expected = SearchResult(listOf(minimalEpisode()), 1, 1, 10)
+        every { repository.search(capture(captured)) } returns expected
+
+        val result =
+            resource.apiSearch("kotlin", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "newest", 1, 10)
+
+        assertEquals(expected.totalCount, result.totalCount)
+        assertEquals(expected.episodes.map { it.id }, result.episodes.map { it.id })
+        assertEquals("kotlin", captured.captured.query)
+        assertEquals(SortOrder.NEWEST, captured.captured.sort)
+    }
+
+    /**
+     * Every page that renders episode_summary sanitises it first. An API
+     * consumer that drops it into the DOM would be running feed-supplied
+     * script, and nothing in the payload warns them.
+     */
+    @Test
+    fun `the api sanitises the feed-supplied summary`() {
+        val dangerous = minimalEpisode(summary = "<p>Fine</p><script>alert(1)</script>")
+        every { repository.search(any()) } returns SearchResult(listOf(dangerous), 1, 1, 10)
+        every { repository.getEpisodeById("abc") } returns dangerous
+
+        val searched =
+            resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10)
+                .episodes
+                .single()
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        for (summary in listOf(searched.episodeSummary, fetched.episodeSummary)) {
+            assertFalse(summary!!.contains("<script"), summary)
+            assertTrue(summary.contains("Fine"), summary)
+        }
+    }
+
+    /**
+     * Plenty of feeds write the summary as prose, and an HTML sanitiser turns
+     * its ampersands and quotes into entities. A summary is treated as markup
+     * only if it contains a `<`, which is the same rule the episode page uses
+     * -- so prose that happens to contain one, an address in angle brackets
+     * say, is sanitised and loses it. Feeds do that rarely enough that one rule
+     * shared with the page beats two that disagree.
+     */
+    @Test
+    fun `the api leaves a plain-text summary exactly as it is`() {
+        val prose = "Ben & Jerry's \"best\" episode: see https://x.test?a=1&b=2"
+        every { repository.getEpisodeById("abc") } returns minimalEpisode(summary = prose)
+
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        assertEquals(prose, fetched.episodeSummary)
+    }
+
+    /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */
+    @Test
+    fun `api search caps the page size`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10_000)
+
+        assertEquals(SearchResource.MAX_API_PAGE_SIZE, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api search coerces a nonsense page and page size up to one`() {
+        val captured = slot<SearchFilters>()
+        every { repository.search(capture(captured)) } returns emptySearchResult()
+
+        resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", -3, 0)
+
+        assertEquals(1, captured.captured.page)
+        assertEquals(1, captured.captured.pageSize)
+    }
+
+    @Test
+    fun `api episode returns the episode with its transcript`() {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode(transcript = "WEBVTT")
+
+        val response = resource.apiEpisode("ep1")
+
+        assertEquals(200, response.status)
+        assertEquals("WEBVTT", (response.entity as Episode).transcript)
+    }
+
+    @Test
+    fun `api episode returns 404 as json for an unknown id`() {
+        every { repository.getEpisodeById("nope") } returns null
+
+        val response = resource.apiEpisode("nope")
+
+        assertEquals(404, response.status)
+        assertEquals(MediaType.APPLICATION_JSON_TYPE, response.mediaType)
     }
 
     /**

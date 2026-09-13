@@ -1,7 +1,10 @@
 package com.rsstowhisper.web.models
 
+import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonInclude
 import org.owasp.html.PolicyFactory
 import org.owasp.html.Sanitizers
+import java.util.Locale
 
 data class Episode(
     val id: String,
@@ -20,7 +23,12 @@ data class Episode(
     val episodeDuration: Int?,
     val episodeRelativeAudioPath: String?,
     val allTags: String?,
+    // The API gets [snippetText] instead.
+    @get:JsonIgnore
     val snippet: String? = null,
+    // Absent from /api/search rather than null: the search payload leaves the
+    // transcript out, and null would say the episode has none.
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val transcript: String? = null,
 ) {
     // Computed properties — accessible from Thymeleaf as episode.formattedDuration etc.
@@ -31,13 +39,26 @@ data class Episode(
             ?.map(String::trim)
             ?.filter(String::isNotBlank)
             ?: emptyList()
+
+    @get:JsonIgnore
     val audioPath: String? get() = episodeRelativeAudioPath
 
     // The raw snippet is feed-controlled text (it spans episode_title and
     // podcast_title as well as the transcript) with sentinel highlight markers.
     // Escape it, then turn only the sentinels into <mark> -- so a feed cannot
     // smuggle markup through by containing a literal "<mark>".
+    @get:JsonIgnore
     val snippetHtml: String? get() = snippet?.let { renderSnippet(it) }
+
+    /**
+     * The matched passage as plain text, for the JSON API.
+     *
+     * The stored snippet marks its matches with two control characters, which
+     * have no business in a JSON payload, and the HTML form is markup a script
+     * would only have to strip again.
+     */
+    val snippetText: String?
+        get() = snippet?.replace(SNIPPET_MARK_START, "")?.replace(SNIPPET_MARK_END, "")
 }
 
 data class SearchResult(
@@ -90,6 +111,47 @@ data class FilterOptions(
     val years: List<String> = emptyList(),
 )
 
+/**
+ * What the whole corpus holds, including episodes whose feed supplied no
+ * podcast title -- they are real episodes, and [PodcastSummary] has no card to
+ * put them on.
+ */
+data class CorpusTotals(
+    val episodeCount: Int,
+    val totalDurationSeconds: Long,
+)
+
+/**
+ * One podcast's corner of the corpus, for the overview page.
+ *
+ * `podcast_title` is the join key everywhere -- there is no podcast id -- so it
+ * is both the identity here and what the link filters on.
+ */
+data class PodcastSummary(
+    val title: String,
+    val image: String?,
+    val episodeCount: Int,
+    val totalDurationSeconds: Long,
+    val earliestPublishedOn: String?,
+    val latestPublishedOn: String?,
+) {
+    /**
+     * Hours to one decimal: the totals run to thousands, where minutes are noise.
+     *
+     * Locale.ROOT, or a server in a comma-decimal locale renders "0,7 hours".
+     */
+    val totalHours: String get() = "%.1f".format(Locale.ROOT, totalDurationSeconds / 3600.0)
+
+    /** A single-episode show, or one whose episodes all share a date, reads better as one date. */
+    val dateRange: String?
+        get() =
+            when {
+                earliestPublishedOn == null || latestPublishedOn == null -> null
+                earliestPublishedOn == latestPublishedOn -> earliestPublishedOn
+                else -> "$earliestPublishedOn – $latestPublishedOn"
+            }
+}
+
 enum class DurationCategory(val label: String, val maxSeconds: Int?) {
     SHORT("Short (< 15 min)", 900),
     MEDIUM("Medium (15–45 min)", 2700),
@@ -103,6 +165,12 @@ data class TranscriptLine(
     val millis: Long,
     val text: String,
     val highlightedHtml: String? = null,
+    /**
+     * This cue's ordinal in the VTT, counting every cue -- not the line's index
+     * in this list, which [parseTranscript] skips blank cues from. The word
+     * sidecar keys on the whisper segment index, which counts them all.
+     */
+    val cueIndex: Int = 0,
 ) {
     val seconds: Double get() = millis / 1000.0
     val display: String get() = formatTimestamp(millis)
@@ -171,9 +239,9 @@ fun formatTimestamp(millis: Long): String {
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
     return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, seconds)
+        "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, seconds)
     } else {
-        "%d:%02d".format(minutes, seconds)
+        "%d:%02d".format(Locale.ROOT, minutes, seconds)
     }
 }
 
@@ -184,11 +252,12 @@ fun parseTranscript(transcript: String): List<TranscriptLine> {
 
     val result = mutableListOf<TranscriptLine>()
     var currentStartMs: Long? = null
+    var cueOrdinal = -1
     val currentText = StringBuilder()
 
     fun flush() {
         if (currentStartMs != null && currentText.isNotBlank()) {
-            result.add(TranscriptLine(currentStartMs!!, currentText.toString().trim()))
+            result.add(TranscriptLine(currentStartMs!!, currentText.toString().trim(), cueIndex = cueOrdinal))
         }
     }
 
@@ -198,6 +267,9 @@ fun parseTranscript(transcript: String): List<TranscriptLine> {
         when {
             timingMatch != null -> {
                 flush()
+                // Not result.size: a cue with blank text is dropped from the
+                // result but still advances the ordinal.
+                cueOrdinal++
                 val h = timingMatch.groupValues[1].toLong()
                 val m = timingMatch.groupValues[2].toLong()
                 val s = timingMatch.groupValues[3].toLong()

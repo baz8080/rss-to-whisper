@@ -1,5 +1,6 @@
 package com.rsstowhisper.web.models
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -332,6 +333,7 @@ class SearchModelsTest {
             snippet: String? = null,
             audioPath: String? = null,
             tags: String? = null,
+            transcript: String? = null,
         ) = Episode(
             id = "1",
             podcastTitle = null,
@@ -350,7 +352,21 @@ class SearchModelsTest {
             episodeRelativeAudioPath = audioPath,
             allTags = tags,
             snippet = snippet,
+            transcript = transcript,
         )
+
+        /**
+         * /api/search leaves the transcript out. Serialising it as null would
+         * say the episode has none, and a consumer trusting that would discard
+         * the whole corpus.
+         */
+        @Test
+        fun `the transcript field is absent rather than null when it was not loaded`() {
+            val mapper = ObjectMapper()
+
+            assertFalse(mapper.writeValueAsString(episode()).contains("transcript"))
+            assertTrue(mapper.writeValueAsString(episode(transcript = "WEBVTT\n")).contains("\"transcript\""))
+        }
 
         @Test
         fun `formattedDuration is null when episodeDuration is null`() = assertNull(episode().formattedDuration)
@@ -591,5 +607,34 @@ class SearchModelsTest {
     fun `a year filter counts as an active filter`() {
         assertTrue(SearchFilters(years = setOf("2024")).hasActiveFilters())
         assertFalse(SearchFilters().hasActiveFilters())
+    }
+
+    // --- cue ordinals (W6) ---
+
+    @Test
+    fun `cueIndex counts cues in order`() {
+        val vtt =
+            "WEBVTT\n\n" +
+                "00:00:00.000 --> 00:00:01.000\nFirst\n\n" +
+                "00:00:01.000 --> 00:00:02.000\nSecond\n\n" +
+                "00:00:02.000 --> 00:00:03.000\nThird\n"
+        assertEquals(listOf(0, 1, 2), parseTranscript(vtt).map { it.cueIndex })
+    }
+
+    /**
+     * The reason cueIndex exists: a cue with no text is dropped from the list
+     * but still counts as a whisper segment, so line index and cue ordinal
+     * diverge from that point on. The word sidecar keys on the ordinal.
+     */
+    @Test
+    fun `a blank cue still advances the ordinal`() {
+        val vtt =
+            "WEBVTT\n\n" +
+                "00:00:00.000 --> 00:00:01.000\nFirst\n\n" +
+                "00:00:01.000 --> 00:00:02.000\n\n" +
+                "00:00:02.000 --> 00:00:03.000\nThird\n"
+        val lines = parseTranscript(vtt)
+        assertEquals(listOf("First", "Third"), lines.map { it.text })
+        assertEquals(listOf(0, 2), lines.map { it.cueIndex })
     }
 }

@@ -24,15 +24,27 @@ import jakarta.ws.rs.Path
 import jakarta.ws.rs.PathParam
 import jakarta.ws.rs.Produces
 import jakarta.ws.rs.QueryParam
+import jakarta.ws.rs.core.CacheControl
+import jakarta.ws.rs.core.EntityTag
 import jakarta.ws.rs.core.MediaType
+import jakarta.ws.rs.core.Request
 import jakarta.ws.rs.core.Response
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
+import java.io.IOException
 import java.net.URI
+import java.nio.channels.Channels
+import java.nio.file.Files
+import java.nio.file.InvalidPathException
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.security.MessageDigest
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.HexFormat
 import java.util.Locale
+import java.util.Optional
 
 @Path("/")
 @ApplicationScoped
@@ -46,6 +58,18 @@ class SearchResource {
 
     @ConfigProperty(name = "app.audio.base-url", defaultValue = "/audio")
     lateinit var audioBaseUrl: String
+
+    /**
+     * The pipeline's data directory, so the word-timing sidecars can be served
+     * from beside the audio.
+     *
+     * Optional, and Optional rather than a defaulted String because SmallRye
+     * reads an empty default as no value at all and refuses to start. Absent
+     * means no access to that tree, and the feature stays hidden rather than
+     * half-working.
+     */
+    @ConfigProperty(name = "app.data.directory")
+    lateinit var dataDirectory: Optional<String>
 
     @GET
     @Produces(MediaType.TEXT_HTML)
@@ -137,6 +161,103 @@ class SearchResource {
         } else {
             templateEngine.process("search", ctx)
         }
+    }
+
+    /**
+     * The per-word timings written beside the audio, as gzipped NDJSON.
+     *
+     * Served here rather than fetched from the audio host: the path derives
+     * from a column already in hand, it needs no CORS grant on a server that
+     * only has to serve audio, and Content-Encoding lets the browser inflate it
+     * instead of the page carrying a decompressor.
+     */
+    @GET
+    @Path("/episode/{id}/words")
+    fun episodeWords(
+        @PathParam("id") id: String,
+        @jakarta.ws.rs.core.Context request: Request,
+    ): Response {
+        val wordsPath = wordsFileFor(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
+
+        // The pipeline clears the sidecar for the whole of a re-transcribe swap,
+        // so a read landing in that window has found the ordinary missing case
+        // rather than a fault worth a 500.
+        // Opened NOFOLLOW as well as checked: the check above and this read
+        // are separate syscalls, and a symlink swapped in between them would
+        // otherwise be followed by exactly the read the check exists to stop.
+        val bytes =
+            try {
+                Files.newByteChannel(wordsPath, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use {
+                    Channels.newInputStream(it).readAllBytes()
+                }
+            } catch (e: IOException) {
+                return Response.status(Response.Status.NOT_FOUND).build()
+            }
+
+        // Tagged from the bytes rather than from a stat taken before reading
+        // them: those describe different instants, and a tag naming a version
+        // the body is not would be pinned in the browser by the no-cache
+        // revalidation below for as long as the file then sat still.
+        val tag = entityTagFor(bytes)
+        request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
+
+        return Response.ok(bytes)
+            .type("application/x-ndjson")
+            // Gzip on disk, served as-is for the browser to inflate.
+            .header("Content-Encoding", "gzip")
+            // Revalidated rather than held: a re-transcribe rewrites this file
+            // and the cue ordinals it is keyed to together, and the page they
+            // must agree with is itself uncached.
+            .cacheControl(REVALIDATE)
+            .tag(tag)
+            .build()
+    }
+
+    /**
+     * Null unless word timings are configured and the configured tree is really
+     * there -- a path pointing nowhere hides the feature rather than offering
+     * it on every episode and then failing each one.
+     */
+    private fun dataRoot(): java.nio.file.Path? =
+        dataDirectory.orElse("").takeIf { it.isNotBlank() }
+            ?.let { java.nio.file.Path.of(it).toAbsolutePath().normalize() }
+            ?.takeIf { Files.isDirectory(it) }
+
+    private fun wordsFileFor(id: String): java.nio.file.Path? {
+        val root = dataRoot() ?: return null
+        val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
+
+        // The root is resolved for real, so a data directory that is itself a
+        // symlink still matches what gets built from it. The episode path is
+        // only normalised, which is what stops a database value walking out of
+        // the tree with "..". Directory symlinks below the root are followed:
+        // they are the operator's own layout -- a library spread across disks
+        // links its show directories elsewhere -- and refusing them would cost
+        // those episodes the feature to guard a tree the operator already owns.
+        val realRoot =
+            try {
+                root.toRealPath()
+            } catch (e: IOException) {
+                return null
+            }
+
+        val wordsPath =
+            try {
+                val audioPath = realRoot.resolve(relative).normalize()
+                (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
+            } catch (e: InvalidPathException) {
+                return null
+            }
+        // Checked on the file that gets opened rather than on the audio path a
+        // level below it: an empty or "." value resolves to the root itself,
+        // and its parent is outside the tree.
+        if (!wordsPath.startsWith(realRoot)) return null
+
+        // The leaf is not followed. A directory symlink is the layout this is
+        // meant to allow; a symlink named words.jsonl.gz is the one thing an
+        // attacker with a foothold in the tree would plant, and following it
+        // buys the layout nothing.
+        return wordsPath.takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
     }
 
     /** The same search as `/search`, for use from a shell or a notebook. */
@@ -257,12 +378,39 @@ class SearchResource {
                 setVariable("linkifiedSummary", linkifiedSummary)
                 setVariable("query", query.trim())
                 setVariable("matchCount", transcriptLines.count { it.matched })
+                // Not stat'ed here: whether this episode has a sidecar is
+                // settled by the fetch, which falls back silently on a 404.
+                setVariable("wordsUrl", if (dataRoot() == null) null else "/episode/$id/words")
             }
 
         return Response.ok(templateEngine.process("episode", ctx), MediaType.TEXT_HTML).build()
     }
 
     companion object {
+        /** Written by the pipeline beside each episode's audio. */
+        internal const val WORDS_FILENAME = "words.jsonl.gz"
+
+        /**
+         * Strong, and taken over the bytes themselves so it cannot outrun them.
+         * The sidecar is tens of kilobytes; digesting it costs nothing worth
+         * trading correctness for.
+         */
+        private fun entityTagFor(bytes: ByteArray): EntityTag =
+            EntityTag(
+                HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)).substring(0, 32),
+            )
+
+        /**
+         * no-transform is CacheControl's default and is kept deliberately: the
+         * body is already gzip, and an intermediary re-encoding it would leave
+         * the browser inflating something twice.
+         */
+        private val REVALIDATE: CacheControl =
+            CacheControl().apply {
+                isNoCache = true
+                isNoTransform = true
+            }
+
         /**
          * The transcript is not in the search payload, but an unbounded page
          * size would still let one request read the whole corpus.

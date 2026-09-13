@@ -112,12 +112,22 @@
 
     <!-- Transcript — parsed into timestamped lines by SearchResource -->
     <div th:if="${not transcriptLines.isEmpty()}">
-        <h3>Transcript</h3>
+        <div class="transcript-header">
+            <h3>Transcript</h3>
+            <!--/* Unhidden by script, and only when word timings are configured. */-->
+            <div class="word-controls" id="word-controls" hidden="hidden">
+                <label id="word-controls-label" title="Fade the words whisper was least sure of">
+                    <input type="checkbox" id="dim-toggle"/>
+                    <small id="word-controls-caption">Mark low confidence</small>
+                </label>
+            </div>
+        </div>
         <div class="transcript" id="transcript">
             <div class="transcript-line"
                  th:each="line : ${transcriptLines}"
                  th:classappend="${line.matched} ? 'match'"
-                 th:data-start-ms="${line.millis}">
+                 th:data-start-ms="${line.millis}"
+                 th:data-cue="${line.cueIndex}">
                 <span class="transcript-time"
                       th:onclick="'seekAudio(' + ${line.seconds} + ')'"
                       th:title="'Play from ' + ${line.display} + ' and link to it'"
@@ -283,9 +293,258 @@
             }
         }
 
+        // Word timings. words.jsonl.gz is roughly 60 KB per episode, so it is
+        // never fetched on page load: the first play pulls it, and so does
+        // ticking the confidence toggle.
+
+        const wordsUrl = [[${wordsUrl}]];
+        const wordControls = document.getElementById('word-controls');
+        const transcriptEl = document.getElementById('transcript');
+        const dimToggle = document.getElementById('dim-toggle');
+
+        // Whisper's own probability for the word. Below this it was guessing.
+        const LOW_CONFIDENCE = 0.4;
+
+        const NO_TIMINGS = 'No word timings';
+        const NO_TIMINGS_WHY = 'This episode was transcribed before word timings existed';
+        const OUT_OF_DATE = 'Word timings out of date';
+        const OUT_OF_DATE_WHY = 'They do not line up with this transcript';
+
+        let wordsByCue = null;
+        let wordSpans = [];      // every rendered word, in time order
+        let currentWord = null;
+        let wordsRequested = false;
+
+        async function loadWords() {
+            if (wordsRequested) return wordsByCue;
+            wordsRequested = true;
+            if (!wordsUrl) return null;
+            let text;
+            try {
+                const response = await fetch(wordsUrl);
+                if (response.status === 404) return disableWords(NO_TIMINGS, NO_TIMINGS_WHY);
+                if (!response.ok) {
+                    // The server having a bad day, not an episode without a
+                    // sidecar. Say nothing and let the next attempt try again.
+                    wordsRequested = false;
+                    return null;
+                }
+                text = await response.text();
+            } catch (e) {
+                wordsRequested = false;
+                return null;
+            }
+            wordsByCue = new Map();
+            for (const row of text.split('\n')) {
+                if (!row) continue;
+                let word;
+                try { word = JSON.parse(row); } catch (e) { continue; }
+                if (!wordsByCue.has(word.seg)) wordsByCue.set(word.seg, []);
+                wordsByCue.get(word.seg).push(word);
+            }
+            if (wordsByCue.size === 0) return disableWords(NO_TIMINGS, NO_TIMINGS_WHY);
+
+            // Asked of the whole sidecar before a line of the transcript is
+            // touched: one cue in common, by ordinal or by coincidence, is not
+            // agreement, and if the file belongs to another decode then none of
+            // its timings belong to this page.
+            if (!sidecarFitsTranscript()) {
+                return disableWords(OUT_OF_DATE, OUT_OF_DATE_WHY);
+            }
+
+            // Nothing split, and the sidecar is this transcript's, so say
+            // which of the two reasons it was: whisper timed no line of it
+            // completely, or every line the query matched keeps its <mark> and
+            // is left whole. Either way the toggle stays live.
+            const short = renderWords();
+            if (wordSpans.length === 0) {
+                return short > 0
+                    ? say('Word timings incomplete', 'Whisper did not time every word in this episode')
+                    : say('Hidden on matched lines', 'Clear the query to see word timings');
+            }
+
+            // The reader may already be somewhere: play was pressed before this
+            // arrived, or a #t= link armed the player without starting it.
+            highlightWordAt(currentPosition());
+            return wordsByCue;
+        }
+
+        function say(caption, title) {
+            const el = document.getElementById('word-controls-caption');
+            if (el) el.textContent = caption;
+            const label = document.getElementById('word-controls-label');
+            if (label) label.title = title;
+            return wordsByCue;
+        }
+
+        // Said plainly, because a silent no-op leaves an episode whose words
+        // cannot be shown looking exactly like one whisper was sure of.
+        function disableWords(caption, title) {
+            if (dimToggle) {
+                dimToggle.checked = false;
+                dimToggle.disabled = true;
+            }
+            // The toggle is about to be unreachable, so it cannot be left on.
+            if (transcriptEl) transcriptEl.classList.remove('dim-low-confidence');
+            say(caption, title);
+            return null;
+        }
+
+        const collapse = s => s.replace(/\s+/g, ' ').trim();
+        // Whitespace dropped entirely: whisper's word array is built from
+        // tokens, and whether one entry is a whole word is the server's
+        // business, not something to condemn a sidecar over.
+        const letters = s => s.replace(/\s/g, '');
+
+        /**
+         * Every cue the sidecar has words for is a cue those words could have
+         * come from. Short of a few is fine -- the pipeline drops a word whose
+         * timings whisper omitted -- but text the line never had means the file
+         * was written against a different decode of this episode.
+         *
+         * Erring towards accepting: what actually reaches the transcript is
+         * gated on an exact rebuild anyway, so being wrong here only costs a
+         * message, and wrongly condemning a good sidecar costs the feature.
+         */
+        function sidecarFitsTranscript() {
+            for (const lineEl of lineEls) {
+                if (lineEl.classList.contains('match')) continue;
+                const words = wordsByCue.get(+lineEl.dataset.cue);
+                if (!words || words.length === 0) continue;
+                const textEl = lineEl.querySelector('.transcript-text');
+                if (!textEl) continue;
+                if (!isSubsequence(letters(words.map(w => w.w).join('')), letters(textEl.textContent))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function isSubsequence(needle, haystack) {
+            let at = 0;
+            for (const ch of needle) {
+                while (at < haystack.length && haystack[at] !== ch) at++;
+                if (at === haystack.length) return false;
+                at++;
+            }
+            return true;
+        }
+
+        // Returns the number of lines whose words were this line's but could
+        // not rebuild it, so the caller can tell an incomplete sidecar from a
+        // query that hid every line.
+        function renderWords() {
+            let short = 0;
+            for (const lineEl of lineEls) {
+                // A matched line is already marked up with <mark>; rewriting it
+                // per word would throw those highlights away.
+                if (lineEl.classList.contains('match')) continue;
+                const words = wordsByCue.get(+lineEl.dataset.cue);
+                if (!words || words.length === 0) continue;
+                const textEl = lineEl.querySelector('.transcript-text');
+                if (!textEl) continue;
+
+                // Split only when the words rebuild the line exactly. The
+                // sidecar as a whole has been vouched for by now, but a cue
+                // whose words were dropped would still come out a word short,
+                // and the transcript is what the reader came for.
+                if (collapse(words.map(w => w.w).join('')) !== collapse(textEl.textContent)) {
+                    short++;
+                    continue;
+                }
+
+                textEl.textContent = '';
+                for (const word of words) {
+                    const span = document.createElement('span');
+                    span.textContent = word.w;
+                    span.className = word.p < LOW_CONFIDENCE ? 'word low-confidence' : 'word';
+                    span.dataset.start = word.s;
+                    textEl.appendChild(span);
+                    wordSpans.push({start: word.s, end: word.e, seg: word.seg, el: span});
+                }
+            }
+            wordSpans.sort((a, b) => a.start - b.start);
+            // whisper sometimes gives a word an end at or before its start --
+            // the pipeline clamps the inversion away rather than inventing a
+            // duration -- which the hold below would read as a word already
+            // over. Such a word runs until the next one instead.
+            for (let i = 0; i < wordSpans.length; i++) {
+                const w = wordSpans[i];
+                if (!(w.end > w.start)) {
+                    // Only within the cue: the next entry in this flat array is
+                    // the next cue's first word, and borrowing its start would
+                    // hold a cue-final word lit across the silence between them.
+                    const next = wordSpans[i + 1];
+                    w.end = (next && next.seg === w.seg) ? next.start : w.start;
+                }
+            }
+            return short;
+        }
+
+        // Binary search: last word whose start is at or before now.
+        function findWordAt(seconds) {
+            let lo = 0, hi = wordSpans.length - 1, result = null;
+            while (lo <= hi) {
+                const mid = (lo + hi) >>> 1;
+                if (wordSpans[mid].start <= seconds) {
+                    result = wordSpans[mid];
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return result;
+        }
+
+        // Whisper's end times are tight, so a word is held a little past its own
+        // end rather than blinking out in the gaps between words. Past that the
+        // audio has left the transcript: a silence, the closing music, the end.
+        const WORD_HOLD = 0.5;
+
+        function highlightWordAt(seconds) {
+            if (wordSpans.length === 0) return;
+            const found = findWordAt(seconds);
+            let word = found ? found.el : null;
+            if (found && seconds > found.end + WORD_HOLD) word = null;
+            // A matched line keeps its <mark> and is never split, so the search
+            // reaches back past it to the last word before. Better no word than
+            // one glowing on a line the reader has already left.
+            if (word && activeLine && word.closest('.transcript-line') !== activeLine) word = null;
+            if (word === currentWord) return;
+            if (currentWord) currentWord.classList.remove('current-word');
+            if (word) word.classList.add('current-word');
+            currentWord = word;
+        }
+
+        if (audioEl) {
+            audioEl.addEventListener('play', loadWords);
+            audioEl.addEventListener('timeupdate', function () {
+                if (audioEl.readyState === 0) return;
+                highlightWordAt(audioEl.currentTime);
+            });
+        }
+
+        if (dimToggle) {
+            dimToggle.addEventListener('change', async function () {
+                await loadWords();
+                transcriptEl.classList.toggle('dim-low-confidence', dimToggle.checked);
+            });
+        }
+
+        // The toggle is the only way in for a reader who never presses play, so
+        // it has to be reachable before the words are fetched.
+        if (wordsUrl && wordControls) wordControls.hidden = false;
+
         document.addEventListener('keydown', function (e) {
-            const tag = document.activeElement.tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            const active = document.activeElement;
+            const tag = active.tagName;
+            // Only text entry swallows the shortcuts. The confidence checkbox is
+            // the transcript's one focusable control, and a reader who ticks it
+            // should not lose n, p and the arrows until they click elsewhere.
+            const typing =
+                tag === 'TEXTAREA' || tag === 'SELECT' ||
+                (tag === 'INPUT' && !['checkbox', 'radio', 'button'].includes(active.type));
+            if (typing) return;
             // Ctrl+P is print and Alt+Left is back; the browser keeps those.
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (e.key === 'n' && matchEls.length > 0) {
@@ -298,7 +557,13 @@
                 return;
             }
             if (!audioEl) return;
+            // The player's own controls handle space and the arrows in their
+            // shadow tree, where preventDefault here does not reach. Acting as
+            // well would toggle it twice, or seek twice on one press.
+            if (tag === 'AUDIO') return;
             if (e.key === ' ') {
+                // Space belongs to a focused checkbox.
+                if (tag === 'INPUT') return;
                 e.preventDefault();
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {

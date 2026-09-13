@@ -73,6 +73,17 @@ CREATE TABLE IF NOT EXISTS skipped_sources (
 )
 """
 
+# Written in the same commit as the FTS rebuild. Creating episodes_fts is DDL
+# and commits on its own, so an interrupt between the two leaves the table
+# there and empty -- and every later run would see a database that looks
+# complete and report an index with nothing in it as up to date.
+SCHEMA_META = """
+CREATE TABLE IF NOT EXISTS index_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT
+)
+"""
+
 # FTS indexes episode_transcript_plain (VTT timing lines stripped) rather than
 # episode_transcript (raw VTT), so searches never match on timestamps.
 SCHEMA_FTS = """
@@ -161,7 +172,11 @@ def disambiguate_ids(records):
         if len(group) == 1:
             continue
         clashes += 1
-        group.sort(key=lambda e: e["episode_relative_audio_path"] or "")
+        # source_path breaks a tie the audio path cannot: both are NULL often
+        # enough, and a stable sort would otherwise settle it on the order the
+        # records happened to be assembled in, which differs between an
+        # incremental run and a rebuild. The id is a URL.
+        group.sort(key=lambda e: (e["episode_relative_audio_path"] or "", e["source_path"]))
         print(f"  WARNING: {len(group)} episodes share _id {episode_id}:", file=sys.stderr)
         for n, record in enumerate(group, start=1):
             if n > 1:
@@ -204,25 +219,34 @@ def scan_sources(data_dir):
 
 
 def read_episode(data_dir, source_path, stamp):
-    """The row a transcript.json becomes, or None having said why."""
+    """The row a transcript.json becomes, paired with how it went.
+
+    ("error", None) is a file that could not be read this time, which is not
+    the same as one that cannot be indexed: a share that blinks must not cost
+    an episode its row, and must not be remembered as skipped either, or it
+    would never be looked at again.
+    """
     json_path = os.path.join(data_dir, source_path)
     try:
         with open(json_path, "r") as f:
             episode = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        print(f"  WARNING: Failed to read {json_path}: {e}", file=sys.stderr)
-        return None
+    except OSError as e:
+        print(f"  WARNING: Could not read {json_path}, leaving it as it was: {e}", file=sys.stderr)
+        return "error", None
+    except json.JSONDecodeError as e:
+        print(f"  WARNING: Skipping {json_path}, it is not valid JSON: {e}", file=sys.stderr)
+        return "skip", None
 
     transcript = episode.get("episode_transcript")
     if not transcript:
-        return None
+        return "skip", None
 
     episode_id = episode.get("_id")
     if not episode_id:
         print(f"  WARNING: Skipping {json_path}: missing _id", file=sys.stderr)
-        return None
+        return "skip", None
 
-    return {
+    return "ok", {
         "podcast_title": episode.get("podcast_title"),
         "podcast_link": episode.get("podcast_link"),
         "podcast_language": episode.get("podcast_language"),
@@ -283,7 +307,10 @@ def schema_is_current(conn):
         row[0]
         for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
     }
-    if not {"episodes", "episodes_fts", "skipped_sources"} <= tables:
+    if not {"episodes", "episodes_fts", "skipped_sources", "index_meta"} <= tables:
+        return False
+    built = conn.execute("SELECT value FROM index_meta WHERE key = 'fts_built'").fetchone()
+    if built is None:
         return False
     columns = {row[1] for row in conn.execute("PRAGMA table_info(episodes)")}
     return {"source_path", "source_mtime", "source_size", "source_id"} <= columns
@@ -345,18 +372,20 @@ def run_incremental(conn, data_dir, sources):
 
     print(f"{len(fresh)} new, {len(touched)} changed, {len(gone)} removed")
 
-    records, unreadable = [], []
+    records, unindexable = [], []
     for source_path in sorted(fresh | touched):
-        record = read_episode(data_dir, source_path, sources[source_path])
-        if record is None:
-            unreadable.append(source_path)
-        else:
+        status, record = read_episode(data_dir, source_path, sources[source_path])
+        if status == "ok":
             records.append(record)
+        elif status == "skip":
+            unindexable.append(source_path)
+        # "error" is left entirely alone: no row dropped, no stamp written, so
+        # the next run finds it unchanged-but-untracked and tries again.
 
     # A file that has stopped being indexable -- unreadable now, or its
     # transcript gone -- would otherwise leave its old row behind for good.
     read = {r["source_path"] for r in records}
-    drop = (gone & set(stored)) | {p for p in unreadable if p in stored}
+    drop = (gone & set(stored)) | {p for p in unindexable if p in stored}
     forget = (gone & set(skipped)) | (read & set(skipped))
 
     # The files that are not being read still take part in deciding ids, so a
@@ -373,9 +402,10 @@ def run_incremental(conn, data_dir, sources):
     disambiguate_ids(records + stubs)
 
     affected = len(records) + len(drop)
-    bulk = bool(stored) and affected > len(stored) * FTS_REBUILD_SHARE
+    bulk = affected > len(stored) * FTS_REBUILD_SHARE
     if bulk:
-        print(f"  Rebuilding the FTS index: {affected} of {len(stored)} rows are affected")
+        of_what = f" of {len(stored)}" if stored else ""
+        print(f"  Rebuilding the FTS index: {affected}{of_what} rows are affected")
 
     with conn:
         # Every id that is about to move goes somewhere unique first: a clash
@@ -422,7 +452,7 @@ def run_incremental(conn, data_dir, sources):
 
         for source_path in sorted(forget):
             conn.execute("DELETE FROM skipped_sources WHERE source_path = ?", (source_path,))
-        for source_path in unreadable:
+        for source_path in unindexable:
             conn.execute(
                 "INSERT OR REPLACE INTO skipped_sources(source_path, source_mtime, source_size) "
                 "VALUES (?, ?, ?)",
@@ -442,11 +472,11 @@ def run_full(conn, data_dir, sources, db_path):
     # the transcript.json files carry an _id).
     episodes, skipped = [], []
     for source_path in sorted(sources):
-        record = read_episode(data_dir, source_path, sources[source_path])
-        if record is None:
-            skipped.append(source_path)
-        else:
+        status, record = read_episode(data_dir, source_path, sources[source_path])
+        if status == "ok":
             episodes.append(record)
+        elif status == "skip":
+            skipped.append(source_path)
     print(f"Found {len(episodes)} episodes to index")
     disambiguate_ids(episodes)
 
@@ -482,8 +512,10 @@ def run_full(conn, data_dir, sources, db_path):
             sys.exit(1)
     conn.execute("DROP TABLE IF EXISTS episodes")
     conn.execute("DROP TABLE IF EXISTS skipped_sources")
+    conn.execute("DROP TABLE IF EXISTS index_meta")
     conn.execute(SCHEMA_EPISODES)
     conn.execute(SCHEMA_SKIPPED)
+    conn.execute(SCHEMA_META)
     conn.executemany(
         "INSERT OR REPLACE INTO skipped_sources(source_path, source_mtime, source_size) VALUES (?, ?, ?)",
         [(p, *sources[p]) for p in skipped],
@@ -512,6 +544,9 @@ def run_full(conn, data_dir, sources, db_path):
     print("Building FTS index...")
     conn.execute(SCHEMA_FTS)
     conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
+    # With the rebuild, not after it: the marker is what says the index in this
+    # database was actually filled.
+    conn.execute("INSERT OR REPLACE INTO index_meta(key, value) VALUES ('fts_built', '1')")
     conn.commit()
     print(f"  FTS build: {time.time() - t0:.1f}s")
     print("Done")

@@ -199,9 +199,23 @@ data class QualityReport(
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {
+            // Ahead of the count because an empty decode trips exactly one
+            // flag, so on count alone it beats any decode bad enough to trip
+            // two. A poor transcript is worth more than none, and on the orphan
+            // path none is permanent.
+            hasSpeech != other.hasSpeech -> hasSpeech
             flags.size != other.flags.size -> flags.size < other.flags.size
             else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
+
+    /**
+     * Both, because the flag is only as good as whoever wrote the report:
+     * [fromMap] reads `episode_quality` off disk, and a file from another
+     * version need not have flagged what current code flags. `wordCount == 0`
+     * is the condition that raises the flag, so for a report this code scored
+     * the two always agree.
+     */
+    private val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
 
     val summary: String
         get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"

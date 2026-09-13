@@ -3,6 +3,7 @@ package com.rsstowhisper.web.db
 import com.rsstowhisper.web.models.SNIPPET_MARK_END
 import com.rsstowhisper.web.models.SNIPPET_MARK_START
 import com.rsstowhisper.web.models.SearchFilters
+import com.rsstowhisper.web.models.SortOrder
 import com.rsstowhisper.web.models.renderSnippet
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -31,6 +32,9 @@ class EpisodeRepositoryTest {
     @BeforeEach
     fun setUp() {
         val dbPath = tempDir.resolve("test.db").toAbsolutePath().toString()
+        // Asked for by name: a @QuarkusTest elsewhere in this module swaps the
+        // classloader, and DriverManager's own discovery does not survive it.
+        Class.forName("org.sqlite.JDBC")
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
             createSchema(conn)
             insertFixtures(conn)
@@ -103,7 +107,9 @@ class EpisodeRepositoryTest {
             id = "ep3",
             podcastTitle = "Podcast B",
             episodeTitle = "Physics Trailer",
-            publishedOn = "2024-01-02",
+            // A different year from the rest, so the year filter and the date
+            // sorts have something to distinguish.
+            publishedOn = "2023-01-02",
             duration = 3600,
             collections = "science",
             tags = "physics",
@@ -128,9 +134,9 @@ class EpisodeRepositoryTest {
     private fun insert(
         conn: Connection,
         id: String,
-        podcastTitle: String,
+        podcastTitle: String?,
         episodeTitle: String,
-        publishedOn: String,
+        publishedOn: String?,
         duration: Int?,
         collections: String?,
         tags: String?,
@@ -167,7 +173,7 @@ class EpisodeRepositoryTest {
         fun `no query returns all episodes ordered by published date descending`() {
             val result = repo.search(SearchFilters())
             assertEquals(4, result.totalCount)
-            assertEquals(listOf("ep4", "ep2", "ep3", "ep1"), result.episodes.map { it.id })
+            assertEquals(listOf("ep4", "ep2", "ep1", "ep3"), result.episodes.map { it.id })
         }
 
         @Test
@@ -361,6 +367,96 @@ class EpisodeRepositoryTest {
         }
 
         @Nested
+        inner class SortAndYear {
+            @Test
+            fun `newest first orders by publication date descending`() {
+                val result = repo.search(SearchFilters(sort = SortOrder.NEWEST))
+                assertEquals(listOf("ep4", "ep2", "ep1", "ep3"), result.episodes.map { it.id })
+            }
+
+            @Test
+            fun `oldest first reverses it`() {
+                val result = repo.search(SearchFilters(sort = SortOrder.OLDEST))
+                assertEquals(listOf("ep3", "ep1", "ep2", "ep4"), result.episodes.map { it.id })
+            }
+
+            /** Every row scores the same without a query, so relevance means newest. */
+            @Test
+            fun `relevance without a query falls back to newest`() {
+                val relevance = repo.search(SearchFilters(sort = SortOrder.RELEVANCE)).episodes.map { it.id }
+                val newest = repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.map { it.id }
+                assertEquals(newest, relevance)
+            }
+
+            @Test
+            fun `a date sort still applies with a query`() {
+                val result = repo.search(SearchFilters(query = "programming", sort = SortOrder.OLDEST))
+                assertEquals(listOf("ep1", "ep2"), result.episodes.map { it.id })
+                assertEquals(2, result.totalCount)
+            }
+
+            /**
+             * A feed item with no pubDate is written with a null date, and
+             * SQLite sorts NULLs first under ASC -- so an episode of unknown age
+             * would head the oldest-first list. DESC already puts them last.
+             */
+            @Test
+            fun `an episode with no date sorts last either way`() {
+                DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                    insert(
+                        conn,
+                        id = "undated",
+                        podcastTitle = "Podcast A",
+                        episodeTitle = "No Date",
+                        publishedOn = null,
+                        duration = 100,
+                        collections = null,
+                        tags = null,
+                        type = null,
+                        transcriptPlain = "no date at all",
+                    )
+                }
+
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.OLDEST)).episodes.last().id)
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.last().id)
+            }
+
+            @Test
+            fun `the year filter restricts to that year`() {
+                val result = repo.search(SearchFilters(years = setOf("2023")))
+                assertEquals(listOf("ep3"), result.episodes.map { it.id })
+                assertEquals(1, result.totalCount)
+            }
+
+            @Test
+            fun `several years are combined`() {
+                val result = repo.search(SearchFilters(years = setOf("2023", "2024")))
+                assertEquals(4, result.totalCount)
+            }
+
+            @Test
+            fun `a year with no episodes returns nothing`() {
+                assertEquals(0, repo.search(SearchFilters(years = setOf("1999"))).totalCount)
+            }
+
+            @Test
+            fun `the year filter combines with a query`() {
+                val result = repo.search(SearchFilters(query = "programming", years = setOf("2024")))
+                assertEquals(2, result.totalCount)
+            }
+
+            @Test
+            fun `filter options list the years present, newest first`() {
+                assertEquals(listOf("2024", "2023"), repo.getFilterOptions("").years)
+            }
+
+            @Test
+            fun `filter options narrow the years to those matching the query`() {
+                assertEquals(listOf("2023"), repo.getFilterOptions("quantum").years)
+            }
+        }
+
+        @Nested
         inner class Pagination {
             @Test
             fun `first page returns up to pageSize results`() {
@@ -383,6 +479,93 @@ class EpisodeRepositoryTest {
                 assertTrue(result.episodes.isEmpty())
                 assertEquals(4, result.totalCount)
             }
+        }
+    }
+
+    /**
+     * page comes off a query string, and /api/search bounds pageSize but not
+     * page. As an Int the offset wrapped negative, which SQLite clamps to 0 --
+     * so a huge page number returned page one's rows under its own number.
+     */
+    @Test
+    fun `a page number too large to be an offset returns nothing, not page one`() {
+        val firstPage = repo.search(SearchFilters(page = 1, pageSize = 100)).episodes.map { it.id }
+        val absurd = repo.search(SearchFilters(page = 30_000_000, pageSize = 100)).episodes.map { it.id }
+
+        assertTrue(firstPage.isNotEmpty(), "control: page one has rows")
+        assertEquals(emptyList<String>(), absurd)
+    }
+
+    @Nested
+    inner class PodcastSummaries {
+        @Test
+        fun `one row per podcast, ordered by title`() {
+            val summaries = repo.getPodcastSummaries()
+            assertEquals(listOf("Podcast A", "Podcast B"), summaries.map { it.title })
+        }
+
+        /**
+         * The search page renders a null podcast_title as "Unknown Podcast", so
+         * such episodes exist -- and GROUP BY podcast_title leaves them off the
+         * cards. The corpus header must still count them.
+         */
+        @Test
+        fun `corpus totals include an episode with no podcast title`() {
+            DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                insert(
+                    conn,
+                    id = "untitled",
+                    podcastTitle = null,
+                    episodeTitle = "No Podcast",
+                    publishedOn = "2024-02-02",
+                    duration = 3600,
+                    collections = null,
+                    tags = null,
+                    type = null,
+                    transcriptPlain = "orphaned from its feed",
+                )
+            }
+
+            val fromCards = repo.getPodcastSummaries().sumOf { it.episodeCount }
+            val totals = repo.getCorpusTotals()
+
+            assertEquals(4, fromCards, "the untitled episode has no card")
+            assertEquals(5, totals.episodeCount)
+            assertEquals(3600L, totals.totalDurationSeconds - repo.getPodcastSummaries().sumOf { it.totalDurationSeconds })
+        }
+
+        @Test
+        fun `counts and durations are summed per podcast`() {
+            val a = repo.getPodcastSummaries().single { it.title == "Podcast A" }
+            assertEquals(2, a.episodeCount)
+            assertEquals(2400L, a.totalDurationSeconds) // 600 + 1800
+            assertEquals("0.7", a.totalHours)
+        }
+
+        /** ep4 has no duration; it must still count as an episode. */
+        @Test
+        fun `an episode with no duration contributes zero rather than nulling the sum`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals(2, b.episodeCount)
+            assertEquals(3600L, b.totalDurationSeconds)
+        }
+
+        @Test
+        fun `the date range spans the earliest and latest episode`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals("2023-01-02", b.earliestPublishedOn)
+            assertEquals("2024-01-04", b.latestPublishedOn)
+            assertEquals("2023-01-02 – 2024-01-04", b.dateRange)
+        }
+
+        @Test
+        fun `the summaries are cached between calls`() {
+            assertSame(repo.getPodcastSummaries(), repo.getPodcastSummaries())
+        }
+
+        @Test
+        fun `the index build time comes from the database file`() {
+            assertNotNull(repo.indexBuiltAt())
         }
     }
 

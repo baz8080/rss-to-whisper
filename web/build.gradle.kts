@@ -18,6 +18,9 @@ dependencies {
     implementation("io.quarkus:quarkus-arc")
     // quarkus-resteasy-reactive was renamed to quarkus-rest in Quarkus 3.9+
     implementation("io.quarkus:quarkus-rest")
+    // JSON serialisation for /api/*. quarkus-rest alone has no body writer for
+    // anything but text, so without this the API routes return 500.
+    implementation("io.quarkus:quarkus-rest-jackson")
 
     // Thymeleaf — no official Quarkiverse extension exists; used as a plain
     // library with a hand-rolled CDI producer (see TemplateEngineProducer.kt).
@@ -31,5 +34,8 @@ dependencies {
     implementation("com.googlecode.owasp-java-html-sanitizer:owasp-java-html-sanitizer:20240325.1")
 
     testImplementation("io.quarkus:quarkus-junit5")
+    // Exercises /episode/{id}/words over HTTP: @Context injection, the gzip
+    // headers and the 304 only exist above the method boundary.
+    testImplementation("io.rest-assured:rest-assured")
     testImplementation("io.mockk:mockk:1.13.12")
 }

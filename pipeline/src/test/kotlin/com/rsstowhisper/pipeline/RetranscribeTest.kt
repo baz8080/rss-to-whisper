@@ -23,16 +23,22 @@ class RetranscribeTest {
                 .toTypedArray(),
         )
 
-    /** The shape [TranscriptQuality] writes, which is what a re-decode is measured against. */
+    /**
+     * The shape [TranscriptQuality] writes, which is what a re-decode is measured
+     * against -- `word_count` included, since every report it writes has one and a
+     * stored report without it reads back as having produced no speech.
+     */
     private fun qualityMap(
         flags: List<String>,
         punctuation: Double,
         meanWordProbability: Double? = null,
+        wordCount: Int = 160,
     ): Map<String, Any?> =
         mapOf(
             "flags" to flags,
             "punctuation_per_word" to punctuation,
             "mean_word_probability" to meanWordProbability,
+            "word_count" to wordCount,
         )
 
     private fun healthyJson(): String =

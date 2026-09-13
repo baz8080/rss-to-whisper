@@ -182,6 +182,39 @@ class TranscriptQualityTest {
         assertTrue(looping.isBetterThan(empty))
     }
 
+    /** One flag is all an empty decode can trip, so on count it beats two. */
+    @Test
+    fun `an empty decode never beats a real one, however badly the real one scored`() {
+        val empty = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))
+        val awful = TranscriptQuality.score(transcription(List(20) { " and that is the thing about it really" }))
+
+        assertEquals(
+            listOf(TranscriptQuality.FLAG_UNPUNCTUATED, TranscriptQuality.FLAG_REPETITION_LOOP),
+            awful.flags,
+            "control: the bad decode should trip more flags than the empty one",
+        )
+        assertEquals(listOf(TranscriptQuality.FLAG_NO_SPEECH), empty.flags)
+        assertFalse(empty.isBetterThan(awful))
+        assertTrue(awful.isBetterThan(empty))
+    }
+
+    /**
+     * A stored report is only as good as the version that wrote it, and this
+     * one says it has no words while flagging nothing -- which on flag count
+     * alone would keep a blank transcript over a real re-decode for good.
+     */
+    @Test
+    fun `a stored report with no words loses even when it flagged nothing`() {
+        val storedBlank =
+            QualityReport.fromMap(
+                mapOf("word_count" to 0, "flags" to emptyList<String>()),
+            )!!
+        val awful = TranscriptQuality.score(transcription(List(20) { " and that is the thing about it really" }))
+
+        assertFalse(storedBlank.isBetterThan(awful))
+        assertTrue(awful.isBetterThan(storedBlank))
+    }
+
     @Test
     fun `fewer flags wins, and punctuation breaks the tie`() {
         val clean = TranscriptQuality.score(healthy())

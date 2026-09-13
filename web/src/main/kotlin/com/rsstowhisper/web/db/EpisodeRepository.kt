@@ -1,10 +1,13 @@
 package com.rsstowhisper.web.db
 
+import com.rsstowhisper.web.models.CorpusTotals
 import com.rsstowhisper.web.models.DurationCategory
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
+import com.rsstowhisper.web.models.PodcastSummary
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
+import com.rsstowhisper.web.models.SortOrder
 import jakarta.annotation.PostConstruct
 import jakarta.annotation.PreDestroy
 import jakarta.enterprise.context.ApplicationScoped
@@ -27,6 +30,14 @@ class EpisodeRepository {
     private var cachedFilterQuery: String? = null
     private var cachedFilterOptions: FilterOptions? = null
     private var cachedFilterAtMillis: Long = 0
+
+    // Same single-entry, short-TTL shape as the filter cache above, and for the
+    // same reason: this one scans the whole episodes table.
+    private var cachedSummaries: List<PodcastSummary>? = null
+    private var cachedSummariesAtMillis: Long = 0
+
+    private var cachedTotals: CorpusTotals? = null
+    private var cachedTotalsAtMillis: Long = 0
 
     @PostConstruct
     fun init() {
@@ -59,6 +70,7 @@ class EpisodeRepository {
         addCsvContainsFilter(filters.collections, "e.podcast_collections", whereClauses, params)
         addCsvContainsFilter(filters.tags, "e.all_tags", whereClauses, params)
         addSetFilter(filters.episodeTypes, "e.episode_type", whereClauses, params)
+        addYearFilter(filters.years, whereClauses, params)
 
         val whereClause = if (whereClauses.isEmpty()) "" else "WHERE ${whereClauses.joinToString(" AND ")}"
 
@@ -96,23 +108,26 @@ class EpisodeRepository {
                FROM episodes e
                JOIN episodes_fts ON e.rowid = episodes_fts.rowid
                $whereClause
-               ORDER BY episodes_fts.rank
+               ORDER BY ${orderBy(filters, hasQuery = true)}
                LIMIT ? OFFSET ?"""
             } else {
                 """SELECT $SEARCH_COLUMNS, NULL AS snippet
                FROM episodes e
                $whereClause
-               ORDER BY e.episode_published_on DESC
+               ORDER BY ${orderBy(filters, hasQuery = false)}
                LIMIT ? OFFSET ?"""
             }
 
-        val offset = (filters.page - 1) * filters.pageSize
+        // Long: page comes off a query string, and Int would wrap to a
+        // negative offset that SQLite clamps back to 0 -- page one's rows,
+        // returned under whatever page number was asked for.
+        val offset = (filters.page.toLong() - 1) * filters.pageSize
         val episodes =
             conn.prepareStatement(selectSql).use { stmt ->
                 params.forEachIndexed { i, p -> setParam(stmt, i + 1, p) }
                 val paramOffset = params.size
                 stmt.setInt(paramOffset + 1, filters.pageSize)
-                stmt.setInt(paramOffset + 2, offset)
+                stmt.setLong(paramOffset + 2, offset)
                 stmt.executeQuery().use { rs ->
                     val results = mutableListOf<Episode>()
                     while (rs.next()) results.add(mapEpisode(rs))
@@ -175,17 +190,110 @@ class EpisodeRepository {
             }
         }
 
+        fun queryYears(): List<String> {
+            val sql =
+                "SELECT DISTINCT substr(e.episode_published_on, 1, 4) AS y $fromClause " +
+                    "$wherePrefix e.episode_published_on IS NOT NULL ORDER BY y DESC"
+            return conn.prepareStatement(sql).use { stmt ->
+                if (ftsQuery != null) stmt.setString(1, ftsQuery)
+                stmt.executeQuery().use { rs ->
+                    generateSequence { if (rs.next()) rs.getString(1) else null }
+                        .filter { it.length == 4 }
+                        .toList()
+                }
+            }
+        }
+
         val options =
             FilterOptions(
                 podcasts = queryDistinct("e.podcast_title"),
                 collections = splitCsv("e.podcast_collections"),
                 episodeTypes = queryDistinct("e.episode_type"),
+                years = queryYears(),
             )
         cachedFilterQuery = query
         cachedFilterOptions = options
         cachedFilterAtMillis = now
         return options
     }
+
+    /**
+     * Counted over every episode, not summed from [getPodcastSummaries], which
+     * groups by title and so leaves out the ones the feed gave no podcast title
+     * -- the search page renders those as "Unknown Podcast", so they exist.
+     */
+    @Synchronized
+    fun getCorpusTotals(): CorpusTotals {
+        val now = System.currentTimeMillis()
+        cachedTotals?.let { if (now - cachedTotalsAtMillis < FILTER_CACHE_TTL_MILLIS) return it }
+
+        val sql = "SELECT COUNT(*) AS episode_count, COALESCE(SUM(episode_duration), 0) AS total_duration FROM episodes"
+        val totals =
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    if (rs.next()) {
+                        CorpusTotals(rs.getInt("episode_count"), rs.getLong("total_duration"))
+                    } else {
+                        CorpusTotals(0, 0)
+                    }
+                }
+            }
+        cachedTotals = totals
+        cachedTotalsAtMillis = now
+        return totals
+    }
+
+    /**
+     * One row per podcast, for the overview page.
+     *
+     * Scans the whole table, so it is cached like the filter options are.
+     * Episodes with no duration contribute 0 rather than nulling their
+     * podcast's total.
+     */
+    @Synchronized
+    fun getPodcastSummaries(): List<PodcastSummary> {
+        val now = System.currentTimeMillis()
+        cachedSummaries?.let { if (now - cachedSummariesAtMillis < FILTER_CACHE_TTL_MILLIS) return it }
+
+        val sql =
+            """SELECT podcast_title,
+                      MAX(podcast_image) AS podcast_image,
+                      COUNT(*) AS episode_count,
+                      COALESCE(SUM(episode_duration), 0) AS total_duration,
+                      MIN(episode_published_on) AS earliest,
+                      MAX(episode_published_on) AS latest
+               FROM episodes
+               WHERE podcast_title IS NOT NULL
+               GROUP BY podcast_title
+               ORDER BY podcast_title"""
+
+        val summaries =
+            conn.prepareStatement(sql).use { stmt ->
+                stmt.executeQuery().use { rs ->
+                    val out = mutableListOf<PodcastSummary>()
+                    while (rs.next()) {
+                        out +=
+                            PodcastSummary(
+                                title = rs.getString("podcast_title"),
+                                image = rs.getString("podcast_image"),
+                                episodeCount = rs.getInt("episode_count"),
+                                totalDurationSeconds = rs.getLong("total_duration"),
+                                earliestPublishedOn = rs.getString("earliest"),
+                                latestPublishedOn = rs.getString("latest"),
+                            )
+                    }
+                    out
+                }
+            }
+
+        cachedSummaries = summaries
+        cachedSummariesAtMillis = now
+        return summaries
+    }
+
+    /** The database file's mtime: when index.py last wrote it, and so when the corpus last changed. */
+    fun indexBuiltAt(): java.time.Instant? =
+        runCatching { java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(dbPath)).toInstant() }.getOrNull()
 
     // FTS5 MATCH parses its right-hand side as a query language, so raw user
     // input like `c++` or an unbalanced quote raises a SQLException that would
@@ -223,6 +331,43 @@ class EpisodeRepository {
                 stmt.executeQuery().use { it.next() }
             }
         }.isSuccess
+
+    /**
+     * `episode_published_on` is `YYYY-MM-DD` text with an index, so
+     * lexicographic comparison orders it correctly.
+     *
+     * With a query, rank is the secondary key on a date sort: episodes sharing
+     * a publication date would otherwise come back in an arbitrary order that
+     * could differ between pages of the same search.
+     *
+     * A recovered orphan keeps a real date from its directory name, so a null
+     * date is rare; under DESC it sorts last, which is where an episode of
+     * unknown age belongs.
+     */
+    private fun orderBy(
+        filters: SearchFilters,
+        hasQuery: Boolean,
+    ): String {
+        val rankTiebreak = if (hasQuery) ", episodes_fts.rank" else ""
+        return when (filters.effectiveSort) {
+            SortOrder.RELEVANCE -> if (hasQuery) "episodes_fts.rank" else "e.episode_published_on DESC"
+            SortOrder.NEWEST -> "e.episode_published_on DESC$rankTiebreak"
+            // SQLite puts NULLs first under ASC, which would head the oldest-first
+            // list with episodes of unknown age; DESC already puts them last.
+            SortOrder.OLDEST -> "e.episode_published_on IS NULL, e.episode_published_on ASC$rankTiebreak"
+        }
+    }
+
+    private fun addYearFilter(
+        years: Set<String>,
+        clauses: MutableList<String>,
+        params: MutableList<Any>,
+    ) {
+        if (years.isEmpty()) return
+        val placeholders = years.joinToString(",") { "?" }
+        clauses.add("substr(e.episode_published_on, 1, 4) IN ($placeholders)")
+        params.addAll(years)
+    }
 
     private fun addDurationFilter(
         filters: SearchFilters,

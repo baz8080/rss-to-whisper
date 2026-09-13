@@ -133,7 +133,7 @@ class EpisodeRepositoryTest {
         id: String,
         podcastTitle: String,
         episodeTitle: String,
-        publishedOn: String,
+        publishedOn: String?,
         duration: Int?,
         collections: String?,
         tags: String?,
@@ -390,6 +390,32 @@ class EpisodeRepositoryTest {
                 val result = repo.search(SearchFilters(query = "programming", sort = SortOrder.OLDEST))
                 assertEquals(listOf("ep1", "ep2"), result.episodes.map { it.id })
                 assertEquals(2, result.totalCount)
+            }
+
+            /**
+             * A feed item with no pubDate is written with a null date, and
+             * SQLite sorts NULLs first under ASC -- so an episode of unknown age
+             * would head the oldest-first list. DESC already puts them last.
+             */
+            @Test
+            fun `an episode with no date sorts last either way`() {
+                DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                    insert(
+                        conn,
+                        id = "undated",
+                        podcastTitle = "Podcast A",
+                        episodeTitle = "No Date",
+                        publishedOn = null,
+                        duration = 100,
+                        collections = null,
+                        tags = null,
+                        type = null,
+                        transcriptPlain = "no date at all",
+                    )
+                }
+
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.OLDEST)).episodes.last().id)
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.last().id)
             }
 
             @Test

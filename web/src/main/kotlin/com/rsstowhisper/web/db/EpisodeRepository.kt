@@ -183,9 +183,6 @@ class EpisodeRepository {
             }
         }
 
-        // Newest year first, matching how the results themselves are ordered
-        // by default. The column holds YYYY-MM-DD, so the first four
-        // characters are the year and sort as text.
         fun queryYears(): List<String> {
             val sql =
                 "SELECT DISTINCT substr(e.episode_published_on, 1, 4) AS y $fromClause " +
@@ -322,7 +319,9 @@ class EpisodeRepository {
         return when (filters.effectiveSort) {
             SortOrder.RELEVANCE -> if (hasQuery) "episodes_fts.rank" else "e.episode_published_on DESC"
             SortOrder.NEWEST -> "e.episode_published_on DESC$rankTiebreak"
-            SortOrder.OLDEST -> "e.episode_published_on ASC$rankTiebreak"
+            // SQLite puts NULLs first under ASC, which would head the oldest-first
+            // list with episodes of unknown age; DESC already puts them last.
+            SortOrder.OLDEST -> "e.episode_published_on IS NULL, e.episode_published_on ASC$rankTiebreak"
         }
     }
 

@@ -28,6 +28,9 @@ import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
 import java.net.URI
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Path("/")
 @ApplicationScoped
@@ -98,10 +101,20 @@ class SearchResource {
                     "sortOptions",
                     if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
                 )
-                // A query can narrow the corpus to one year while a different
-                // year is filtered on, which would otherwise leave no checkbox
-                // to untick.
+                // A query can narrow the corpus past the value being filtered
+                // on -- easy to reach from the podcasts page, which lands on
+                // /search?podcast=X -- and the options come back narrowed by that
+                // query, which would otherwise leave no checkbox to untick.
                 setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
+                setVariable("podcastOptions", (filterOptions.podcasts + filters.podcasts).distinct().sorted())
+                setVariable(
+                    "collectionOptions",
+                    (filterOptions.collections + filters.collections).distinct().sorted(),
+                )
+                setVariable(
+                    "episodeTypeOptions",
+                    (filterOptions.episodeTypes + filters.episodeTypes).distinct().sorted(),
+                )
                 // Page 1 on both: changing the tags changes the result set, so
                 // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
@@ -122,6 +135,28 @@ class SearchResource {
         } else {
             templateEngine.process("search", ctx)
         }
+    }
+
+    @GET
+    @Path("/podcasts")
+    @Produces(MediaType.TEXT_HTML)
+    fun podcasts(): Response {
+        val summaries = repository.getPodcastSummaries()
+        val totals = repository.getCorpusTotals()
+        val ctx =
+            Context().apply {
+                setVariable("summaries", summaries)
+                setVariable("totalEpisodes", totals.episodeCount)
+                setVariable("totalHours", "%,.0f".format(Locale.ROOT, totals.totalDurationSeconds / 3600.0))
+                // Thymeleaf cannot call top-level Kotlin functions here, so the
+                // link for each row is built now rather than in the template.
+                setVariable(
+                    "searchUrls",
+                    summaries.associate { it.title to buildSearchUrl(SearchFilters(podcasts = setOf(it.title))) },
+                )
+                setVariable("indexBuiltAt", repository.indexBuiltAt()?.let { INDEX_BUILT_FORMAT.format(it) })
+            }
+        return Response.ok(templateEngine.process("podcasts", ctx), MediaType.TEXT_HTML).build()
     }
 
     @GET
@@ -160,5 +195,12 @@ class SearchResource {
             }
 
         return Response.ok(templateEngine.process("episode", ctx), MediaType.TEXT_HTML).build()
+    }
+
+    companion object {
+        // A fact about this machine's filesystem, so the server's zone is the
+        // honest one to render it in.
+        private val INDEX_BUILT_FORMAT: DateTimeFormatter =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
     }
 }

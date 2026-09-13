@@ -1,8 +1,10 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.CorpusTotals
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
+import com.rsstowhisper.web.models.PodcastSummary
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
@@ -12,10 +14,13 @@ import io.mockk.mockk
 import io.mockk.slot
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.IContext
+import java.time.Instant
 
 class SearchResourceTest {
     private val repository: EpisodeRepository = mockk()
@@ -390,6 +395,107 @@ class SearchResourceTest {
         assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
     }
 
+    // --- podcasts overview ---
+
+    @Test
+    fun `podcasts page passes summaries and totals to the template`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(
+                PodcastSummary("Podcast A", "https://img/a.png", 2, 2400, "2024-01-01", "2024-01-03"),
+                PodcastSummary("Podcast B", null, 3, 3600, "2023-01-02", "2024-01-04"),
+            )
+        every { repository.getCorpusTotals() } returns CorpusTotals(5, 7200)
+        every { repository.indexBuiltAt() } returns Instant.parse("2024-06-01T10:30:00Z")
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns "<html>podcasts</html>"
+
+        val response = resource.podcasts()
+
+        assertEquals(200, response.status)
+        assertEquals(5, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+        assertNotNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
+    @Test
+    fun `each podcast links to a search filtered to it`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A & B", null, 1, 0, null, null))
+        every { repository.getCorpusTotals() } returns CorpusTotals(1, 0)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        @Suppress("UNCHECKED_CAST")
+        val urls = ctxSlot.captured.getVariable("searchUrls") as Map<String, String>
+        assertEquals("/search?podcast=Podcast%20A%20%26%20B", urls["Podcast A & B"])
+    }
+
+    /**
+     * An episode whose feed gave no podcast title has no card to appear on, but
+     * it is still in the corpus: summing the cards would under-report the
+     * header against what /search returns.
+     */
+    @Test
+    fun `the corpus header counts episodes the cards leave out`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A", null, 2, 2400, "2024-01-01", "2024-01-03"))
+        every { repository.getCorpusTotals() } returns CorpusTotals(3, 7200)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertEquals(3, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+    }
+
+    /** Same hole the tags and years already closed: the podcasts page lands straight in it. */
+    @Test
+    fun `an active podcast stays in the options even when the query excludes it`() {
+        stubSearchDependencies(podcasts = listOf("Podcast B"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", podcasts = listOf("Podcast A"))
+
+        assertEquals(listOf("Podcast A", "Podcast B"), ctxSlot.captured.getVariable("podcastOptions"))
+    }
+
+    /**
+     * The last two facets with the old gating. Collections vanish when the query
+     * matches only untagged episodes; episode types when it matches only one
+     * kind -- either way the active filter goes with them.
+     */
+    @Test
+    fun `an active collection and episode type stay in their options`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", collections = listOf("science"), episodeTypes = listOf("trailer"))
+
+        assertEquals(listOf("science"), ctxSlot.captured.getVariable("collectionOptions"))
+        assertEquals(listOf("trailer"), ctxSlot.captured.getVariable("episodeTypeOptions"))
+    }
+
+    /** A database that has never been written has no build time; the page still renders. */
+    @Test
+    fun `a missing index build time is passed through as null`() {
+        every { repository.getPodcastSummaries() } returns emptyList()
+        every { repository.getCorpusTotals() } returns CorpusTotals(0, 0)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
+    }
+
     /**
      * Named defaults rather than a positional call in every test: `search()`
      * has grown a parameter with almost every filter added, and each one used
@@ -420,14 +526,20 @@ class SearchResourceTest {
             htmxRequest,
         )
 
-    private fun stubSearchDependencies(years: List<String> = emptyList()) {
+    private fun stubSearchDependencies(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) {
         every { repository.search(any()) } returns emptySearchResult()
-        every { repository.getFilterOptions(any()) } returns emptyFilterOptions(years)
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions(years, podcasts)
     }
 
     private fun emptySearchResult() = SearchResult(emptyList(), 0, 1, 10)
 
-    private fun emptyFilterOptions(years: List<String> = emptyList()) = FilterOptions(emptyList(), emptyList(), emptyList(), years)
+    private fun emptyFilterOptions(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) = FilterOptions(podcasts, emptyList(), emptyList(), years)
 
     private fun minimalEpisode(
         summary: String? = null,

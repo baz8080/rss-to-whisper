@@ -131,7 +131,7 @@ class EpisodeRepositoryTest {
     private fun insert(
         conn: Connection,
         id: String,
-        podcastTitle: String,
+        podcastTitle: String?,
         episodeTitle: String,
         publishedOn: String?,
         duration: Int?,
@@ -476,6 +476,79 @@ class EpisodeRepositoryTest {
                 assertTrue(result.episodes.isEmpty())
                 assertEquals(4, result.totalCount)
             }
+        }
+    }
+
+    @Nested
+    inner class PodcastSummaries {
+        @Test
+        fun `one row per podcast, ordered by title`() {
+            val summaries = repo.getPodcastSummaries()
+            assertEquals(listOf("Podcast A", "Podcast B"), summaries.map { it.title })
+        }
+
+        /**
+         * The search page renders a null podcast_title as "Unknown Podcast", so
+         * such episodes exist -- and GROUP BY podcast_title leaves them off the
+         * cards. The corpus header must still count them.
+         */
+        @Test
+        fun `corpus totals include an episode with no podcast title`() {
+            DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                insert(
+                    conn,
+                    id = "untitled",
+                    podcastTitle = null,
+                    episodeTitle = "No Podcast",
+                    publishedOn = "2024-02-02",
+                    duration = 3600,
+                    collections = null,
+                    tags = null,
+                    type = null,
+                    transcriptPlain = "orphaned from its feed",
+                )
+            }
+
+            val fromCards = repo.getPodcastSummaries().sumOf { it.episodeCount }
+            val totals = repo.getCorpusTotals()
+
+            assertEquals(4, fromCards, "the untitled episode has no card")
+            assertEquals(5, totals.episodeCount)
+            assertEquals(3600L, totals.totalDurationSeconds - repo.getPodcastSummaries().sumOf { it.totalDurationSeconds })
+        }
+
+        @Test
+        fun `counts and durations are summed per podcast`() {
+            val a = repo.getPodcastSummaries().single { it.title == "Podcast A" }
+            assertEquals(2, a.episodeCount)
+            assertEquals(2400L, a.totalDurationSeconds) // 600 + 1800
+            assertEquals("0.7", a.totalHours)
+        }
+
+        /** ep4 has no duration; it must still count as an episode. */
+        @Test
+        fun `an episode with no duration contributes zero rather than nulling the sum`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals(2, b.episodeCount)
+            assertEquals(3600L, b.totalDurationSeconds)
+        }
+
+        @Test
+        fun `the date range spans the earliest and latest episode`() {
+            val b = repo.getPodcastSummaries().single { it.title == "Podcast B" }
+            assertEquals("2023-01-02", b.earliestPublishedOn)
+            assertEquals("2024-01-04", b.latestPublishedOn)
+            assertEquals("2023-01-02 – 2024-01-04", b.dateRange)
+        }
+
+        @Test
+        fun `the summaries are cached between calls`() {
+            assertSame(repo.getPodcastSummaries(), repo.getPodcastSummaries())
+        }
+
+        @Test
+        fun `the index build time comes from the database file`() {
+            assertNotNull(repo.indexBuiltAt())
         }
     }
 

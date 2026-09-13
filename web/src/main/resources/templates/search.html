@@ -118,10 +118,10 @@
                 </details>
 
                 <details class="filter-group" open="open"
-                         th:if="${filterOptions.podcasts.size() > 1}">
+                         th:if="${podcastOptions.size() > 1 or not filters.podcasts.isEmpty()}">
                     <summary>Podcast</summary>
                     <div class="filter-list">
-                        <label th:each="podcast : ${filterOptions.podcasts}">
+                        <label th:each="podcast : ${podcastOptions}">
                             <input type="checkbox" name="podcast"
                                    th:value="${podcast}"
                                    th:checked="${filters.podcasts.contains(podcast)}"/>
@@ -131,10 +131,10 @@
                 </details>
 
                 <details class="filter-group"
-                         th:if="${not filterOptions.collections.isEmpty()}">
+                         th:if="${not collectionOptions.isEmpty()}">
                     <summary>Collections</summary>
                     <div class="filter-list">
-                        <label th:each="collection : ${filterOptions.collections}">
+                        <label th:each="collection : ${collectionOptions}">
                             <input type="checkbox" name="collection"
                                    th:value="${collection}"
                                    th:checked="${filters.collections.contains(collection)}"/>
@@ -176,10 +176,10 @@
                 </details>
 
                 <details class="filter-group"
-                         th:if="${filterOptions.episodeTypes.size() > 1}">
+                         th:if="${episodeTypeOptions.size() > 1 or not filters.episodeTypes.isEmpty()}">
                     <summary>Episode Type</summary>
                     <div class="filter-list">
-                        <label th:each="type : ${filterOptions.episodeTypes}">
+                        <label th:each="type : ${episodeTypeOptions}">
                             <input type="checkbox" name="episodeType"
                                    th:value="${type}"
                                    th:checked="${filters.episodeTypes.contains(type)}"/>
@@ -214,6 +214,8 @@
 
             <span class="htmx-indicator" id="loading" aria-busy="true">Searching&#x2026;</span>
 
+            <p class="corpus-nav"><a href="/podcasts">Browse podcasts &#x2192;</a></p>
+
             <!-- Results summary -->
             <p class="results-info" th:if="${result.totalCount > 0}">
                 <span th:text="${result.totalCount}"></span> results
@@ -233,8 +235,12 @@
 
             <!-- Episode cards -->
             <article class="episode-card" th:each="episode : ${result.episodes}">
-                <div class="podcast-name"
-                     th:text="${episode.podcastTitle != null ? episode.podcastTitle : 'Unknown Podcast'}"></div>
+                <div class="podcast-name">
+                    <a th:if="${episode.podcastTitle != null}"
+                       th:href="'/search?podcast=' + ${#uris.escapeQueryParam(episode.podcastTitle)}"
+                       th:text="${episode.podcastTitle}"></a>
+                    <span th:if="${episode.podcastTitle == null}">Unknown Podcast</span>
+                </div>
                 <h3>
                     <a th:href="'/episode/' + ${episode.id} + ${episodeQuerySuffix}"
                        th:text="${episode.episodeTitle != null ? episode.episodeTitle : 'Untitled'}"></a>

@@ -22,8 +22,7 @@ data class Episode(
     val episodeDuration: Int?,
     val episodeRelativeAudioPath: String?,
     val allTags: String?,
-    // Carries the sentinel highlight markers, which are control characters. The
-    // API exposes snippetText instead; see below.
+    // The API gets [snippetText] instead.
     @get:JsonIgnore
     val snippet: String? = null,
     val transcript: String? = null,

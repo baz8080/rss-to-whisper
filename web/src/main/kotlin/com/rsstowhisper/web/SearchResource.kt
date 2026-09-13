@@ -138,10 +138,7 @@ class SearchResource {
         }
     }
 
-    /**
-     * The same search as `/search`, as JSON, so the corpus is usable from a
-     * shell or a notebook.
-     */
+    /** The same search as `/search`, for use from a shell or a notebook. */
     @GET
     @Path("/api/search")
     @Produces(MediaType.APPLICATION_JSON)
@@ -168,8 +165,6 @@ class SearchResource {
                 years = years.toSet(),
                 sort = SortOrder.parse(sort),
                 page = page.coerceAtLeast(1),
-                // Capped: the transcript is not in this payload, but an
-                // unbounded page size still lets one request read the corpus.
                 pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
             ),
         )
@@ -251,7 +246,10 @@ class SearchResource {
     }
 
     companion object {
-        /** One page of the API cannot be made to return the whole corpus. */
+        /**
+         * The transcript is not in the search payload, but an unbounded page
+         * size would still let one request read the whole corpus.
+         */
         internal const val MAX_API_PAGE_SIZE = 100
 
         // A fact about this machine's filesystem, so the server's zone is the

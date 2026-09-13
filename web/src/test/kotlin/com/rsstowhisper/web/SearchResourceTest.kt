@@ -498,7 +498,7 @@ class SearchResourceTest {
         assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
     }
 
-    // --- JSON API (W7) ---
+    // --- JSON API ---
 
     @Test
     fun `api search returns the result object itself`() {

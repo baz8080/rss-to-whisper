@@ -367,10 +367,12 @@ harder to read than one that never shows its confidence at all.
 The sidecar is roughly 60 KB per episode, so it is never fetched on page load — the
 first play pulls it, and so does ticking the toggle. Episodes transcribed before word
 timestamps were emitted have no sidecar; the route returns 404 and the toggle says
-**No word timings** rather than sitting there doing nothing. A query that matched
-*every* line is the one case where the sidecar is fine but nothing can be shown — the
-toggle says **Hidden on matched lines** and stays live, since clearing the query brings
-the words back.
+**No word timings** rather than sitting there doing nothing. Two other cases say
+something more useful than that: a query that matched *every* line leaves nothing to
+split, so the toggle says **Hidden on matched lines** and stays live, since clearing
+the query brings the words back; and a sidecar keyed to cue ordinals the transcript no
+longer has — a re-transcribe where only one side was reloaded — says **Word timings out
+of date**, which re-running `index.py` over the new transcript fixes.
 
 The file is served by the web module from `/episode/{id}/words`, rather than fetched
 from the audio host: the path is derived from a column already in hand, it needs no

@@ -305,6 +305,9 @@
         // Whisper's own probability for the word. Below this it was guessing.
         const LOW_CONFIDENCE = 0.4;
 
+        const NO_TIMINGS = 'No word timings';
+        const NO_TIMINGS_WHY = 'This episode was transcribed before word timings existed';
+
         let wordsByCue = null;
         let wordSpans = [];      // every rendered word, in time order
         let currentWord = null;
@@ -317,7 +320,7 @@
             let text;
             try {
                 const response = await fetch(wordsUrl);
-                if (response.status === 404) return noSidecar();
+                if (response.status === 404) return disableWords(NO_TIMINGS, NO_TIMINGS_WHY);
                 if (!response.ok) {
                     // The server having a bad day, not an episode without a
                     // sidecar. Say nothing and let the next attempt try again.
@@ -337,11 +340,19 @@
                 if (!wordsByCue.has(word.seg)) wordsByCue.set(word.seg, []);
                 wordsByCue.get(word.seg).push(word);
             }
-            if (wordsByCue.size === 0) return noSidecar();
+            if (wordsByCue.size === 0) return disableWords(NO_TIMINGS, NO_TIMINGS_WHY);
+
+            // Keyed to cues this transcript does not have: a re-transcribe
+            // changed the segmentation and only one side of it was reloaded.
+            // Not something the reader can do anything about, and not the same
+            // as the query hiding them.
+            if (!lineEls.some(el => wordsByCue.has(+el.dataset.cue))) {
+                return disableWords('Word timings out of date', 'They do not line up with this transcript');
+            }
 
             renderWords();
-            // Nothing rendered, but the sidecar is fine: every line the query
-            // matched keeps its <mark> and is left unsplit, so a query that
+            // Nothing split, but the sidecar is good: every line the query
+            // matched keeps its <mark> and is left whole, so a query that
             // matched all of them leaves nothing to split. Clearing the query
             // brings the words back, so the toggle stays live.
             if (wordSpans.length === 0) return say('Hidden on matched lines', 'Clear the query to see word timings');
@@ -360,16 +371,16 @@
             return wordsByCue;
         }
 
-        // Said plainly, because a silent no-op leaves an episode with no sidecar
-        // looking exactly like one whisper was sure of every word in.
-        function noSidecar() {
+        // Said plainly, because a silent no-op leaves an episode whose words
+        // cannot be shown looking exactly like one whisper was sure of.
+        function disableWords(caption, title) {
             if (dimToggle) {
                 dimToggle.checked = false;
                 dimToggle.disabled = true;
             }
             // The toggle is about to be unreachable, so it cannot be left on.
             if (transcriptEl) transcriptEl.classList.remove('dim-low-confidence');
-            say('No word timings', 'This episode was transcribed before word timings existed');
+            say(caption, title);
             return null;
         }
 
@@ -392,7 +403,7 @@
                     span.className = word.p < LOW_CONFIDENCE ? 'word low-confidence' : 'word';
                     span.dataset.start = word.s;
                     textEl.appendChild(span);
-                    wordSpans.push({start: word.s, end: word.e, el: span});
+                    wordSpans.push({start: word.s, end: word.e, seg: word.seg, el: span});
                 }
             }
             wordSpans.sort((a, b) => a.start - b.start);
@@ -403,8 +414,11 @@
             for (let i = 0; i < wordSpans.length; i++) {
                 const w = wordSpans[i];
                 if (!(w.end > w.start)) {
+                    // Only within the cue: the next entry in this flat array is
+                    // the next cue's first word, and borrowing its start would
+                    // hold a cue-final word lit across the silence between them.
                     const next = wordSpans[i + 1];
-                    w.end = next ? next.start : w.start;
+                    w.end = (next && next.seg === w.seg) ? next.start : w.start;
                 }
             }
         }
@@ -445,7 +459,7 @@
         }
 
         if (audioEl) {
-            audioEl.addEventListener('play', loadWords, {once: true});
+            audioEl.addEventListener('play', loadWords);
             audioEl.addEventListener('timeupdate', function () {
                 if (audioEl.readyState === 0) return;
                 highlightWordAt(audioEl.currentTime);
@@ -486,8 +500,10 @@
             }
             if (!audioEl) return;
             if (e.key === ' ') {
-                // Space belongs to a focused checkbox.
-                if (tag === 'INPUT') return;
+                // Space belongs to a focused checkbox, and the player's own
+                // controls handle it in their shadow tree -- acting here too
+                // toggles it twice.
+                if (tag === 'INPUT' || tag === 'AUDIO') return;
                 e.preventDefault();
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {

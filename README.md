@@ -372,10 +372,15 @@ through untouched, since running prose through an HTML sanitiser turns its amper
 quotes into entities. Prose that happens to contain a `<` — an address in angle brackets,
 say — is sanitised and loses it, on both the page and the API.
 
+What that sanitising buys is narrow: it strips scripting from markup so the value can be
+inserted as HTML. It does **not** make the value safe to drop into an HTML attribute —
+sanitised markup still contains quotes, and a prose summary is returned with its quotes
+intact, so either can break out of an unescaped `attr="..."`.
+
 **Every other feed-supplied string in the payload is raw** — `episodeTitle`,
 `podcastTitle`, `snippetText`, the links and the tags are whatever the feed said, because
-an API cannot know how a consumer will render them. Escape them at render time; the HTML
-pages here do it with `th:text`.
+an API cannot know how a consumer will render them. Escape everything at render time for
+the context you are rendering into; the HTML pages here do it with `th:text`.
 
 A page number far enough past the end returns no rows rather than wrapping around to the
 first page.

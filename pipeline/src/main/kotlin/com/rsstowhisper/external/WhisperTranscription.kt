@@ -161,10 +161,10 @@ data class WhisperTranscription(
         /**
          * `HH:MM:SS.mmm`, the WebVTT the server itself emits.
          *
-         * Locale.ROOT because this string is written into transcript.json and
-         * parsed back by the web module: Java renders %d in the digits of the
-         * default locale, so on an ar-SA or fa-IR server every timestamp in the
-         * corpus would be written in digits nothing downstream can read.
+         * Locale.ROOT because `%d` renders in the default locale's digits, and
+         * this goes into transcript.json for the web module to parse back: on
+         * an ar-SA or fa-IR host the whole corpus would be written in digits
+         * nothing downstream can read.
          */
         internal fun timestamp(seconds: Double): String {
             val safe = if (seconds.isFinite() && seconds > 0) seconds else 0.0

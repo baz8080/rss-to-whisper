@@ -12,12 +12,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WhisperTranscriptionTest {
-    /**
-     * These timestamps are written into transcript.json and parsed back by the
-     * web module, so they have to be ASCII whatever the server's locale is.
-     * Java renders %d in the default locale's digits, and ar-SA, fa-IR, bn-IN
-     * and hi-IN-u-nu-deva all have non-ASCII ones.
-     */
+    /** Each of these locales renders `%d` in digits that are not ASCII. */
     @Test
     fun `timestamps use ASCII digits whatever the default locale is`() {
         val original = Locale.getDefault()

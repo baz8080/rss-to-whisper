@@ -116,9 +116,9 @@
             <h3>Transcript</h3>
             <!--/* Unhidden by script, and only when word timings are configured. */-->
             <div class="word-controls" id="word-controls" hidden="hidden">
-                <label title="Fade the words whisper was least sure of">
+                <label id="word-controls-label" title="Fade the words whisper was least sure of">
                     <input type="checkbox" id="dim-toggle"/>
-                    <small>Mark low confidence</small>
+                    <small id="word-controls-caption">Mark low confidence</small>
                 </label>
             </div>
         </div>
@@ -319,9 +319,11 @@
                 const response = await fetch(wordsUrl);
                 // 404 is the ordinary case for an episode transcribed before
                 // word timings existed. Fall back silently.
-                if (!response.ok) return null;
+                if (!response.ok) return noWords();
                 text = await response.text();
             } catch (e) {
+                // A transport failure is worth another go; a 404 is not.
+                wordsRequested = false;
                 return null;
             }
             wordsByCue = new Map();
@@ -333,8 +335,25 @@
                 wordsByCue.get(word.seg).push(word);
             }
             renderWords();
-            if (wordControls && wordSpans.length > 0) wordControls.hidden = false;
+            if (wordSpans.length === 0) return noWords();
+            // The reader may already be somewhere: play was pressed before this
+            // arrived, or a #t= link armed the player without starting it.
+            highlightWordAt(currentPosition());
             return wordsByCue;
+        }
+
+        // Said plainly, because a silent no-op leaves an episode with no sidecar
+        // looking exactly like one whisper was sure of every word in.
+        function noWords() {
+            if (dimToggle) {
+                dimToggle.checked = false;
+                dimToggle.disabled = true;
+            }
+            const caption = document.getElementById('word-controls-caption');
+            if (caption) caption.textContent = 'No word timings';
+            const label = document.getElementById('word-controls-label');
+            if (label) label.title = 'This episode was transcribed before word timings existed';
+            return null;
         }
 
         function renderWords() {
@@ -356,7 +375,7 @@
                     span.className = word.p < LOW_CONFIDENCE ? 'word low-confidence' : 'word';
                     span.dataset.start = word.s;
                     textEl.appendChild(span);
-                    wordSpans.push({start: word.s, el: span});
+                    wordSpans.push({start: word.s, end: word.e, el: span});
                 }
             }
             wordSpans.sort((a, b) => a.start - b.start);
@@ -368,7 +387,7 @@
             while (lo <= hi) {
                 const mid = (lo + hi) >>> 1;
                 if (wordSpans[mid].start <= seconds) {
-                    result = wordSpans[mid].el;
+                    result = wordSpans[mid];
                     lo = mid + 1;
                 } else {
                     hi = mid - 1;
@@ -377,9 +396,20 @@
             return result;
         }
 
+        // Whisper's end times are tight, so a word is held a little past its own
+        // end rather than blinking out in the gaps between words. Past that the
+        // audio has left the transcript: a silence, the closing music, the end.
+        const WORD_HOLD = 0.5;
+
         function highlightWordAt(seconds) {
             if (wordSpans.length === 0) return;
-            const word = findWordAt(seconds);
+            const found = findWordAt(seconds);
+            let word = found ? found.el : null;
+            if (found && seconds > found.end + WORD_HOLD) word = null;
+            // A matched line keeps its <mark> and is never split, so the search
+            // reaches back past it to the last word before. Better no word than
+            // one glowing on a line the reader has already left.
+            if (word && activeLine && word.closest('.transcript-line') !== activeLine) word = null;
             if (word === currentWord) return;
             if (currentWord) currentWord.classList.remove('current-word');
             if (word) word.classList.add('current-word');
@@ -406,8 +436,15 @@
         if (wordsUrl && wordControls) wordControls.hidden = false;
 
         document.addEventListener('keydown', function (e) {
-            const tag = document.activeElement.tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            const active = document.activeElement;
+            const tag = active.tagName;
+            // Only text entry swallows the shortcuts. The confidence checkbox is
+            // the transcript's one focusable control, and a reader who ticks it
+            // should not lose n, p and the arrows until they click elsewhere.
+            const typing =
+                tag === 'TEXTAREA' || tag === 'SELECT' ||
+                (tag === 'INPUT' && !['checkbox', 'radio', 'button'].includes(active.type));
+            if (typing) return;
             // Ctrl+P is print and Alt+Left is back; the browser keeps those.
             if (e.ctrlKey || e.metaKey || e.altKey) return;
             if (e.key === 'n' && matchEls.length > 0) {
@@ -421,6 +458,8 @@
             }
             if (!audioEl) return;
             if (e.key === ' ') {
+                // Space belongs to a focused checkbox or button.
+                if (tag === 'INPUT' || tag === 'BUTTON') return;
                 e.preventDefault();
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {

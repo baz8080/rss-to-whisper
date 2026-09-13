@@ -472,12 +472,24 @@ a.tag-pill-active:hover {
 .word-controls input {
     margin: 0;
 }
+/* Pico styles a <small> following an input as form helper text: block, full
+   width, pulled up by a negative margin. In a flex row that lifts the caption
+   clear of its own checkbox and up under the sticky player. */
+.word-controls small {
+    margin: 0;
+    width: auto;
+}
+.word-controls input:disabled + small {
+    opacity: 0.6;
+}
 .word.current-word {
     background: var(--pico-primary-focus, #b7d4ff);
     border-radius: 3px;
 }
 /* Opt-in: a transcript permanently mottled with faded words is harder to read
-   than one that never shows its confidence at all. */
-.transcript.dim-low-confidence .word.low-confidence {
+   than one that never shows its confidence at all. The word being spoken keeps
+   its full strength -- opacity would fade the highlight along with the text,
+   on exactly the words the reader turned this on to find. */
+.transcript.dim-low-confidence .word.low-confidence:not(.current-word) {
     opacity: 0.45;
 }

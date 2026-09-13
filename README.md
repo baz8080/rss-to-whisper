@@ -366,14 +366,21 @@ harder to read than one that never shows its confidence at all.
 
 The sidecar is roughly 60 KB per episode, so it is never fetched on page load — the
 first play pulls it, and so does ticking the toggle. Episodes transcribed before word
-timestamps were emitted have no sidecar; the route returns 404 and the page falls back
-silently.
+timestamps were emitted have no sidecar; the route returns 404 and the toggle says
+**No word timings** rather than sitting there doing nothing.
 
-The file is served by the web module from beside the audio, rather than fetched from
-the audio host: the path is derived from a column already in hand, it needs no CORS
-grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets the
-browser inflate it instead of the page carrying a decompressor. Paths are resolved
-under the data directory and anything escaping it is refused.
+The file is served by the web module from `/episode/{id}/words`, rather than fetched
+from the audio host: the path is derived from a column already in hand, it needs no
+CORS grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets
+the browser inflate it instead of the page carrying a decompressor. It is sent gzipped
+whatever the request's `Accept-Encoding` says, since the file is only gzip on disk —
+`curl` it with `--compressed`. Paths are resolved on both sides with `toRealPath`, so
+a symlink out of the tree is refused along with a `..` that walks out of it.
+
+The response revalidates rather than being held: re-transcribing an episode rewrites
+the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar
+against a fresh transcript mis-times every word. An `ETag` makes the usual answer a
+304.
 
 On a line the search query matched, the `<mark>` highlighting wins and the line is
 not split into words — word timing is the lesser feature there.

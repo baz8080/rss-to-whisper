@@ -24,7 +24,10 @@ import jakarta.ws.rs.Path
 import jakarta.ws.rs.PathParam
 import jakarta.ws.rs.Produces
 import jakarta.ws.rs.QueryParam
+import jakarta.ws.rs.core.CacheControl
+import jakarta.ws.rs.core.EntityTag
 import jakarta.ws.rs.core.MediaType
+import jakarta.ws.rs.core.Request
 import jakarta.ws.rs.core.Response
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
@@ -34,6 +37,7 @@ import java.nio.file.Files
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import java.util.Optional
 
 @Path("/")
 @ApplicationScoped
@@ -50,11 +54,15 @@ class SearchResource {
 
     /**
      * The pipeline's data directory, so the word-timing sidecars can be served
-     * from beside the audio. Blank means no access to that tree, and the
-     * feature stays hidden rather than half-working.
+     * from beside the audio.
+     *
+     * Optional, and Optional rather than a defaulted String because SmallRye
+     * reads an empty default as no value at all and refuses to start. Absent
+     * means no access to that tree, and the feature stays hidden rather than
+     * half-working.
      */
-    @ConfigProperty(name = "app.data.directory", defaultValue = "")
-    lateinit var dataDirectory: String
+    @ConfigProperty(name = "app.data.directory")
+    lateinit var dataDirectory: Optional<String>
 
     @GET
     @Produces(MediaType.TEXT_HTML)
@@ -160,29 +168,57 @@ class SearchResource {
     @Path("/episode/{id}/words")
     fun episodeWords(
         @PathParam("id") id: String,
+        @jakarta.ws.rs.core.Context request: Request,
     ): Response {
         val wordsPath = wordsFileFor(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
-        return Response.ok(Files.readAllBytes(wordsPath))
+
+        val tag =
+            runCatching {
+                EntityTag("${Files.getLastModifiedTime(wordsPath).toMillis()}-${Files.size(wordsPath)}")
+            }.getOrNull() ?: return Response.status(Response.Status.NOT_FOUND).build()
+        request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
+
+        // The pipeline clears the sidecar for the whole of a re-transcribe swap,
+        // so a read landing in that window has found the ordinary missing case
+        // rather than a fault worth a 500.
+        val bytes =
+            runCatching { Files.readAllBytes(wordsPath) }.getOrNull()
+                ?: return Response.status(Response.Status.NOT_FOUND).build()
+
+        return Response.ok(bytes)
             .type("application/x-ndjson")
             // Gzip on disk, served as-is for the browser to inflate.
             .header("Content-Encoding", "gzip")
-            .header("Cache-Control", "public, max-age=3600")
+            // Revalidated rather than held: a re-transcribe rewrites this file
+            // and the cue ordinals it is keyed to together, and the page they
+            // must agree with is itself uncached.
+            .cacheControl(REVALIDATE)
+            .tag(tag)
             .build()
     }
 
+    /** Null unless word timings are configured. */
+    private fun dataRoot(): java.nio.file.Path? =
+        dataDirectory.orElse("").takeIf { it.isNotBlank() }?.let {
+            java.nio.file.Path.of(it).toAbsolutePath().normalize()
+        }
+
     private fun wordsFileFor(id: String): java.nio.file.Path? {
-        if (dataDirectory.isBlank()) return null
+        val root = dataRoot() ?: return null
         val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
+        val audioPath = root.resolve(relative)
+        val wordsPath = (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
 
-        val root = java.nio.file.Path.of(dataDirectory).toAbsolutePath().normalize()
         // The relative path comes from the database, but one reaching outside
-        // the data directory must not be servable whatever put it there.
-        val audioPath = root.resolve(relative).normalize()
-        if (!audioPath.startsWith(root)) return null
-
-        val wordsPath = (audioPath.parent ?: return null).resolve(WORDS_FILENAME).normalize()
-        if (!wordsPath.startsWith(root) || !Files.isRegularFile(wordsPath)) return null
-        return wordsPath
+        // the data directory must not be servable whatever put it there. Both
+        // sides are resolved for real, not normalised: normalising is textual,
+        // and a symlinked show directory is an ordinary way to lay out a
+        // library. A path that does not resolve is one there is nothing to
+        // serve for.
+        val realRoot = runCatching { root.toRealPath() }.getOrNull() ?: return null
+        val realWords = runCatching { wordsPath.toRealPath() }.getOrNull() ?: return null
+        if (!realWords.startsWith(realRoot) || !Files.isRegularFile(realWords)) return null
+        return realWords
     }
 
     /** The same search as `/search`, for use from a shell or a notebook. */
@@ -305,7 +341,7 @@ class SearchResource {
                 setVariable("matchCount", transcriptLines.count { it.matched })
                 // Not stat'ed here: whether this episode has a sidecar is
                 // settled by the fetch, which falls back silently on a 404.
-                setVariable("wordsUrl", if (dataDirectory.isBlank()) null else "/episode/$id/words")
+                setVariable("wordsUrl", if (dataRoot() == null) null else "/episode/$id/words")
             }
 
         return Response.ok(templateEngine.process("episode", ctx), MediaType.TEXT_HTML).build()
@@ -314,6 +350,17 @@ class SearchResource {
     companion object {
         /** Written by the pipeline beside each episode's audio. */
         internal const val WORDS_FILENAME = "words.jsonl.gz"
+
+        /**
+         * no-transform is CacheControl's default and is kept deliberately: the
+         * body is already gzip, and an intermediary re-encoding it would leave
+         * the browser inflating something twice.
+         */
+        private val REVALIDATE: CacheControl =
+            CacheControl().apply {
+                isNoCache = true
+                isNoTransform = true
+            }
 
         /**
          * The transcript is not in the search payload, but an unbounded page

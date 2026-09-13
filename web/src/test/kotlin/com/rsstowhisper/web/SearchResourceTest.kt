@@ -13,7 +13,9 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.verify
+import jakarta.ws.rs.core.EntityTag
 import jakarta.ws.rs.core.MediaType
+import jakarta.ws.rs.core.Request
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -28,12 +30,19 @@ import org.thymeleaf.context.IContext
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
+import java.util.Optional
 
 class SearchResourceTest {
     private val repository: EpisodeRepository = mockk()
 
     // TemplateEngine is a concrete class; MockK can subclass it.
     private val templateEngine: TemplateEngine = mockk()
+
+    // No conditional headers: every words test below wants the full body.
+    private val request: Request =
+        mockk {
+            every { evaluatePreconditions(any<EntityTag>()) } returns null
+        }
 
     // Construct the resource manually — all fields are lateinit var so we can
     // set them directly without the CDI container.
@@ -42,7 +51,7 @@ class SearchResourceTest {
             it.repository = repository
             it.templateEngine = templateEngine
             it.audioBaseUrl = "http://audio.example.com/" // trailing slash — to verify trimming
-            it.dataDirectory = "" // word timings off unless a test turns them on
+            it.dataDirectory = Optional.empty() // word timings off unless a test turns them on
         }
 
     // --- index ---
@@ -608,9 +617,9 @@ class SearchResourceTest {
 
     @Test
     fun `words route is 404 when no data directory is configured`() {
-        resource.dataDirectory = ""
+        resource.dataDirectory = Optional.empty()
 
-        assertEquals(404, resource.episodeWords("ep1").status)
+        assertEquals(404, resource.episodeWords("ep1", request).status)
         // Never even looked the episode up: the feature is off.
         verify(exactly = 0) { repository.getEpisodeById(any()) }
     }
@@ -619,11 +628,11 @@ class SearchResourceTest {
     fun `words route is 404 when the episode has no sidecar`(
         @TempDir tmp: Path,
     ) {
-        resource.dataDirectory = tmp.toString()
+        resource.dataDirectory = Optional.of(tmp.toString())
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        assertEquals(404, resource.episodeWords("ep1").status)
+        assertEquals(404, resource.episodeWords("ep1", request).status)
     }
 
     @Test
@@ -634,11 +643,11 @@ class SearchResourceTest {
         Files.createDirectories(dir)
         val payload = byteArrayOf(1, 2, 3)
         Files.write(dir.resolve("words.jsonl.gz"), payload)
-        resource.dataDirectory = tmp.toString()
+        resource.dataDirectory = Optional.of(tmp.toString())
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        val response = resource.episodeWords("ep1")
+        val response = resource.episodeWords("ep1", request)
 
         assertEquals(200, response.status)
         assertEquals("gzip", response.getHeaderString("Content-Encoding"))
@@ -658,11 +667,72 @@ class SearchResourceTest {
         Files.write(outside.resolve("words.jsonl.gz"), byteArrayOf(9))
         val dataDir = tmp.resolve("data")
         Files.createDirectories(dataDir)
-        resource.dataDirectory = dataDir.toString()
+        resource.dataDirectory = Optional.of(dataDir.toString())
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "../outside/audio.mp3")
 
-        assertEquals(404, resource.episodeWords("ep1").status)
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
+    /**
+     * A symlinked show directory is an ordinary way to lay a library out, and
+     * a textual containment check does not see through one.
+     */
+    @Test
+    fun `words route refuses a sidecar reached through a symlink out of the tree`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        Files.write(outside.resolve("words.jsonl.gz"), byteArrayOf(9))
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir.resolve("Show"))
+        Files.createSymbolicLink(dataDir.resolve("Show").resolve("ep"), outside)
+        resource.dataDirectory = Optional.of(dataDir.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
+    /**
+     * A re-transcribe rewrites the sidecar and the cue ordinals together, so a
+     * client holding the old one has to be told to ask again.
+     */
+    @Test
+    fun `words route revalidates rather than caching`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        Files.write(dir.resolve("words.jsonl.gz"), byteArrayOf(1, 2, 3))
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", request)
+
+        assertEquals("no-cache, no-transform", response.getHeaderString("Cache-Control"))
+        assertNotNull(response.entityTag)
+    }
+
+    @Test
+    fun `words route answers a matching entity tag with 304`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        Files.write(dir.resolve("words.jsonl.gz"), byteArrayOf(1, 2, 3))
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        val unchanged: Request =
+            mockk {
+                every { evaluatePreconditions(any<EntityTag>()) } returns
+                    Response.notModified()
+            }
+
+        assertEquals(304, resource.episodeWords("ep1", unchanged).status)
     }
 
     @Test
@@ -671,11 +741,11 @@ class SearchResourceTest {
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
 
-        resource.dataDirectory = ""
+        resource.dataDirectory = Optional.empty()
         resource.episode("ep1", "")
         assertNull(ctxSlot.captured.getVariable("wordsUrl"))
 
-        resource.dataDirectory = "/data"
+        resource.dataDirectory = Optional.of("/data")
         resource.episode("ep1", "")
         assertEquals("/episode/ep1/words", ctxSlot.captured.getVariable("wordsUrl"))
     }

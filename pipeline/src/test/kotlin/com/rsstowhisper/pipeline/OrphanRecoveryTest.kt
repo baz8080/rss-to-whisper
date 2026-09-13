@@ -386,6 +386,35 @@ class OrphanRecoveryTest {
         assertEquals(2, tx.calls.size)
     }
 
+    /**
+     * The marker is permanent, so an empty retry winning the comparison costs
+     * the orphan not just this run but every future one -- and it had a real,
+     * if poor, transcript to keep.
+     */
+    @Test
+    fun `an orphan whose retry comes back empty keeps its first decode`(
+        @TempDir dataDir: Path,
+    ) {
+        val orphan = orphanDir(dataDir, "2019-01-01-deadbeef-Bad-Decode", "audio.mp3" to "bytes")
+        val twoFlags =
+            whisperJson(
+                *(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "and that is the thing about it really") }.toTypedArray(),
+            )
+        val (pipeline, tx, _) =
+            buildPipeline(
+                dataDir,
+                listOf(podcast),
+                settledFeed(dataDir),
+                vtts = listOf(twoFlags, """{"segments":[]}"""),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, tx.calls.size)
+        assertTrue(Files.exists(orphan.resolve("transcript.json")))
+        assertFalse(Files.exists(orphan.resolve("recovery-failed")))
+    }
+
     @Test
     fun `does not mark an orphan when the transcriber throws, so an outage is retried`(
         @TempDir dataDir: Path,

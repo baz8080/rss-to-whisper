@@ -317,12 +317,15 @@
             let text;
             try {
                 const response = await fetch(wordsUrl);
-                // 404 is the ordinary case for an episode transcribed before
-                // word timings existed. Fall back silently.
-                if (!response.ok) return noWords();
+                if (response.status === 404) return noSidecar();
+                if (!response.ok) {
+                    // The server having a bad day, not an episode without a
+                    // sidecar. Say nothing and let the next attempt try again.
+                    wordsRequested = false;
+                    return null;
+                }
                 text = await response.text();
             } catch (e) {
-                // A transport failure is worth another go; a 404 is not.
                 wordsRequested = false;
                 return null;
             }
@@ -334,25 +337,39 @@
                 if (!wordsByCue.has(word.seg)) wordsByCue.set(word.seg, []);
                 wordsByCue.get(word.seg).push(word);
             }
+            if (wordsByCue.size === 0) return noSidecar();
+
             renderWords();
-            if (wordSpans.length === 0) return noWords();
+            // Nothing rendered, but the sidecar is fine: every line the query
+            // matched keeps its <mark> and is left unsplit, so a query that
+            // matched all of them leaves nothing to split. Clearing the query
+            // brings the words back, so the toggle stays live.
+            if (wordSpans.length === 0) return say('Hidden on matched lines', 'Clear the query to see word timings');
+
             // The reader may already be somewhere: play was pressed before this
             // arrived, or a #t= link armed the player without starting it.
             highlightWordAt(currentPosition());
             return wordsByCue;
         }
 
+        function say(caption, title) {
+            const el = document.getElementById('word-controls-caption');
+            if (el) el.textContent = caption;
+            const label = document.getElementById('word-controls-label');
+            if (label) label.title = title;
+            return wordsByCue;
+        }
+
         // Said plainly, because a silent no-op leaves an episode with no sidecar
         // looking exactly like one whisper was sure of every word in.
-        function noWords() {
+        function noSidecar() {
             if (dimToggle) {
                 dimToggle.checked = false;
                 dimToggle.disabled = true;
             }
-            const caption = document.getElementById('word-controls-caption');
-            if (caption) caption.textContent = 'No word timings';
-            const label = document.getElementById('word-controls-label');
-            if (label) label.title = 'This episode was transcribed before word timings existed';
+            // The toggle is about to be unreachable, so it cannot be left on.
+            if (transcriptEl) transcriptEl.classList.remove('dim-low-confidence');
+            say('No word timings', 'This episode was transcribed before word timings existed');
             return null;
         }
 
@@ -379,6 +396,17 @@
                 }
             }
             wordSpans.sort((a, b) => a.start - b.start);
+            // whisper sometimes gives a word an end at or before its start --
+            // the pipeline clamps the inversion away rather than inventing a
+            // duration -- which the hold below would read as a word already
+            // over. Such a word runs until the next one instead.
+            for (let i = 0; i < wordSpans.length; i++) {
+                const w = wordSpans[i];
+                if (!(w.end > w.start)) {
+                    const next = wordSpans[i + 1];
+                    w.end = next ? next.start : w.start;
+                }
+            }
         }
 
         // Binary search: last word whose start is at or before now.
@@ -458,8 +486,8 @@
             }
             if (!audioEl) return;
             if (e.key === ' ') {
-                // Space belongs to a focused checkbox or button.
-                if (tag === 'INPUT' || tag === 'BUTTON') return;
+                // Space belongs to a focused checkbox.
+                if (tag === 'INPUT') return;
                 e.preventDefault();
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {

@@ -32,6 +32,9 @@ class EpisodeRepositoryTest {
     @BeforeEach
     fun setUp() {
         val dbPath = tempDir.resolve("test.db").toAbsolutePath().toString()
+        // Asked for by name: a @QuarkusTest elsewhere in this module swaps the
+        // classloader, and DriverManager's own discovery does not survive it.
+        Class.forName("org.sqlite.JDBC")
         DriverManager.getConnection("jdbc:sqlite:$dbPath").use { conn ->
             createSchema(conn)
             insertFixtures(conn)

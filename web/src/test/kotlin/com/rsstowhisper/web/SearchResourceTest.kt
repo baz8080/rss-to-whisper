@@ -20,6 +20,7 @@ import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -675,11 +676,12 @@ class SearchResourceTest {
     }
 
     /**
-     * A symlinked show directory is an ordinary way to lay a library out, and
-     * a textual containment check does not see through one.
+     * A library spread across disks links its show directories elsewhere. That
+     * is the operator's own layout, not a value escaping the tree, so it is
+     * followed -- the check above exists to stop a `..` in the database.
      */
     @Test
-    fun `words route refuses a sidecar reached through a symlink out of the tree`(
+    fun `words route follows a symlinked episode directory`(
         @TempDir tmp: Path,
     ) {
         val outside = tmp.resolve("outside")
@@ -692,7 +694,35 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
+        val response = resource.episodeWords("ep1", request)
+
+        assertEquals(200, response.status)
+        assertArrayEquals(byteArrayOf(9), response.entity as ByteArray)
+    }
+
+    /** A data directory that is not there hides the feature rather than 404ing every episode. */
+    @Test
+    fun `words route is 404 when the data directory does not exist`(
+        @TempDir tmp: Path,
+    ) {
+        resource.dataDirectory = Optional.of(tmp.resolve("gone").toString())
+
         assertEquals(404, resource.episodeWords("ep1", request).status)
+        verify(exactly = 0) { repository.getEpisodeById(any()) }
+    }
+
+    @Test
+    fun `the episode page hides the words url when the data directory does not exist`(
+        @TempDir tmp: Path,
+    ) {
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
+
+        resource.dataDirectory = Optional.of(tmp.resolve("gone").toString())
+        resource.episode("ep1", "")
+
+        assertNull(ctxSlot.captured.getVariable("wordsUrl"))
     }
 
     /**
@@ -716,6 +746,32 @@ class SearchResourceTest {
         assertNotNull(response.entityTag)
     }
 
+    /**
+     * Taken over the bytes, so rewriting the sidecar to a different body of the
+     * same length at the same mtime still changes the tag.
+     */
+    @Test
+    fun `the entity tag follows the content, not the file's stamp`(
+        @TempDir tmp: Path,
+    ) {
+        val dir = tmp.resolve("Show").resolve("ep")
+        Files.createDirectories(dir)
+        val words = dir.resolve("words.jsonl.gz")
+        resource.dataDirectory = Optional.of(tmp.toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        Files.write(words, byteArrayOf(1, 2, 3))
+        val stamp = Files.getLastModifiedTime(words)
+        val first = resource.episodeWords("ep1", request).entityTag
+
+        Files.write(words, byteArrayOf(4, 5, 6))
+        Files.setLastModifiedTime(words, stamp)
+        val second = resource.episodeWords("ep1", request).entityTag
+
+        assertNotEquals(first, second)
+    }
+
     @Test
     fun `words route answers a matching entity tag with 304`(
         @TempDir tmp: Path,
@@ -736,7 +792,9 @@ class SearchResourceTest {
     }
 
     @Test
-    fun `the episode page offers the words url only when a data directory is set`() {
+    fun `the episode page offers the words url only when a data directory is set`(
+        @TempDir tmp: Path,
+    ) {
         every { repository.getEpisodeById("ep1") } returns minimalEpisode()
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
@@ -745,7 +803,7 @@ class SearchResourceTest {
         resource.episode("ep1", "")
         assertNull(ctxSlot.captured.getVariable("wordsUrl"))
 
-        resource.dataDirectory = Optional.of("/data")
+        resource.dataDirectory = Optional.of(tmp.toString())
         resource.episode("ep1", "")
         assertEquals("/episode/ep1/words", ctxSlot.captured.getVariable("wordsUrl"))
     }

@@ -32,10 +32,13 @@ import jakarta.ws.rs.core.Response
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
+import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.HexFormat
 import java.util.Locale
 import java.util.Optional
 
@@ -172,18 +175,22 @@ class SearchResource {
     ): Response {
         val wordsPath = wordsFileFor(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
 
-        val tag =
-            runCatching {
-                EntityTag("${Files.getLastModifiedTime(wordsPath).toMillis()}-${Files.size(wordsPath)}")
-            }.getOrNull() ?: return Response.status(Response.Status.NOT_FOUND).build()
-        request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
-
         // The pipeline clears the sidecar for the whole of a re-transcribe swap,
         // so a read landing in that window has found the ordinary missing case
         // rather than a fault worth a 500.
         val bytes =
-            runCatching { Files.readAllBytes(wordsPath) }.getOrNull()
-                ?: return Response.status(Response.Status.NOT_FOUND).build()
+            try {
+                Files.readAllBytes(wordsPath)
+            } catch (e: IOException) {
+                return Response.status(Response.Status.NOT_FOUND).build()
+            }
+
+        // Tagged from the bytes rather than from a stat taken before reading
+        // them: those describe different instants, and a tag naming a version
+        // the body is not would be pinned in the browser by the no-cache
+        // revalidation below for as long as the file then sat still.
+        val tag = entityTagFor(bytes)
+        request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
 
         return Response.ok(bytes)
             .type("application/x-ndjson")
@@ -197,28 +204,38 @@ class SearchResource {
             .build()
     }
 
-    /** Null unless word timings are configured. */
+    /**
+     * Null unless word timings are configured and the configured tree is really
+     * there -- a path pointing nowhere hides the feature rather than offering
+     * it on every episode and then failing each one.
+     */
     private fun dataRoot(): java.nio.file.Path? =
-        dataDirectory.orElse("").takeIf { it.isNotBlank() }?.let {
-            java.nio.file.Path.of(it).toAbsolutePath().normalize()
-        }
+        dataDirectory.orElse("").takeIf { it.isNotBlank() }
+            ?.let { java.nio.file.Path.of(it).toAbsolutePath().normalize() }
+            ?.takeIf { Files.isDirectory(it) }
 
     private fun wordsFileFor(id: String): java.nio.file.Path? {
         val root = dataRoot() ?: return null
         val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
-        val audioPath = root.resolve(relative)
-        val wordsPath = (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
 
-        // The relative path comes from the database, but one reaching outside
-        // the data directory must not be servable whatever put it there. Both
-        // sides are resolved for real, not normalised: normalising is textual,
-        // and a symlinked show directory is an ordinary way to lay out a
-        // library. A path that does not resolve is one there is nothing to
-        // serve for.
-        val realRoot = runCatching { root.toRealPath() }.getOrNull() ?: return null
-        val realWords = runCatching { wordsPath.toRealPath() }.getOrNull() ?: return null
-        if (!realWords.startsWith(realRoot) || !Files.isRegularFile(realWords)) return null
-        return realWords
+        // The root is resolved for real, so a data directory that is itself a
+        // symlink still matches what gets built from it. The episode path is
+        // only normalised, which is what stops a database value walking out of
+        // the tree with "..". Symlinks below the root are followed: they are
+        // the operator's own layout -- a library spread across disks links its
+        // show directories elsewhere -- and refusing them would cost those
+        // episodes the feature to guard a tree the operator already owns.
+        val realRoot =
+            try {
+                root.toRealPath()
+            } catch (e: IOException) {
+                return null
+            }
+        val audioPath = realRoot.resolve(relative).normalize()
+        if (!audioPath.startsWith(realRoot)) return null
+
+        val wordsPath = (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
+        return wordsPath.takeIf { Files.isRegularFile(it) }
     }
 
     /** The same search as `/search`, for use from a shell or a notebook. */
@@ -350,6 +367,16 @@ class SearchResource {
     companion object {
         /** Written by the pipeline beside each episode's audio. */
         internal const val WORDS_FILENAME = "words.jsonl.gz"
+
+        /**
+         * Strong, and taken over the bytes themselves so it cannot outrun them.
+         * The sidecar is tens of kilobytes; digesting it costs nothing worth
+         * trading correctness for.
+         */
+        private fun entityTagFor(bytes: ByteArray): EntityTag =
+            EntityTag(
+                HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)).substring(0, 32),
+            )
 
         /**
          * no-transform is CacheControl's default and is kept deliberately: the

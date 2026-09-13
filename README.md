@@ -367,20 +367,32 @@ harder to read than one that never shows its confidence at all.
 The sidecar is roughly 60 KB per episode, so it is never fetched on page load — the
 first play pulls it, and so does ticking the toggle. Episodes transcribed before word
 timestamps were emitted have no sidecar; the route returns 404 and the toggle says
-**No word timings** rather than sitting there doing nothing.
+**No word timings** rather than sitting there doing nothing. A query that matched
+*every* line is the one case where the sidecar is fine but nothing can be shown — the
+toggle says **Hidden on matched lines** and stays live, since clearing the query brings
+the words back.
 
 The file is served by the web module from `/episode/{id}/words`, rather than fetched
 from the audio host: the path is derived from a column already in hand, it needs no
 CORS grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets
 the browser inflate it instead of the page carrying a decompressor. It is sent gzipped
 whatever the request's `Accept-Encoding` says, since the file is only gzip on disk —
-`curl` it with `--compressed`. Paths are resolved on both sides with `toRealPath`, so
-a symlink out of the tree is refused along with a `..` that walks out of it.
+`curl` it with `--compressed`.
+
+The data directory itself is resolved with `toRealPath`, so a tree that is a symlink
+still matches the paths built from it, and episode paths are normalised, which is what
+refuses a `..` walking out of the tree. Symlinks *below* the data directory are
+followed: a library spread across disks links its show directories elsewhere, and that
+is the operator's own layout rather than something to guard against. If the configured
+directory is not there at all, the feature stays hidden instead of being offered on
+every episode and then failing on each one.
 
 The response revalidates rather than being held: re-transcribing an episode rewrites
 the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar
-against a fresh transcript mis-times every word. An `ETag` makes the usual answer a
-304.
+against a fresh transcript mis-times every word. The `ETag` is taken over the bytes
+that are actually sent — a validator derived from a `stat` can name a version the body
+is not, and `no-cache` would then pin that mismatch in the browser until the file next
+changed. The usual answer is a 304.
 
 On a line the search query matched, the `<mark>` highlighting wins and the line is
 not split into words — word timing is the lesser feature there.

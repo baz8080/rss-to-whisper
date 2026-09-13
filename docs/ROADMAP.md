@@ -48,6 +48,13 @@ Done so far from this list:
   opened `NOFOLLOW` as well as checked so the two syscalls cannot be raced. The page
   never lets the sidecar rewrite the transcript: a line is split only when its words
   rebuild it exactly, because the pipeline drops a word whose timings whisper omitted.
+- **I1, incremental indexing.** `index.py` stats every `transcript.json` and opens only
+  the ones whose mtime or size changed, tracked in `source_path`/`source_mtime`/
+  `source_size`/`source_id` on `episodes` plus a `skipped_sources` table for the files it
+  walked and deliberately did not index. `episodes_fts` is external-content, so it is
+  maintained by hand per row, or rebuilt in one go past `FTS_REBUILD_SHARE` of the
+  corpus. `--full` forces the old behaviour and is taken automatically for a database
+  without the tracking columns.
 - **W7, JSON API.** `quarkus-rest-jackson`, `/api/search` and `/api/episode/{id}`.
   `Episode` gained `snippetText` and `@get:JsonIgnore` on the three getters that should
   not be in a payload.
@@ -263,43 +270,3 @@ so in the README rather than promising more.
 add a case with a fresh lock (skipped) and a stale lock (processed).
 
 **Effort.** Small.
-
----
-
-## Indexer
-
-### I1. Incremental indexing
-
-**Why.** `index.py` drops both tables and re-reads every `transcript.json` on every run.
-On the corpus sizes in the README that is minutes of network I/O to add a handful of new
-episodes, which discourages running it after every pipeline run.
-
-**Where.** `index.py`, the smoke test in `.github/workflows/ci.yml`.
-
-**Design.**
-
-- Add `source_path TEXT` and `source_mtime REAL` columns. On a run, walk the directories
-  as now but only `stat` each `transcript.json`; read and upsert those whose mtime differs
-  from the stored value or that are new; delete rows whose file is gone.
-- `episodes_fts` is an external-content table, so rows cannot simply be replaced: before
-  updating or deleting an episode row, issue the FTS delete command
-  (`INSERT INTO episodes_fts(episodes_fts, rowid, episode_title, episode_transcript_plain,
-  podcast_title, all_tags) VALUES('delete', old.rowid, …)` with the *old* values), then
-  update and insert the new FTS row. Alternatively fall back to the full `'rebuild'` when
-  more than, say, 20 percent of rows changed.
-- Duplicate-GUID disambiguation (`disambiguate_ids`) needs every id, which today means
-  reading every file. The id is the `<hex8>` in the directory name (`md5(guid)[:8]`, the
-  same value as `_id`) and the ordering key is the audio path, also derivable from the
-  directory name, so the clash groups can be computed from the listing without opening any
-  file. Do that, and only read the JSON for rows that changed.
-- Keep `--full` for the current behaviour, and take it automatically when the database
-  lacks the new columns.
-
-**Gotchas.** The web module holds an open read connection under WAL; incremental writes
-are fine, as the full rebuild already is. Keep the "nothing to index leaves the database
-untouched" guard.
-
-**Tests.** Extend the CI smoke test: run twice, assert the second run reports zero changes,
-touch one fixture and assert exactly one row updated and FTS still finds its new text.
-
-**Effort.** Medium.

@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import stat
 import sys
 import time
 
@@ -50,7 +51,25 @@ CREATE TABLE IF NOT EXISTS episodes (
     episode_transcript TEXT,
     episode_transcript_plain TEXT,
     episode_relative_audio_path TEXT,
-    all_tags TEXT
+    all_tags TEXT,
+    -- Where the row came from and what it looked like, so a re-index can tell
+    -- which files it still has to read. source_id is the _id as written, before
+    -- disambiguate_ids has had a chance to suffix it.
+    source_path TEXT,
+    source_mtime REAL,
+    source_size INTEGER,
+    source_id TEXT
+)
+"""
+
+# The files walked but deliberately not indexed -- no _id, no transcript, or
+# unreadable. Without them a skipped file looks new on every run, and gets
+# opened again every time, which is the cost this is all here to avoid.
+SCHEMA_SKIPPED = """
+CREATE TABLE IF NOT EXISTS skipped_sources (
+    source_path TEXT PRIMARY KEY,
+    source_mtime REAL,
+    source_size INTEGER
 )
 """
 
@@ -67,23 +86,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 )
 """
 
-INSERT_SQL = """
-INSERT OR REPLACE INTO episodes (
-    id, podcast_title, podcast_link, podcast_language, podcast_copyright,
-    podcast_author, podcast_image, podcast_type, podcast_collections,
-    episode_title, episode_published_on, episode_audio_link, episode_web_link,
-    episode_image, episode_summary, episode_subtitle, episode_authors,
-    episode_number, episode_season, episode_type, episode_duration,
-    episode_transcript, episode_transcript_plain, episode_relative_audio_path, all_tags
-) VALUES (
-    :id, :podcast_title, :podcast_link, :podcast_language, :podcast_copyright,
-    :podcast_author, :podcast_image, :podcast_type, :podcast_collections,
-    :episode_title, :episode_published_on, :episode_audio_link, :episode_web_link,
-    :episode_image, :episode_summary, :episode_subtitle, :episode_authors,
-    :episode_number, :episode_season, :episode_type, :episode_duration,
-    :episode_transcript, :episode_transcript_plain, :episode_relative_audio_path, :all_tags
+COLUMNS = (
+    "id", "podcast_title", "podcast_link", "podcast_language", "podcast_copyright",
+    "podcast_author", "podcast_image", "podcast_type", "podcast_collections",
+    "episode_title", "episode_published_on", "episode_audio_link", "episode_web_link",
+    "episode_image", "episode_summary", "episode_subtitle", "episode_authors",
+    "episode_number", "episode_season", "episode_type", "episode_duration",
+    "episode_transcript", "episode_transcript_plain", "episode_relative_audio_path",
+    "all_tags", "source_path", "source_mtime", "source_size", "source_id",
 )
-"""
+
+# Built from COLUMNS rather than written out: an incremental run needs the same
+# column list twice, and two hand-maintained lists is one more than can be kept
+# in step.
+INSERT_SQL = "INSERT OR REPLACE INTO episodes ({}) VALUES ({})".format(
+    ", ".join(COLUMNS),
+    ", ".join(":" + c for c in COLUMNS),
+)
+
+# By rowid, not by id: episodes_fts is an external-content table keyed on the
+# rowid, and INSERT OR REPLACE would allocate a new one and strand the index.
+UPDATE_SQL = "UPDATE episodes SET {} WHERE rowid = :rowid".format(
+    ", ".join("{0} = :{0}".format(c) for c in COLUMNS),
+)
+
+# The columns episodes_fts indexes, in its own order.
+FTS_COLUMNS = ("episode_title", "episode_transcript_plain", "podcast_title", "all_tags")
+
+# Past this share of the corpus, one rebuild beats a delete and an insert per
+# row -- and sidesteps any chance of the hand-maintained index drifting.
+FTS_REBUILD_SHARE = 0.2
+
 
 _VTT_TIMING_RE = re.compile(r"\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}")
 
@@ -105,18 +138,23 @@ def join_list(value):
     return ", ".join(str(item) for item in value if item is not None)
 
 
-def disambiguate_ids(episodes):
-    """Make the id column unique, warning about every clash.
+def disambiguate_ids(records):
+    """Give every record a unique `id`, warning about every clash.
 
-    _id is md5(guid)[:8], so two feed entries sharing a GUID -- which
+    source_id is md5(guid)[:8], so two feed entries sharing a GUID -- which
     publishers do get wrong -- collapse into one row under INSERT OR REPLACE
     and the loser silently vanishes from search. Suffix the later ones instead
     so both stay reachable, ordered by audio path so the ids are stable across
     re-indexes.
+
+    An incremental run passes the records it read alongside stubs for the files
+    it did not, so a clash is resolved the same way whether or not the episode
+    it lands on happened to change.
     """
     by_id = {}
-    for ep in episodes:
-        by_id.setdefault(ep["id"], []).append(ep)
+    for record in records:
+        record["id"] = record["source_id"]
+        by_id.setdefault(record["source_id"], []).append(record)
 
     clashes = 0
     for episode_id, group in by_id.items():
@@ -125,20 +163,27 @@ def disambiguate_ids(episodes):
         clashes += 1
         group.sort(key=lambda e: e["episode_relative_audio_path"] or "")
         print(f"  WARNING: {len(group)} episodes share _id {episode_id}:", file=sys.stderr)
-        for n, ep in enumerate(group, start=1):
+        for n, record in enumerate(group, start=1):
             if n > 1:
-                ep["id"] = f"{episode_id}-{n}"
-            print(f"    {ep['id']}  {ep['episode_relative_audio_path']}", file=sys.stderr)
+                record["id"] = f"{episode_id}-{n}"
+            print(f"    {record['id']}  {record['episode_relative_audio_path']}", file=sys.stderr)
 
     if clashes:
         print(f"  {clashes} duplicate _id group(s) disambiguated", file=sys.stderr)
-    return episodes
+    return records
 
 
-def collect_episodes(data_dir):
-    """Walk the data directory and yield episode dicts."""
-    count = 0
+def scan_sources(data_dir):
+    """Map every transcript.json under the data directory to its mtime.
 
+    Stats only. Reading these is the cost an incremental run exists to avoid,
+    and on the corpus sizes in the README it is minutes of network I/O.
+
+    Size as well as mtime: a filesystem whose timestamps are coarse can give a
+    rewrite the same mtime as the write before it, and a transcript that was
+    re-indexed in between would otherwise stay stale until the next --full.
+    """
+    sources = {}
     for podcast_name in sorted(os.listdir(data_dir)):
         podcast_path = os.path.join(data_dir, podcast_name)
         if not os.path.isdir(podcast_path):
@@ -146,102 +191,267 @@ def collect_episodes(data_dir):
 
         for episode_name in os.listdir(podcast_path):
             episode_path = os.path.join(podcast_path, episode_name)
-            if not os.path.isdir(episode_path):
-                continue
-
             json_path = os.path.join(episode_path, "transcript.json")
-            if not os.path.isfile(json_path):
-                continue
-
             try:
-                with open(json_path, "r") as f:
-                    episode = json.load(f)
-            except (json.JSONDecodeError, OSError) as e:
-                print(f"  WARNING: Failed to read {json_path}: {e}", file=sys.stderr)
+                info = os.stat(json_path)
+            except OSError:
                 continue
-
-            transcript = episode.get("episode_transcript")
-            if not transcript:
+            if not stat.S_ISREG(info.st_mode):
                 continue
+            sources[os.path.relpath(json_path, data_dir)] = (info.st_mtime, info.st_size)
 
-            episode_id = episode.get("_id")
-            if not episode_id:
-                print(f"  WARNING: Skipping {json_path}: missing _id", file=sys.stderr)
-                continue
-
-            yield {
-                "id": episode_id,
-                "podcast_title": episode.get("podcast_title"),
-                "podcast_link": episode.get("podcast_link"),
-                "podcast_language": episode.get("podcast_language"),
-                "podcast_copyright": episode.get("podcast_copyright"),
-                "podcast_author": episode.get("podcast_author"),
-                "podcast_image": episode.get("podcast_image"),
-                "podcast_type": episode.get("podcast_type"),
-                "podcast_collections": join_list(episode.get("podcast_collections")),
-                "episode_title": episode.get("episode_title"),
-                "episode_published_on": episode.get("episode_published_on"),
-                "episode_audio_link": episode.get("episode_audio_link"),
-                "episode_web_link": episode.get("episode_web_link"),
-                "episode_image": episode.get("episode_image"),
-                "episode_summary": episode.get("episode_summary"),
-                "episode_subtitle": episode.get("episode_subtitle"),
-                "episode_authors": join_list(episode.get("episode_authors")),
-                "episode_number": episode.get("episode_number"),
-                "episode_season": episode.get("episode_season"),
-                "episode_type": episode.get("episode_type"),
-                "episode_duration": episode.get("episode_duration"),
-                "episode_transcript": transcript,
-                "episode_transcript_plain": strip_vtt(transcript),
-                "episode_relative_audio_path": episode.get("episode_relative_audio_path"),
-                "all_tags": join_list(episode.get("all_tags")),
-            }
-            count += 1
-
-    print(f"Found {count} episodes to index")
+    return sources
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Index podcast transcripts into SQLite FTS5")
-    parser.add_argument("data_dir", help="Path to the podcast data directory")
-    parser.add_argument("--db", default=None, help="Path to SQLite database (default: <data_dir>/podcasts.db)")
-    args = parser.parse_args()
-
-    if not os.path.isdir(args.data_dir):
-        print(f"ERROR: Data directory does not exist: {args.data_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    db_path = args.db or os.path.join(args.data_dir, "podcasts.db")
-    print(f"Data directory: {args.data_dir}")
-    print(f"Database: {db_path}")
-
-    conn = sqlite3.connect(db_path)
-
+def read_episode(data_dir, source_path, stamp):
+    """The row a transcript.json becomes, or None having said why."""
+    json_path = os.path.join(data_dir, source_path)
     try:
-        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_check USING fts5(x)")
-        conn.execute("DROP TABLE IF EXISTS _fts5_check")
-    except sqlite3.OperationalError:
-        print(
-            "ERROR: This SQLite build has no FTS5 support. Install pysqlite3: pip install pysqlite3",
-            file=sys.stderr,
-        )
-        conn.close()
-        sys.exit(1)
+        with open(json_path, "r") as f:
+            episode = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  WARNING: Failed to read {json_path}: {e}", file=sys.stderr)
+        return None
 
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
+    transcript = episode.get("episode_transcript")
+    if not transcript:
+        return None
 
+    episode_id = episode.get("_id")
+    if not episode_id:
+        print(f"  WARNING: Skipping {json_path}: missing _id", file=sys.stderr)
+        return None
+
+    return {
+        "podcast_title": episode.get("podcast_title"),
+        "podcast_link": episode.get("podcast_link"),
+        "podcast_language": episode.get("podcast_language"),
+        "podcast_copyright": episode.get("podcast_copyright"),
+        "podcast_author": episode.get("podcast_author"),
+        "podcast_image": episode.get("podcast_image"),
+        "podcast_type": episode.get("podcast_type"),
+        "podcast_collections": join_list(episode.get("podcast_collections")),
+        "episode_title": episode.get("episode_title"),
+        "episode_published_on": episode.get("episode_published_on"),
+        "episode_audio_link": episode.get("episode_audio_link"),
+        "episode_web_link": episode.get("episode_web_link"),
+        "episode_image": episode.get("episode_image"),
+        "episode_summary": episode.get("episode_summary"),
+        "episode_subtitle": episode.get("episode_subtitle"),
+        "episode_authors": join_list(episode.get("episode_authors")),
+        "episode_number": episode.get("episode_number"),
+        "episode_season": episode.get("episode_season"),
+        "episode_type": episode.get("episode_type"),
+        "episode_duration": episode.get("episode_duration"),
+        "episode_transcript": transcript,
+        "episode_transcript_plain": strip_vtt(transcript),
+        "episode_relative_audio_path": episode.get("episode_relative_audio_path"),
+        "all_tags": join_list(episode.get("all_tags")),
+        "source_path": source_path,
+        "source_mtime": stamp[0],
+        "source_size": stamp[1],
+        "source_id": episode_id,
+    }
+
+
+def fts_values(conn, rowid):
+    """What episodes_fts holds for a row, which is what deleting it needs."""
+    return conn.execute(
+        f"SELECT {', '.join(FTS_COLUMNS)} FROM episodes WHERE rowid = ?", (rowid,)
+    ).fetchone()
+
+
+def fts_delete(conn, rowid, values):
+    conn.execute(
+        "INSERT INTO episodes_fts(episodes_fts, rowid, {}) VALUES('delete', ?, ?, ?, ?, ?)".format(
+            ", ".join(FTS_COLUMNS)
+        ),
+        (rowid, *values),
+    )
+
+
+def fts_insert(conn, rowid, values):
+    conn.execute(
+        "INSERT INTO episodes_fts(rowid, {}) VALUES (?, ?, ?, ?, ?)".format(", ".join(FTS_COLUMNS)),
+        (rowid, *values),
+    )
+
+
+def schema_is_current(conn):
+    """Whether this database can be updated in place rather than rebuilt."""
+    tables = {
+        row[0]
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    }
+    if not {"episodes", "episodes_fts", "skipped_sources"} <= tables:
+        return False
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(episodes)")}
+    return {"source_path", "source_mtime", "source_size", "source_id"} <= columns
+
+
+def load_stored(conn):
+    """What each indexed row remembers about the file it came from.
+
+    None when any row predates the tracking columns: the rest of the corpus
+    cannot be trusted to be up to date either, so the caller rebuilds.
+    """
+    stored = {}
+    for rowid, source_path, episode_id, source_id, mtime, size, audio in conn.execute(
+        "SELECT rowid, source_path, id, source_id, source_mtime, source_size, "
+        "episode_relative_audio_path FROM episodes"
+    ):
+        if source_path is None:
+            return None
+        stored[source_path] = {
+            "rowid": rowid,
+            "id": episode_id,
+            "source_id": source_id,
+            "stamp": (mtime, size),
+            "audio": audio,
+        }
+    return stored
+
+
+def load_skipped(conn):
+    """The files a previous run walked and could not index, with their stamps."""
+    return {
+        row[0]: (row[1], row[2])
+        for row in conn.execute("SELECT source_path, source_mtime, source_size FROM skipped_sources")
+    }
+
+
+def run_incremental(conn, data_dir, sources):
+    """Bring the database up to date by reading only what changed.
+
+    False when it cannot, and the caller should rebuild instead.
+    """
+    stored = load_stored(conn)
+    if stored is None:
+        return False
+    skipped = load_skipped(conn)
+
+    # Both tables together are what the last run knew about, and a file is only
+    # worth opening again if it is new to both or has changed since.
+    known = {p: row["stamp"] for p, row in stored.items()}
+    known.update(skipped)
+
+    gone = set(known) - set(sources)
+    fresh = set(sources) - set(known)
+    touched = {p for p in set(sources) & set(known) if known[p] != sources[p]}
+
+    if not (gone or fresh or touched):
+        print(f"Already up to date: {len(sources)} transcripts, none changed")
+        return True
+
+    print(f"{len(fresh)} new, {len(touched)} changed, {len(gone)} removed")
+
+    records, unreadable = [], []
+    for source_path in sorted(fresh | touched):
+        record = read_episode(data_dir, source_path, sources[source_path])
+        if record is None:
+            unreadable.append(source_path)
+        else:
+            records.append(record)
+
+    # A file that has stopped being indexable -- unreadable now, or its
+    # transcript gone -- would otherwise leave its old row behind for good.
+    read = {r["source_path"] for r in records}
+    drop = (gone & set(stored)) | {p for p in unreadable if p in stored}
+    forget = (gone & set(skipped)) | (read & set(skipped))
+
+    # The files that are not being read still take part in deciding ids, so a
+    # clash resolves the way a full rebuild would resolve it.
+    stubs = [
+        {
+            "source_path": p,
+            "source_id": stored[p]["source_id"],
+            "episode_relative_audio_path": stored[p]["audio"],
+        }
+        for p in stored
+        if p not in drop and p not in read
+    ]
+    disambiguate_ids(records + stubs)
+
+    affected = len(records) + len(drop)
+    bulk = bool(stored) and affected > len(stored) * FTS_REBUILD_SHARE
+    if bulk:
+        print(f"  Rebuilding the FTS index: {affected} of {len(stored)} rows are affected")
+
+    with conn:
+        # Every id that is about to move goes somewhere unique first: a clash
+        # group gaining a member shuffles the suffixes, and two rows would
+        # otherwise hold the same id for the moment between their updates.
+        final_ids = {r["source_path"]: r["id"] for r in records + stubs}
+        for source_path, new_id in final_ids.items():
+            row = stored.get(source_path)
+            if row and row["id"] != new_id:
+                conn.execute(
+                    "UPDATE episodes SET id = ? WHERE rowid = ?",
+                    (f"__reindexing__{row['rowid']}", row["rowid"]),
+                )
+
+        for source_path in sorted(drop):
+            rowid = stored[source_path]["rowid"]
+            if not bulk:
+                fts_delete(conn, rowid, fts_values(conn, rowid))
+            conn.execute("DELETE FROM episodes WHERE rowid = ?", (rowid,))
+
+        for record in records:
+            row = stored.get(record["source_path"])
+            if row:
+                if not bulk:
+                    fts_delete(conn, row["rowid"], fts_values(conn, row["rowid"]))
+                conn.execute(UPDATE_SQL, {**record, "rowid": row["rowid"]})
+                rowid = row["rowid"]
+            else:
+                rowid = conn.execute(INSERT_SQL, record).lastrowid
+            if not bulk:
+                fts_insert(conn, rowid, [record[c] for c in FTS_COLUMNS])
+
+        # Only the id moved, and episodes_fts does not index it, so these rows
+        # need no more than the column write.
+        for stub in stubs:
+            row = stored[stub["source_path"]]
+            if row["id"] != stub["id"]:
+                conn.execute(
+                    "UPDATE episodes SET id = ? WHERE rowid = ?", (stub["id"], row["rowid"])
+                )
+
+        if bulk:
+            conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
+
+        for source_path in sorted(forget):
+            conn.execute("DELETE FROM skipped_sources WHERE source_path = ?", (source_path,))
+        for source_path in unreadable:
+            conn.execute(
+                "INSERT OR REPLACE INTO skipped_sources(source_path, source_mtime, source_size) "
+                "VALUES (?, ?, ?)",
+                (source_path, *sources[source_path]),
+            )
+
+    print(f"Done: {conn.execute('SELECT count(*) FROM episodes').fetchone()[0]} episodes indexed")
+    return True
+
+
+def run_full(conn, data_dir, sources, db_path):
+    """Rebuild both tables from every transcript.json."""
     # Collect before dropping anything. The rebuild below is destructive and
     # episodes_fts is only recreated at the very end, so bailing out after the
     # drops would leave a previously working database truncated and without its
     # FTS index -- and every episode can be skipped legitimately (e.g. none of
     # the transcript.json files carry an _id).
-    episodes = disambiguate_ids(list(collect_episodes(args.data_dir)))
+    episodes, skipped = [], []
+    for source_path in sorted(sources):
+        record = read_episode(data_dir, source_path, sources[source_path])
+        if record is None:
+            skipped.append(source_path)
+        else:
+            episodes.append(record)
+    print(f"Found {len(episodes)} episodes to index")
+    disambiguate_ids(episodes)
 
     if not episodes:
         print("Nothing to index; leaving the existing database untouched")
-        conn.close()
         return
 
     # Use raw sqlite_master to drop FTS table safely — DROP TABLE on a
@@ -271,7 +481,13 @@ def main():
             conn.close()
             sys.exit(1)
     conn.execute("DROP TABLE IF EXISTS episodes")
+    conn.execute("DROP TABLE IF EXISTS skipped_sources")
     conn.execute(SCHEMA_EPISODES)
+    conn.execute(SCHEMA_SKIPPED)
+    conn.executemany(
+        "INSERT OR REPLACE INTO skipped_sources(source_path, source_mtime, source_size) VALUES (?, ?, ?)",
+        [(p, *sources[p]) for p in skipped],
+    )
     conn.commit()
 
     t0 = time.time()
@@ -286,6 +502,7 @@ def main():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_podcast ON episodes(podcast_title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_type ON episodes(episode_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_duration ON episodes(episode_duration)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_episodes_source ON episodes(source_path)")
     conn.commit()
     print(f"  Indexes: {time.time() - t0:.1f}s")
 
@@ -299,6 +516,64 @@ def main():
     print(f"  FTS build: {time.time() - t0:.1f}s")
     print("Done")
 
+
+def main():
+    parser = argparse.ArgumentParser(description="Index podcast transcripts into SQLite FTS5")
+    parser.add_argument("data_dir", help="Path to the podcast data directory")
+    parser.add_argument("--db", default=None, help="Path to SQLite database (default: <data_dir>/podcasts.db)")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Rebuild both tables from every transcript, instead of reading only what changed",
+    )
+    args = parser.parse_args()
+
+    if not os.path.isdir(args.data_dir):
+        print(f"ERROR: Data directory does not exist: {args.data_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    db_path = args.db or os.path.join(args.data_dir, "podcasts.db")
+    print(f"Data directory: {args.data_dir}")
+    print(f"Database: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_check USING fts5(x)")
+        conn.execute("DROP TABLE IF EXISTS _fts5_check")
+    except sqlite3.OperationalError:
+        print(
+            "ERROR: This SQLite build has no FTS5 support. Install pysqlite3: pip install pysqlite3",
+            file=sys.stderr,
+        )
+        conn.close()
+        sys.exit(1)
+
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+
+    t0 = time.time()
+    sources = scan_sources(args.data_dir)
+    print(f"Found {len(sources)} transcripts in {time.time() - t0:.1f}s")
+
+    # The same guard a full rebuild has always had, and it matters more here:
+    # an unmounted share reads as an empty corpus, and an incremental run would
+    # take that as every episode having been deleted.
+    if not sources:
+        print("Nothing to index; leaving the existing database untouched")
+        conn.close()
+        return
+
+    if not args.full and schema_is_current(conn):
+        if run_incremental(conn, args.data_dir, sources):
+            conn.close()
+            return
+        print("Some rows predate change tracking; rebuilding in full")
+    elif not args.full:
+        print("This database has no change tracking yet; building it in full")
+
+    run_full(conn, args.data_dir, sources, db_path)
     conn.close()
 
 

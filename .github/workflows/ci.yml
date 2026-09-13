@@ -84,3 +84,54 @@ jobs:
           assert hits == [("Kotlin episode",)], f"unexpected FTS result: {hits}"
           print("index.py smoke test passed")
           PY
+
+      # A second run must read nothing, and a touched transcript must reach the
+      # FTS index -- an incremental indexer that quietly misses an edit looks
+      # exactly like one that works.
+      - name: Smoke-test incremental re-indexing
+        run: |
+          set -euo pipefail
+          python3 index.py fixture | tee second-run.txt
+          grep -q 'none changed' second-run.txt
+          cat > fixture/Show/ep1/transcript.json <<'JSON'
+          {"_id": "ep1", "podcast_title": "Show", "episode_title": "Kotlin episode",
+           "episode_transcript": "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nkotlin flows instead.\n"}
+          JSON
+          python3 index.py fixture | tee third-run.txt
+          grep -q '0 new, 1 changed, 0 removed' third-run.txt
+          python3 - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("fixture/podcasts.db")
+          assert [r[0] for r in c.execute("SELECT id FROM episodes")] == ["ep1"]
+          new = c.execute("SELECT count(*) FROM episodes_fts WHERE episodes_fts MATCH 'flows'").fetchone()[0]
+          old = c.execute("SELECT count(*) FROM episodes_fts WHERE episodes_fts MATCH 'coroutines'").fetchone()[0]
+          assert new == 1, "the edited transcript did not reach the FTS index"
+          assert old == 0, "the replaced text is still in the FTS index"
+          # FTS5's own check that the index matches the table it shadows.
+          c.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('integrity-check')")
+          print("incremental smoke test passed")
+          PY
+
+      # The two paths have to agree, or an incremental run quietly diverges from
+      # what a rebuild would have produced.
+      - name: Incremental and --full agree
+        run: |
+          set -euo pipefail
+          mkdir -p fixture/Show/ep3
+          cat > fixture/Show/ep3/transcript.json <<'JSON'
+          {"_id": "ep3", "podcast_title": "Show", "episode_title": "Third",
+           "episode_transcript": "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nthird episode text.\n"}
+          JSON
+          rm -rf fixture/Show/ep2
+          python3 index.py fixture
+          python3 index.py fixture --db rebuilt.db --full
+          python3 - <<'PY'
+          import sqlite3
+          def dump(path):
+              c = sqlite3.connect(path)
+              cols = [r[1] for r in c.execute("PRAGMA table_info(episodes)") if r[1] != "source_mtime"]
+              return c.execute(f"SELECT {','.join(cols)} FROM episodes ORDER BY id").fetchall()
+          a, b = dump("fixture/podcasts.db"), dump("rebuilt.db")
+          assert a == b, f"incremental and --full disagree:\n{a}\n{b}"
+          print(f"both paths agree on {len(a)} rows")
+          PY

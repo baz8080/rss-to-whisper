@@ -17,7 +17,7 @@ The FTS index is one row per episode, so SQLite reports *which* episodes match b
 ## Python scripts
 
 ### `index.py`
-Reads all `transcript.json` files in the data directory and writes them into a SQLite FTS5 database. Run this after the pipeline to make new transcripts searchable.
+Reads the `transcript.json` files in the data directory and writes them into a SQLite FTS5 database. Run this after the pipeline to make new transcripts searchable. After the first run it reads only what has changed, so running it after every pipeline run costs seconds rather than minutes.
 
 Requires Python 3 with an FTS5-capable SQLite. The script prefers `pysqlite3` when installed and falls back to the standard library `sqlite3` module otherwise, exiting with a clear error if neither has FTS5:
 
@@ -300,9 +300,39 @@ python3 index.py /path/to/data_directory
 
 # Specify a custom database path
 python3 index.py /path/to/data_directory --db /path/to/podcasts.db
+
+# Read every transcript again, instead of only what changed
+python3 index.py /path/to/data_directory --full
 ```
 
 The database defaults to `podcasts.db` inside the data directory. Designed to run directly on the machine hosting the files to avoid network filesystem overhead.
+
+### What a re-index actually reads
+
+The first run against a database reads everything. After that it stats each
+`transcript.json` and opens only the ones whose modification time or size has changed,
+along with any it has not seen before; rows whose file has gone are deleted. Reading the
+files is the expensive part on a network share, so a run that finds nothing new finishes
+in about the time it takes to walk the tree.
+
+Each row records the file it came from, and a second table records the files that were
+walked but deliberately not indexed — no `_id`, no transcript, or unreadable — so those
+are not reopened on every run either. They are picked up as soon as they change.
+
+`episodes_fts` is an external-content table, so it is maintained alongside: rows are
+deleted from and inserted into the index by hand as their episodes change, or the whole
+index is rebuilt in one go once more than a fifth of the corpus is affected.
+
+Two things are worth knowing:
+
+- A rewrite that lands with **both** the same modification time and the same size as the
+  version already indexed is not noticed. Filesystems with coarse timestamps make this
+  possible in principle; `--full` is the repair.
+- An empty data directory leaves the database untouched rather than emptying it, which is
+  what an unmounted share looks like.
+
+`--full` rebuilds both tables from every transcript, and is taken automatically when the
+database predates incremental indexing.
 
 ## Serving the web UI
 

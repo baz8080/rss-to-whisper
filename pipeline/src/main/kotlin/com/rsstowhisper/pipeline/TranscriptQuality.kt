@@ -199,10 +199,10 @@ data class QualityReport(
      */
     fun isBetterThan(other: QualityReport): Boolean =
         when {
-            // A decode with no speech is not a better transcript, it is no
-            // transcript. It trips exactly one flag, so on count alone it beats
-            // any decode bad enough to trip two -- and a poor transcript is
-            // worth more than none, which on the orphan path is permanent.
+            // Ahead of the count because an empty decode trips exactly one
+            // flag, so on count alone it beats any decode bad enough to trip
+            // two. A poor transcript is worth more than none, and on the orphan
+            // path none is permanent.
             hasSpeech != other.hasSpeech -> hasSpeech
             flags.size != other.flags.size -> flags.size < other.flags.size
             else -> round(punctuationPerWord) > round(other.punctuationPerWord)

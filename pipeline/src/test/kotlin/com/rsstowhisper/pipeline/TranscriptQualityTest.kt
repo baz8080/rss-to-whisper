@@ -182,12 +182,7 @@ class TranscriptQualityTest {
         assertTrue(looping.isBetterThan(empty))
     }
 
-    /**
-     * One flag is all an empty decode can trip, so on flag count alone it beats
-     * any decode bad enough to trip two -- and the episode that had a real, if
-     * poor, transcript ends up with none. On the orphan path that is permanent:
-     * an empty result writes the marker that abandons the episode for good.
-     */
+    /** One flag is all an empty decode can trip, so on count it beats two. */
     @Test
     fun `an empty decode never beats a real one, however badly the real one scored`() {
         val empty = TranscriptQuality.score(WhisperTranscription(WhisperTranscription.VTT_HEADER, emptyList()))

@@ -39,9 +39,15 @@ Done so far from this list:
 - **W4, podcasts page.** `/podcasts` over `EpisodeRepository.getPodcastSummaries()`,
   cached like the filter options. First use of `podcast_image`.
 - **W6, word timings.** Optional `app.data.directory` enables `/episode/{id}/words`,
-  which serves `words.jsonl.gz` with `Content-Encoding: gzip` and refuses any path
-  escaping the data directory. `TranscriptLine.cueIndex` counts every cue, blank ones
-  included, which is what joins a word's `seg` to its line.
+  which serves `words.jsonl.gz` with `Content-Encoding: gzip`. `TranscriptLine.cueIndex`
+  counts every cue, blank ones included, which is what joins a word's `seg` to its line.
+  Two rules in there took five review rounds to settle and are worth not relitigating:
+  the containment check is on the *sidecar* path, since the audio path sits a level below
+  it and a value resolving to the root itself would escape; and directory symlinks under
+  the root are followed (a library spread across disks) while the sidecar leaf is not,
+  opened `NOFOLLOW` as well as checked so the two syscalls cannot be raced. The page
+  never lets the sidecar rewrite the transcript: a line is split only when its words
+  rebuild it exactly, because the pipeline drops a word whose timings whisper omitted.
 - **W7, JSON API.** `quarkus-rest-jackson`, `/api/search` and `/api/episode/{id}`.
   `Episode` gained `snippetText` and `@get:JsonIgnore` on the three getters that should
   not be in a payload.
@@ -55,6 +61,26 @@ Explicitly declined:
   would not use it. `/api/episode/{id}` returns the stored VTT, which covers the one case
   that mattered. Note that SRT would still need cue *end* times, which `parseTranscript`
   discards -- its regex captures only the start.
+
+Filed as issues rather than carried here, because each needs a judgement or a
+measurement this document cannot make for you:
+
+- **#67** — let a podcast supply its own `initial_prompt`, so a non-English feed keeps
+  the punctuation lever it currently gives up. Real the first time a non-English feed is
+  added; the corpus is entirely English today.
+- **#68** — rank quality flags by severity instead of counting them. Wants corpus data
+  from `episode_quality.flags` before the ordering is chosen.
+- **#69** — `--retranscribe-limit` always takes the same prefix, so a permanently flagged
+  tail starves everything behind it.
+- **#70** — no way to force a re-transcription past the quality comparison, which loses
+  a deliberate redo (a language fix, say) to a tie-break that knows nothing about why you
+  asked.
+- **#71** — two quality reports scored with different signals available are compared as
+  if they were alike, so a decode that could not trip `low-confidence` beats one that
+  did.
+- **#75** — the transcript highlights are unreadable in dark mode. Predates W6 and lives
+  in `styles.css`, which is almost entirely hardcoded light hex values; worth one pass
+  over the whole file in both themes rather than fixing them one at a time.
 
 ## Working conventions
 
@@ -80,6 +106,21 @@ These apply to every item below.
   `search.html`.
 - `Episode` is serialised by Jackson for `/api/*` as well as read by Thymeleaf, so a new
   computed getter lands in the JSON payload unless it carries `@get:JsonIgnore`.
+- An **optional** config property must be `Optional<String>`. `@ConfigProperty(name = …,
+  defaultValue = "")` does not give an empty string: SmallRye reads an empty default as
+  no value and fails validation at RUNTIME_INIT, so the server will not boot at all
+  without the setting. `ApplicationStartupTest` exists to catch that and is the only test
+  that starts the container.
+- `runCatching` catches `Throwable`, not `Exception`. In a request path that turns an
+  `OutOfMemoryError` into a 404 with nothing in the log; use `try/catch (e: IOException)`.
+- Not every test builds things by hand any more. `WordsRouteHttpTest` is `@QuarkusTest`
+  plus `@TestProfile` and REST Assured, for the things that only exist above the resource
+  method — `@Context` injection, response headers, conditional requests. Two things to
+  know before adding another: starting a Quarkus app in this module unregisters the
+  SQLite driver for the plain JDBC tests, which is why `EpisodeRepositoryTest` calls
+  `Class.forName("org.sqlite.JDBC")` (any new plain-JDBC test needs the same); and
+  `QuarkusTestProfile.getConfigOverrides()` is called more than once, so build the
+  fixture once and delete it on exit rather than per call.
 
 ### Smoke-testing the web module end to end
 

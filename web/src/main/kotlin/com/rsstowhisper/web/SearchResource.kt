@@ -1,6 +1,7 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
@@ -153,21 +154,32 @@ class SearchResource {
         @QueryParam("sort") @DefaultValue("relevance") sort: String,
         @QueryParam("page") @DefaultValue("1") page: Int,
         @QueryParam("pageSize") @DefaultValue("10") pageSize: Int,
-    ): SearchResult =
-        repository.search(
-            SearchFilters(
-                query = query.trim(),
-                durations = durations.toSet(),
-                podcasts = podcasts.toSet(),
-                collections = collections.toSet(),
-                tags = tags.toSet(),
-                episodeTypes = episodeTypes.toSet(),
-                years = years.toSet(),
-                sort = SortOrder.parse(sort),
-                page = page.coerceAtLeast(1),
-                pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
-            ),
-        )
+    ): SearchResult {
+        val result =
+            repository.search(
+                SearchFilters(
+                    query = query.trim(),
+                    durations = durations.toSet(),
+                    podcasts = podcasts.toSet(),
+                    collections = collections.toSet(),
+                    tags = tags.toSet(),
+                    episodeTypes = episodeTypes.toSet(),
+                    years = years.toSet(),
+                    sort = SortOrder.parse(sort),
+                    page = page.coerceAtLeast(1),
+                    pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
+                ),
+            )
+        return result.copy(episodes = result.episodes.map(::withSafeSummary))
+    }
+
+    /**
+     * `episode_summary` is feed-supplied HTML, and every page that renders it
+     * sanitises it first. Handing the raw markup to an API consumer moves that
+     * obligation onto them, silently, which is how feed-supplied script ends up
+     * in somebody's dashboard.
+     */
+    private fun withSafeSummary(episode: Episode): Episode = episode.copy(episodeSummary = episode.episodeSummary?.let { sanitizeHtml(it) })
 
     /** The full episode, transcript included -- which `/api/search` deliberately omits. */
     @GET
@@ -182,7 +194,7 @@ class SearchResource {
                     .entity(mapOf("error" to "Episode not found", "id" to id))
                     .type(MediaType.APPLICATION_JSON)
                     .build()
-        return Response.ok(episode, MediaType.APPLICATION_JSON).build()
+        return Response.ok(withSafeSummary(episode), MediaType.APPLICATION_JSON).build()
     }
 
     @GET

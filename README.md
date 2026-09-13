@@ -361,9 +361,14 @@ curl 'http://localhost:8080/api/episode/abcd1234'
 `/api/search` takes the same parameters as `/search` (`q`, `duration`, `podcast`,
 `collection`, `tag`, `year`, `episodeType`, `sort`, `page`) plus `pageSize`, capped at 100.
 It returns the result page with `totalCount`, `totalPages`, `hasNext` and `hasPrevious`, and
-each episode carries a plain-text `snippetText` of the matched passage. The transcript is
-not in that payload; `/api/episode/{id}` returns one episode with it, or a 404 with a JSON
-body.
+each episode carries a plain-text `snippetText` of the matched passage. The `transcript`
+field is absent from that payload rather than null, so a consumer can tell "not included"
+from "this episode has none"; `/api/episode/{id}` returns one episode with it, or a 404
+with a JSON body.
+
+`episodeSummary` comes from the feed and is sanitised before it goes out, the same way the
+HTML pages sanitise it. A page number far enough past the end returns no rows rather than
+wrapping around to the first page.
 
 ## Pipeline configuration
 

@@ -1,6 +1,7 @@
 package com.rsstowhisper.web.models
 
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonInclude
 import org.owasp.html.PolicyFactory
 import org.owasp.html.Sanitizers
 import java.util.Locale
@@ -25,6 +26,9 @@ data class Episode(
     // The API gets [snippetText] instead.
     @get:JsonIgnore
     val snippet: String? = null,
+    // Absent from /api/search rather than null: the search payload leaves the
+    // transcript out, and null would say the episode has none.
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val transcript: String? = null,
 ) {
     // Computed properties — accessible from Thymeleaf as episode.formattedDuration etc.

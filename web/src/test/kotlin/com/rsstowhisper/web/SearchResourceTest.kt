@@ -15,9 +15,9 @@ import io.mockk.slot
 import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.thymeleaf.TemplateEngine
@@ -501,7 +501,7 @@ class SearchResourceTest {
     // --- JSON API ---
 
     @Test
-    fun `api search returns the result object itself`() {
+    fun `api search passes the result through, with the filters it was given`() {
         val captured = slot<SearchFilters>()
         val expected = SearchResult(listOf(minimalEpisode()), 1, 1, 10)
         every { repository.search(capture(captured)) } returns expected
@@ -509,9 +509,33 @@ class SearchResourceTest {
         val result =
             resource.apiSearch("kotlin", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "newest", 1, 10)
 
-        assertSame(expected, result)
+        assertEquals(expected.totalCount, result.totalCount)
+        assertEquals(expected.episodes.map { it.id }, result.episodes.map { it.id })
         assertEquals("kotlin", captured.captured.query)
         assertEquals(SortOrder.NEWEST, captured.captured.sort)
+    }
+
+    /**
+     * Every page that renders episode_summary sanitises it first. An API
+     * consumer that drops it into the DOM would be running feed-supplied
+     * script, and nothing in the payload warns them.
+     */
+    @Test
+    fun `the api sanitises the feed-supplied summary`() {
+        val dangerous = minimalEpisode(summary = "<p>Fine</p><script>alert(1)</script>")
+        every { repository.search(any()) } returns SearchResult(listOf(dangerous), 1, 1, 10)
+        every { repository.getEpisodeById("abc") } returns dangerous
+
+        val searched =
+            resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10)
+                .episodes
+                .single()
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        for (summary in listOf(searched.episodeSummary, fetched.episodeSummary)) {
+            assertFalse(summary!!.contains("<script"), summary)
+            assertTrue(summary.contains("Fine"), summary)
+        }
     }
 
     /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */

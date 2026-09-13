@@ -479,6 +479,20 @@ class EpisodeRepositoryTest {
         }
     }
 
+    /**
+     * page comes off a query string, and /api/search bounds pageSize but not
+     * page. As an Int the offset wrapped negative, which SQLite clamps to 0 --
+     * so a huge page number returned page one's rows under its own number.
+     */
+    @Test
+    fun `a page number too large to be an offset returns nothing, not page one`() {
+        val firstPage = repo.search(SearchFilters(page = 1, pageSize = 100)).episodes.map { it.id }
+        val absurd = repo.search(SearchFilters(page = 30_000_000, pageSize = 100)).episodes.map { it.id }
+
+        assertTrue(firstPage.isNotEmpty(), "control: page one has rows")
+        assertEquals(emptyList<String>(), absurd)
+    }
+
     @Nested
     inner class PodcastSummaries {
         @Test

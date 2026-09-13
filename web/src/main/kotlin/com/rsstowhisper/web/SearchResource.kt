@@ -186,8 +186,8 @@ class SearchResource {
     }
 
     companion object {
-        // The database file's own mtime, so the server's zone is the honest one
-        // to render it in -- it is a fact about this machine's filesystem.
+        // A fact about this machine's filesystem, so the server's zone is the
+        // honest one to render it in.
         private val INDEX_BUILT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
     }

@@ -214,8 +214,8 @@ class EpisodeRepository {
      * One row per podcast, for the overview page.
      *
      * Scans the whole table, so it is cached like the filter options are.
-     * Episodes with no duration contribute 0 to the total rather than nulling
-     * it, which is what `SUM` over a nullable column does anyway.
+     * Episodes with no duration contribute 0 rather than nulling their
+     * podcast's total.
      */
     @Synchronized
     fun getPodcastSummaries(): List<PodcastSummary> {
@@ -258,7 +258,7 @@ class EpisodeRepository {
         return summaries
     }
 
-    /** When index.py last wrote the database, which is when the corpus last changed. */
+    /** The database file's mtime: when index.py last wrote it, and so when the corpus last changed. */
     fun indexBuiltAt(): java.time.Instant? =
         runCatching { java.nio.file.Files.getLastModifiedTime(java.nio.file.Path.of(dbPath)).toInstant() }.getOrNull()
 

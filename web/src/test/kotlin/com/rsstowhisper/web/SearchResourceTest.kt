@@ -394,7 +394,7 @@ class SearchResourceTest {
         assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
     }
 
-    // --- podcasts overview (W4) ---
+    // --- podcasts overview ---
 
     @Test
     fun `podcasts page passes summaries and totals to the template`() {

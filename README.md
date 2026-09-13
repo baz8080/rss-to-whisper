@@ -323,7 +323,7 @@ are not reopened on every run either. They are picked up as soon as they change.
 deleted from and inserted into the index by hand as their episodes change, or the whole
 index is rebuilt in one go once more than a fifth of the corpus is affected.
 
-Two things are worth knowing:
+Three things are worth knowing:
 
 - A rewrite that lands with **both** the same modification time and the same size as the
   version already indexed is not noticed. Filesystems with coarse timestamps make this
@@ -333,7 +333,9 @@ Two things are worth knowing:
   episode — a restore that leaves the transcripts truncated but freshly stamped looks
   exactly like a corpus that has legitimately gone. `--full` is how you say you meant it.
 - A file that cannot be read or stat'ed this time is left as it was, rather than treated
-  as deleted, so a share that blinks costs nothing. The next run picks it up.
+  as deleted, so a share that blinks costs nothing. The next run picks it up. A rebuild
+  keeps only what it reads, so it refuses outright rather than dropping what it could not
+  look at — unless nothing is indexed yet, where there is nothing to lose.
 
 `--full` rebuilds both tables from every transcript, and is taken automatically when the
 database predates incremental indexing.

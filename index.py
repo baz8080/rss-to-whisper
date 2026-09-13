@@ -260,6 +260,10 @@ def read_episode(data_dir, source_path, stamp):
         print(f"  WARNING: Skipping {json_path}, it is not valid JSON: {e}", file=sys.stderr)
         return "skip", None
 
+    if not isinstance(episode, dict):
+        print(f"  WARNING: Skipping {json_path}: it is not a JSON object", file=sys.stderr)
+        return "skip", None
+
     transcript = episode.get("episode_transcript")
     if not transcript:
         return "skip", None
@@ -324,6 +328,15 @@ def fts_insert(conn, rowid, values):
     )
 
 
+def indexed_count(conn):
+    """How many episodes are already indexed, zero if there is no table yet."""
+    if not conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='episodes'"
+    ).fetchone():
+        return 0
+    return conn.execute("SELECT count(*) FROM episodes").fetchone()[0]
+
+
 def schema_is_current(conn):
     """Whether this database can be updated in place rather than rebuilt."""
     tables = {
@@ -370,7 +383,7 @@ def load_skipped(conn):
     }
 
 
-def run_incremental(conn, data_dir, sources, unknown):
+def run_incremental(conn, data_dir, sources, unknown, db_path):
     """Bring the database up to date by reading only what changed.
 
     False when it cannot, and the caller should rebuild instead.
@@ -418,9 +431,13 @@ def run_incremental(conn, data_dir, sources, unknown):
     # unindexable at once, and this is the routine run, not the deliberate one.
     remaining = len(set(stored) - drop) + len([r for r in records if r["source_path"] not in stored])
     if stored and remaining == 0:
+        # No remedy offered on purpose: a rebuild refuses this too, and deleting
+        # the database and re-running leaves no tables at all when there is
+        # nothing indexable to put in them. Far likelier that the corpus is
+        # wrong than that it is meant to be empty.
         print(
-            "Every indexed episode would be removed; leaving the existing database untouched.\n"
-            "Re-run with --full if that is really what the data directory now holds.",
+            f"Every indexed episode would be removed; leaving {db_path} as it is.\n"
+            "Check the data directory is mounted and its transcripts are intact.",
             file=sys.stderr,
         )
         return True
@@ -500,21 +517,38 @@ def run_incremental(conn, data_dir, sources, unknown):
     return True
 
 
-def run_full(conn, data_dir, sources, db_path):
+def run_full(conn, data_dir, sources, unknown, db_path):
     """Rebuild both tables from every transcript.json."""
     # Collect before dropping anything. The rebuild below is destructive and
     # episodes_fts is only recreated at the very end, so bailing out after the
     # drops would leave a previously working database truncated and without its
     # FTS index -- and every episode can be skipped legitimately (e.g. none of
     # the transcript.json files carry an _id).
-    episodes, skipped = [], []
+    episodes, skipped, failed = [], [], []
     for source_path in sorted(sources):
         status, record = read_episode(data_dir, source_path, sources[source_path])
         if status == "ok":
             episodes.append(record)
         elif status == "skip":
             skipped.append(source_path)
+        else:
+            failed.append(source_path)
     print(f"Found {len(episodes)} episodes to index")
+
+    # A rebuild keeps only what it read, so anything it could not look at this
+    # time is dropped -- and this is the path every database without the
+    # tracking columns takes, which is every first run after this change. With
+    # nothing yet indexed there is nothing to lose and the next run picks the
+    # rest up; with rows already there, losing them is not recoverable.
+    blind = sorted(set(failed) | unknown)
+    if blind and indexed_count(conn):
+        print(
+            f"{len(blind)} path(s) could not be read this time, and a rebuild keeps only\n"
+            f"what it reads. Leaving {db_path} untouched; re-run when they are reachable.\n"
+            + "".join(f"  {p}\n" for p in blind[:10]),
+            file=sys.stderr,
+        )
+        return
     disambiguate_ids(episodes)
 
     if not episodes:
@@ -638,14 +672,14 @@ def main():
         return
 
     if not args.full and schema_is_current(conn):
-        if run_incremental(conn, args.data_dir, sources, unknown):
+        if run_incremental(conn, args.data_dir, sources, unknown, db_path):
             conn.close()
             return
         print("Some rows predate change tracking; rebuilding in full")
     elif not args.full:
         print("This database has no change tracking yet; building it in full")
 
-    run_full(conn, args.data_dir, sources, db_path)
+    run_full(conn, args.data_dir, sources, unknown, db_path)
     conn.close()
 
 

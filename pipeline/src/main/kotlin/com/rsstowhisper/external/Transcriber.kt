@@ -102,11 +102,10 @@ open class Transcriber(
         audioPath: Path,
         language: String = DEFAULT_LANGUAGE,
     ): String {
-        // whisper.cpp looks the code up in a map keyed by lower-case codes and
-        // never checks the result: an unmatched one returns -1, and the caller
-        // adds it to the language token's base index, so "EN" silently selects
-        // the wrong token instead of failing. A hand-edited pods.yaml is the
-        // likely source, and whisper only ever emits lower case itself.
+        // whisper.cpp looks the code up in a map keyed by lower case and never
+        // checks the result: an unmatched one returns -1, which its caller adds
+        // to the language token's base index, so "EN" selects the wrong token
+        // rather than failing. Only a hand-edited pods.yaml can produce one.
         val code = language.lowercase()
 
         val bodyBuilder =

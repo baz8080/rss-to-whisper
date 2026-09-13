@@ -307,6 +307,8 @@
 
         const NO_TIMINGS = 'No word timings';
         const NO_TIMINGS_WHY = 'This episode was transcribed before word timings existed';
+        const OUT_OF_DATE = 'Word timings out of date';
+        const OUT_OF_DATE_WHY = 'They do not line up with this transcript';
 
         let wordsByCue = null;
         let wordSpans = [];      // every rendered word, in time order
@@ -347,10 +349,16 @@
             // Not something the reader can do anything about, and not the same
             // as the query hiding them.
             if (!lineEls.some(el => wordsByCue.has(+el.dataset.cue))) {
-                return disableWords('Word timings out of date', 'They do not line up with this transcript');
+                return disableWords(OUT_OF_DATE, OUT_OF_DATE_WHY);
             }
 
-            renderWords();
+            // A sidecar can overlap the ordinals and still belong to another
+            // decode. Nothing rebuilt its line, so say the same thing: an
+            // ordinal in common is not agreement.
+            const mismatched = renderWords();
+            if (mismatched > 0 && wordSpans.length === 0) {
+                return disableWords(OUT_OF_DATE, OUT_OF_DATE_WHY);
+            }
             // Nothing split, but the sidecar is good: every line the query
             // matched keeps its <mark> and is left whole, so a query that
             // matched all of them leaves nothing to split. Clearing the query
@@ -384,7 +392,10 @@
             return null;
         }
 
+        const collapse = s => s.replace(/\s+/g, ' ').trim();
+
         function renderWords() {
+            let mismatched = 0;
             for (const lineEl of lineEls) {
                 // A matched line is already marked up with <mark>; rewriting it
                 // per word would throw those highlights away.
@@ -394,11 +405,19 @@
                 const textEl = lineEl.querySelector('.transcript-text');
                 if (!textEl) continue;
 
+                // Only when the words rebuild the line exactly. The pipeline
+                // drops a word whose timings whisper omitted, and a sidecar
+                // left from an earlier decode can key onto a cue whose text has
+                // changed since -- either way this would quietly rewrite the
+                // transcript the reader came for. The line keeps its own text.
+                if (collapse(words.map(w => w.w).join('')) !== collapse(textEl.textContent)) {
+                    mismatched++;
+                    continue;
+                }
+
                 textEl.textContent = '';
                 for (const word of words) {
                     const span = document.createElement('span');
-                    // Whisper words carry their own leading space, so
-                    // concatenating them reproduces the cue text exactly.
                     span.textContent = word.w;
                     span.className = word.p < LOW_CONFIDENCE ? 'word low-confidence' : 'word';
                     span.dataset.start = word.s;
@@ -421,6 +440,7 @@
                     w.end = (next && next.seg === w.seg) ? next.start : w.start;
                 }
             }
+            return mismatched;
         }
 
         // Binary search: last word whose start is at or before now.
@@ -499,11 +519,13 @@
                 return;
             }
             if (!audioEl) return;
+            // The player's own controls handle space and the arrows in their
+            // shadow tree, where preventDefault here does not reach. Acting as
+            // well would toggle it twice, or seek twice on one press.
+            if (tag === 'AUDIO') return;
             if (e.key === ' ') {
-                // Space belongs to a focused checkbox, and the player's own
-                // controls handle it in their shadow tree -- acting here too
-                // toggles it twice.
-                if (tag === 'INPUT' || tag === 'AUDIO') return;
+                // Space belongs to a focused checkbox.
+                if (tag === 'INPUT') return;
                 e.preventDefault();
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {

@@ -34,9 +34,11 @@ import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
 import java.io.IOException
 import java.net.URI
+import java.nio.channels.Channels
 import java.nio.file.Files
 import java.nio.file.InvalidPathException
 import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -180,9 +182,14 @@ class SearchResource {
         // The pipeline clears the sidecar for the whole of a re-transcribe swap,
         // so a read landing in that window has found the ordinary missing case
         // rather than a fault worth a 500.
+        // Opened NOFOLLOW as well as checked: the check above and this read
+        // are separate syscalls, and a symlink swapped in between them would
+        // otherwise be followed by exactly the read the check exists to stop.
         val bytes =
             try {
-                Files.readAllBytes(wordsPath)
+                Files.newByteChannel(wordsPath, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use {
+                    Channels.newInputStream(it).readAllBytes()
+                }
             } catch (e: IOException) {
                 return Response.status(Response.Status.NOT_FOUND).build()
             }

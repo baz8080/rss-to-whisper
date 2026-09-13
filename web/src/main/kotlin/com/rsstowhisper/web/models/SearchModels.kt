@@ -1,8 +1,10 @@
 package com.rsstowhisper.web.models
 
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonInclude
 import org.owasp.html.PolicyFactory
 import org.owasp.html.Sanitizers
+import java.util.Locale
 
 data class Episode(
     val id: String,
@@ -21,10 +23,12 @@ data class Episode(
     val episodeDuration: Int?,
     val episodeRelativeAudioPath: String?,
     val allTags: String?,
-    // Carries the sentinel highlight markers, which are control characters. The
-    // API exposes snippetText instead; see below.
+    // The API gets [snippetText] instead.
     @get:JsonIgnore
     val snippet: String? = null,
+    // Absent from /api/search rather than null: the search payload leaves the
+    // transcript out, and null would say the episode has none.
+    @get:JsonInclude(JsonInclude.Include.NON_NULL)
     val transcript: String? = null,
 ) {
     // Computed properties — accessible from Thymeleaf as episode.formattedDuration etc.
@@ -108,6 +112,16 @@ data class FilterOptions(
 )
 
 /**
+ * What the whole corpus holds, including episodes whose feed supplied no
+ * podcast title -- they are real episodes, and [PodcastSummary] has no card to
+ * put them on.
+ */
+data class CorpusTotals(
+    val episodeCount: Int,
+    val totalDurationSeconds: Long,
+)
+
+/**
  * One podcast's corner of the corpus, for the overview page.
  *
  * `podcast_title` is the join key everywhere -- there is no podcast id -- so it
@@ -121,8 +135,12 @@ data class PodcastSummary(
     val earliestPublishedOn: String?,
     val latestPublishedOn: String?,
 ) {
-    /** Hours to one decimal: the totals run to thousands, where minutes are noise. */
-    val totalHours: String get() = "%.1f".format(totalDurationSeconds / 3600.0)
+    /**
+     * Hours to one decimal: the totals run to thousands, where minutes are noise.
+     *
+     * Locale.ROOT, or a server in a comma-decimal locale renders "0,7 hours".
+     */
+    val totalHours: String get() = "%.1f".format(Locale.ROOT, totalDurationSeconds / 3600.0)
 
     /** A single-episode show, or one whose episodes all share a date, reads better as one date. */
     val dateRange: String?
@@ -204,9 +222,8 @@ fun buildSearchUrl(filters: SearchFilters): String {
  * parameter to it.
  *
  * Tag pills are built in the template because the tags come from each result
- * card, so the set is not known here. Ending the base in `?` or `&` as
- * appropriate keeps the result a well-formed URL either way, rather than the
- * `/search?&tag=x` that appending blind would produce.
+ * card, so the set is not known here. Appending blind would give `/search?&tag=x`
+ * when nothing else is filtered.
  */
 fun appendableSearchUrl(filters: SearchFilters): String {
     val url = buildSearchUrl(filters)
@@ -225,9 +242,9 @@ fun formatTimestamp(millis: Long): String {
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
     return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, seconds)
+        "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, seconds)
     } else {
-        "%d:%02d".format(minutes, seconds)
+        "%d:%02d".format(Locale.ROOT, minutes, seconds)
     }
 }
 

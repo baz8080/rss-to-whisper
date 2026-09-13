@@ -160,11 +160,13 @@
             trackEl.src = URL.createObjectURL(blob);
         }
 
-        // The address bar always holds the last cue clicked, so a passage can be
-        // copied out of it. replaceState rather than pushState: stepping through
-        // a transcript should not fill the back button with its own cues.
+        // replaceState, not pushState: stepping through a transcript should not
+        // fill the back button with its own cues.
         function rememberPosition(seconds) {
-            history.replaceState(null, '', location.pathname + location.search + '#t=' + Math.floor(seconds));
+            // Unrounded: cue starts are millisecond-precise, so flooring to the
+            // second lands inside the PREVIOUS cue, and that is the one a shared
+            // link would then open on.
+            history.replaceState(null, '', location.pathname + location.search + '#t=' + seconds);
         }
 
         const audioSrcBase = audioEl ? audioEl.src.split('#')[0] : null;
@@ -174,22 +176,41 @@
         // or dropped. A media fragment is honoured natively by all of them and
         // survives the load, with a one-shot listener as the fallback for any
         // that ignore it.
+        let pendingStart = null;
+        let onMetadata = null;
+
         function startAudioAt(seconds) {
             if (!audioEl) return;
             if (audioEl.readyState >= 1) {
                 audioEl.currentTime = seconds;
                 return;
             }
+            pendingStart = seconds;
             audioEl.src = audioSrcBase + '#t=' + seconds;
-            audioEl.addEventListener('loadedmetadata', function once() {
-                audioEl.removeEventListener('loadedmetadata', once);
-                if (Math.abs(audioEl.currentTime - seconds) > 0.5) audioEl.currentTime = seconds;
-            });
+            // One listener at a time: a second click before metadata arrives
+            // would otherwise leave the first still waiting to seek to where
+            // the reader no longer wants to be.
+            if (onMetadata) audioEl.removeEventListener('loadedmetadata', onMetadata);
+            onMetadata = function () {
+                audioEl.removeEventListener('loadedmetadata', onMetadata);
+                onMetadata = null;
+                if (Math.abs(audioEl.currentTime - pendingStart) > 0.5) audioEl.currentTime = pendingStart;
+                pendingStart = null;
+            };
+            audioEl.addEventListener('loadedmetadata', onMetadata);
+        }
+
+        // Armed but unloaded, currentTime is 0 and duration NaN, so the position
+        // the reader is looking at is the one the player is armed to start from.
+        function currentPosition() {
+            return audioEl.readyState >= 1 ? audioEl.currentTime : (pendingStart || 0);
         }
 
         function seekAudio(seconds) {
-            if (!audioEl) return;
+            // Before the guard: an episode with no audio still has a transcript
+            // worth linking to.
             rememberPosition(seconds);
+            if (!audioEl) return;
             startAudioAt(seconds);
             if (audioEl.paused) audioEl.play();
         }
@@ -258,14 +279,12 @@
             return match ? parseFloat(match[1]) : null;
         }
 
-        // Scroll to the cue and mark it, and arm the player to begin there --
-        // without autoplaying, which browsers block and readers do not expect.
+        // Arms the player rather than starting it: browsers block autoplay, and
+        // a reader opening a link does not expect sound.
         function openAtTime(seconds) {
             // Armed first: the assignment can raise events, and none of them
-            // should arrive after the cue below has been marked. preload="none"
-            // means nothing is fetched until the reader presses play, and the
-            // fragment is what makes that play start here.
-            if (audioEl) audioEl.src = audioSrcBase + '#t=' + seconds;
+            // should arrive after the cue below has been marked.
+            startAudioAt(seconds);
             const line = findActiveLine(seconds * 1000);
             if (line) {
                 if (activeLine) activeLine.classList.remove('active');
@@ -412,10 +431,10 @@
                 audioEl.paused ? audioEl.play() : audioEl.pause();
             } else if (e.key === 'ArrowLeft') {
                 e.preventDefault();
-                audioEl.currentTime = Math.max(0, audioEl.currentTime - 15);
+                startAudioAt(Math.max(0, currentPosition() - 15));
             } else if (e.key === 'ArrowRight') {
                 e.preventDefault();
-                audioEl.currentTime = Math.min(audioEl.duration || Infinity, audioEl.currentTime + 15);
+                startAudioAt(Math.min(audioEl.duration || Infinity, currentPosition() + 15));
             }
         });
         /*]]>*/

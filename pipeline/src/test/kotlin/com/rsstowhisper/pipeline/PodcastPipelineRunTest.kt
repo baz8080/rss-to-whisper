@@ -27,6 +27,62 @@ class PodcastPipelineRunTest {
         assertTrue(feedSvc.requestedUrls.isEmpty())
     }
 
+    /**
+     * The feed path writes the sidecar before transcript.json, so a crash
+     * between the two leaves a sidecar with no transcript. The decode that
+     * redoes the episode must not adopt it -- it describes a decode that was
+     * thrown away, and the sidecar addresses cues by position.
+     */
+    @Test
+    fun `a decode with no word timestamps clears a sidecar an earlier crash left behind`(
+        @TempDir tempDir: Path,
+    ) {
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+        val (first, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
+        first.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        assertTrue(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+        Files.delete(episodeDir.resolve("transcript.json"))
+
+        val (second, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")), vtt = WORDLESS_JSON)
+        second.run()
+
+        assertTrue(Files.exists(episodeDir.resolve("transcript.json")))
+        assertFalse(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+    }
+
+    /**
+     * writeWords swallows its exception, so without the check the run would go
+     * on to write transcript.json and mark done an episode that will never get
+     * its sidecar -- which is what writing words first exists to prevent.
+     * Blocked by putting a directory where the sidecar has to go.
+     */
+    @Test
+    fun `an episode whose sidecar cannot be written is left for the next run`(
+        @TempDir tempDir: Path,
+    ) {
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+        val (blocked, _, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                makeFeed(makeEntry("My Episode")),
+                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve("words.jsonl.gz")) },
+            )
+        blocked.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        assertFalse(Files.exists(episodeDir.resolve("transcript.json")))
+
+        Files.deleteIfExists(episodeDir.resolve("words.jsonl.gz"))
+        val (retry, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
+        retry.run()
+
+        assertTrue(Files.exists(episodeDir.resolve("transcript.json")))
+        assertTrue(Files.exists(episodeDir.resolve("words.jsonl.gz")))
+    }
+
     @Test
     fun `run returns true when there is nothing to do`(
         @TempDir tempDir: Path,
@@ -574,7 +630,7 @@ class PodcastPipelineRunTest {
 
     // ---------- quality gate ----------
 
-    /** Twenty identical cues: a repetition loop, which is what the gate is for. */
+    /** Identical cues repeated: the loop the gate exists to catch. */
     private fun loopingJson(): String =
         whisperJson(*(0 until 20).map { Triple(it * 3.0, it * 3.0 + 3.0, "And that is the thing about it, really.") }.toTypedArray())
 
@@ -647,7 +703,6 @@ class PodcastPipelineRunTest {
         assertEquals(1, txSvc.calls.size)
     }
 
-    /** Both decodes bad: the episode is still written, and still carries its flags. */
     @Test
     fun `a transcript flagged twice is written anyway with its flags recorded`(
         @TempDir tempDir: Path,
@@ -665,6 +720,36 @@ class PodcastPipelineRunTest {
         assertEquals(2, txSvc.calls.size)
         @Suppress("UNCHECKED_CAST")
         val quality = transcriptJson(tempDir)["episode_quality"] as Map<String, Any?>
+        assertEquals(listOf("repetition-loop"), quality["flags"])
+    }
+
+    /**
+     * A retry that comes back with nothing must not replace a real transcript.
+     * Before no-speech was a flag, the empty decode scored clean and won on flag
+     * count, and the episode ended up with no transcript.json at all.
+     */
+    @Test
+    fun `an empty retry does not discard the first decode`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(loopingJson(), """{"task":"transcribe","segments":[]}"""),
+            )
+
+        pipeline.run()
+
+        assertEquals(2, txSvc.calls.size)
+        val json = transcriptJson(tempDir)
+        assertTrue(
+            "And that is the thing about it" in json["episode_transcript"].toString(),
+            "the flagged first decode should have been kept and written",
+        )
+        @Suppress("UNCHECKED_CAST")
+        val quality = json["episode_quality"] as Map<String, Any?>
         assertEquals(listOf("repetition-loop"), quality["flags"])
     }
 

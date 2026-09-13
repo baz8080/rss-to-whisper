@@ -131,9 +131,9 @@ class EpisodeRepositoryTest {
     private fun insert(
         conn: Connection,
         id: String,
-        podcastTitle: String,
+        podcastTitle: String?,
         episodeTitle: String,
-        publishedOn: String,
+        publishedOn: String?,
         duration: Int?,
         collections: String?,
         tags: String?,
@@ -392,6 +392,32 @@ class EpisodeRepositoryTest {
                 assertEquals(2, result.totalCount)
             }
 
+            /**
+             * A feed item with no pubDate is written with a null date, and
+             * SQLite sorts NULLs first under ASC -- so an episode of unknown age
+             * would head the oldest-first list. DESC already puts them last.
+             */
+            @Test
+            fun `an episode with no date sorts last either way`() {
+                DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                    insert(
+                        conn,
+                        id = "undated",
+                        podcastTitle = "Podcast A",
+                        episodeTitle = "No Date",
+                        publishedOn = null,
+                        duration = 100,
+                        collections = null,
+                        tags = null,
+                        type = null,
+                        transcriptPlain = "no date at all",
+                    )
+                }
+
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.OLDEST)).episodes.last().id)
+                assertEquals("undated", repo.search(SearchFilters(sort = SortOrder.NEWEST)).episodes.last().id)
+            }
+
             @Test
             fun `the year filter restricts to that year`() {
                 val result = repo.search(SearchFilters(years = setOf("2023")))
@@ -453,12 +479,56 @@ class EpisodeRepositoryTest {
         }
     }
 
+    /**
+     * page comes off a query string, and /api/search bounds pageSize but not
+     * page. As an Int the offset wrapped negative, which SQLite clamps to 0 --
+     * so a huge page number returned page one's rows under its own number.
+     */
+    @Test
+    fun `a page number too large to be an offset returns nothing, not page one`() {
+        val firstPage = repo.search(SearchFilters(page = 1, pageSize = 100)).episodes.map { it.id }
+        val absurd = repo.search(SearchFilters(page = 30_000_000, pageSize = 100)).episodes.map { it.id }
+
+        assertTrue(firstPage.isNotEmpty(), "control: page one has rows")
+        assertEquals(emptyList<String>(), absurd)
+    }
+
     @Nested
     inner class PodcastSummaries {
         @Test
         fun `one row per podcast, ordered by title`() {
             val summaries = repo.getPodcastSummaries()
             assertEquals(listOf("Podcast A", "Podcast B"), summaries.map { it.title })
+        }
+
+        /**
+         * The search page renders a null podcast_title as "Unknown Podcast", so
+         * such episodes exist -- and GROUP BY podcast_title leaves them off the
+         * cards. The corpus header must still count them.
+         */
+        @Test
+        fun `corpus totals include an episode with no podcast title`() {
+            DriverManager.getConnection("jdbc:sqlite:${tempDir.resolve("test.db").toAbsolutePath()}").use { conn ->
+                insert(
+                    conn,
+                    id = "untitled",
+                    podcastTitle = null,
+                    episodeTitle = "No Podcast",
+                    publishedOn = "2024-02-02",
+                    duration = 3600,
+                    collections = null,
+                    tags = null,
+                    type = null,
+                    transcriptPlain = "orphaned from its feed",
+                )
+            }
+
+            val fromCards = repo.getPodcastSummaries().sumOf { it.episodeCount }
+            val totals = repo.getCorpusTotals()
+
+            assertEquals(4, fromCards, "the untitled episode has no card")
+            assertEquals(5, totals.episodeCount)
+            assertEquals(3600L, totals.totalDurationSeconds - repo.getPodcastSummaries().sumOf { it.totalDurationSeconds })
         }
 
         @Test

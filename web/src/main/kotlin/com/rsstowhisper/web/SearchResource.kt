@@ -1,6 +1,7 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.SearchFilters
 import com.rsstowhisper.web.models.SearchResult
 import com.rsstowhisper.web.models.SortOrder
@@ -32,6 +33,7 @@ import java.net.URI
 import java.nio.file.Files
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @Path("/")
 @ApplicationScoped
@@ -101,9 +103,33 @@ class SearchResource {
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
                 setVariable("clearUrl", buildSearchUrl(SearchFilters(query = filters.query)))
-                setVariable("sortOptions", SortOrder.entries)
-                // Adding a tag resets to page 1: the result set changes, so the
-                // old page number points at a different set of episodes.
+                // Both controls carry their own state: the select serialises
+                // `sort`, the checkboxes serialise `year`. Hide either while its
+                // filter is active and the next form submit drops that filter --
+                // silently reordering or rewidening the results.
+                setVariable("showSort", filters.query.isNotBlank() || filters.sort != SortOrder.RELEVANCE)
+                // Relevance is not on offer without a query: every row scores the
+                // same, so it would read as a choice that does nothing.
+                setVariable(
+                    "sortOptions",
+                    if (filters.query.isBlank()) listOf(SortOrder.NEWEST, SortOrder.OLDEST) else SortOrder.entries,
+                )
+                // A query can narrow the corpus past the value being filtered
+                // on -- easy to reach from the podcasts page, which lands on
+                // /search?podcast=X -- and the options come back narrowed by that
+                // query, which would otherwise leave no checkbox to untick.
+                setVariable("yearOptions", (filterOptions.years + filters.years).distinct().sortedDescending())
+                setVariable("podcastOptions", (filterOptions.podcasts + filters.podcasts).distinct().sorted())
+                setVariable(
+                    "collectionOptions",
+                    (filterOptions.collections + filters.collections).distinct().sorted(),
+                )
+                setVariable(
+                    "episodeTypeOptions",
+                    (filterOptions.episodeTypes + filters.episodeTypes).distinct().sorted(),
+                )
+                // Page 1 on both: changing the tags changes the result set, so
+                // the page number carried over would point somewhere else.
                 setVariable("tagBaseUrl", appendableSearchUrl(filters.copy(page = 1)))
                 setVariable(
                     "tagRemoveUrls",
@@ -167,10 +193,7 @@ class SearchResource {
         return wordsPath
     }
 
-    /**
-     * The same search as `/search`, as JSON, so the corpus is usable from a
-     * shell or a notebook.
-     */
+    /** The same search as `/search`, for use from a shell or a notebook. */
     @GET
     @Path("/api/search")
     @Produces(MediaType.APPLICATION_JSON)
@@ -185,22 +208,36 @@ class SearchResource {
         @QueryParam("sort") @DefaultValue("relevance") sort: String,
         @QueryParam("page") @DefaultValue("1") page: Int,
         @QueryParam("pageSize") @DefaultValue("10") pageSize: Int,
-    ): SearchResult =
-        repository.search(
-            SearchFilters(
-                query = query.trim(),
-                durations = durations.toSet(),
-                podcasts = podcasts.toSet(),
-                collections = collections.toSet(),
-                tags = tags.toSet(),
-                episodeTypes = episodeTypes.toSet(),
-                years = years.toSet(),
-                sort = SortOrder.parse(sort),
-                page = page.coerceAtLeast(1),
-                // Capped: the transcript is not in this payload, but an
-                // unbounded page size still lets one request read the corpus.
-                pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
-            ),
+    ): SearchResult {
+        val result =
+            repository.search(
+                SearchFilters(
+                    query = query.trim(),
+                    durations = durations.toSet(),
+                    podcasts = podcasts.toSet(),
+                    collections = collections.toSet(),
+                    tags = tags.toSet(),
+                    episodeTypes = episodeTypes.toSet(),
+                    years = years.toSet(),
+                    sort = SortOrder.parse(sort),
+                    page = page.coerceAtLeast(1),
+                    pageSize = pageSize.coerceIn(1, MAX_API_PAGE_SIZE),
+                ),
+            )
+        return result.copy(episodes = result.episodes.map(::withSafeSummary))
+    }
+
+    /**
+     * Some feeds write `episode_summary` as HTML and some as plain prose, so the
+     * episode page branches on it too. The markup is sanitised, because handing
+     * an API consumer feed-supplied script moves that obligation onto them
+     * silently. The prose is left exactly as it is: an HTML sanitiser turns
+     * "Ben & Jerry's" into entities and deletes anything inside angle brackets,
+     * which for a summary nobody will render as HTML is only damage.
+     */
+    private fun withSafeSummary(episode: Episode): Episode =
+        episode.copy(
+            episodeSummary = episode.episodeSummary?.let { if (it.contains('<')) sanitizeHtml(it) else it },
         )
 
     /** The full episode, transcript included -- which `/api/search` deliberately omits. */
@@ -216,7 +253,7 @@ class SearchResource {
                     .entity(mapOf("error" to "Episode not found", "id" to id))
                     .type(MediaType.APPLICATION_JSON)
                     .build()
-        return Response.ok(episode, MediaType.APPLICATION_JSON).build()
+        return Response.ok(withSafeSummary(episode), MediaType.APPLICATION_JSON).build()
     }
 
     @GET
@@ -224,11 +261,12 @@ class SearchResource {
     @Produces(MediaType.TEXT_HTML)
     fun podcasts(): Response {
         val summaries = repository.getPodcastSummaries()
+        val totals = repository.getCorpusTotals()
         val ctx =
             Context().apply {
                 setVariable("summaries", summaries)
-                setVariable("totalEpisodes", summaries.sumOf { it.episodeCount })
-                setVariable("totalHours", "%,.0f".format(summaries.sumOf { it.totalDurationSeconds } / 3600.0))
+                setVariable("totalEpisodes", totals.episodeCount)
+                setVariable("totalHours", "%,.0f".format(Locale.ROOT, totals.totalDurationSeconds / 3600.0))
                 // Thymeleaf cannot call top-level Kotlin functions here, so the
                 // link for each row is built now rather than in the template.
                 setVariable(
@@ -287,11 +325,14 @@ class SearchResource {
         /** Written by the pipeline beside each episode's audio. */
         internal const val WORDS_FILENAME = "words.jsonl.gz"
 
-        /** One page of the API cannot be made to return the whole corpus. */
+        /**
+         * The transcript is not in the search payload, but an unbounded page
+         * size would still let one request read the whole corpus.
+         */
         internal const val MAX_API_PAGE_SIZE = 100
 
-        // The database file's own mtime, so the server's zone is the honest one
-        // to render it in -- it is a fact about this machine's filesystem.
+        // A fact about this machine's filesystem, so the server's zone is the
+        // honest one to render it in.
         private val INDEX_BUILT_FORMAT: DateTimeFormatter =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault())
     }

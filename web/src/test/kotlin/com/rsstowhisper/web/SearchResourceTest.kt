@@ -1,6 +1,7 @@
 package com.rsstowhisper.web
 
 import com.rsstowhisper.web.db.EpisodeRepository
+import com.rsstowhisper.web.models.CorpusTotals
 import com.rsstowhisper.web.models.Episode
 import com.rsstowhisper.web.models.FilterOptions
 import com.rsstowhisper.web.models.PodcastSummary
@@ -16,9 +17,9 @@ import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Response
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -256,7 +257,7 @@ class SearchResourceTest {
         assertEquals("", ctxSlot.captured.getVariable("episodeQuerySuffix"))
     }
 
-    // --- tag filtering (W1) ---
+    // --- tag filtering ---
 
     @Test
     fun `search exposes a base url tag pills can append to`() {
@@ -266,7 +267,7 @@ class SearchResourceTest {
 
         search("climate", page = 3)
 
-        // Page reset to 1, and ending in & so the template can append tag=...
+        // Page 1, though 3 was asked for.
         assertEquals("/search?q=climate&", ctxSlot.captured.getVariable("tagBaseUrl"))
     }
 
@@ -293,7 +294,7 @@ class SearchResourceTest {
         @Suppress("UNCHECKED_CAST")
         val removeUrls = ctxSlot.captured.getVariable("tagRemoveUrls") as Map<String, String>
         assertEquals(setOf("space", "science"), removeUrls.keys)
-        // Each link drops its own tag and keeps the other, back at page 1.
+        // Page 1 again, though 2 was asked for.
         assertEquals("/search?tag=science", removeUrls["space"])
         assertEquals("/search?tag=space", removeUrls["science"])
     }
@@ -310,9 +311,60 @@ class SearchResourceTest {
         assertEquals(setOf("space"), captured.captured.tags)
     }
 
+    /**
+     * The select is what serialises `sort`, so hiding it while a date sort is
+     * applied means the next checkbox click submits without it and the results
+     * silently flip back to newest-first.
+     */
+    @Test
+    fun `the sort control is shown whenever a sort is in effect, query or not`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "", sort = "oldest")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "", sort = "relevance")
+        assertEquals(false, ctxSlot.captured.getVariable("showSort"))
+
+        search(query = "climate", sort = "relevance")
+        assertEquals(true, ctxSlot.captured.getVariable("showSort"))
+    }
+
+    /** Without a query every row scores the same, so offering it is offering nothing. */
+    @Test
+    fun `relevance is not offered without a query`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "")
+        assertEquals(listOf(SortOrder.NEWEST, SortOrder.OLDEST), ctxSlot.captured.getVariable("sortOptions"))
+
+        search(query = "climate")
+        assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
+    }
+
+    /**
+     * A query can narrow the corpus to one year while a different year is
+     * filtered on, and the options come back narrowed by that query -- leaving
+     * no checkbox to untick the filter that is emptying the results.
+     */
+    @Test
+    fun `an active year stays in the options even when the query excludes it`() {
+        stubSearchDependencies(years = listOf("2024"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", years = listOf("2019"))
+
+        assertEquals(listOf("2024", "2019"), ctxSlot.captured.getVariable("yearOptions"))
+    }
+
     // --- helpers ---
 
-    // --- sort and year (W2) ---
+    // --- sort and year ---
 
     @Test
     fun `sort and years reach the repository`() {
@@ -351,7 +403,7 @@ class SearchResourceTest {
         assertEquals(SortOrder.entries, ctxSlot.captured.getVariable("sortOptions"))
     }
 
-    // --- podcasts overview (W4) ---
+    // --- podcasts overview ---
 
     @Test
     fun `podcasts page passes summaries and totals to the template`() {
@@ -360,6 +412,7 @@ class SearchResourceTest {
                 PodcastSummary("Podcast A", "https://img/a.png", 2, 2400, "2024-01-01", "2024-01-03"),
                 PodcastSummary("Podcast B", null, 3, 3600, "2023-01-02", "2024-01-04"),
             )
+        every { repository.getCorpusTotals() } returns CorpusTotals(5, 7200)
         every { repository.indexBuiltAt() } returns Instant.parse("2024-06-01T10:30:00Z")
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("podcasts", capture(ctxSlot)) } returns "<html>podcasts</html>"
@@ -376,6 +429,7 @@ class SearchResourceTest {
     fun `each podcast links to a search filtered to it`() {
         every { repository.getPodcastSummaries() } returns
             listOf(PodcastSummary("Podcast A & B", null, 1, 0, null, null))
+        every { repository.getCorpusTotals() } returns CorpusTotals(1, 0)
         every { repository.indexBuiltAt() } returns null
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
@@ -387,10 +441,60 @@ class SearchResourceTest {
         assertEquals("/search?podcast=Podcast%20A%20%26%20B", urls["Podcast A & B"])
     }
 
+    /**
+     * An episode whose feed gave no podcast title has no card to appear on, but
+     * it is still in the corpus: summing the cards would under-report the
+     * header against what /search returns.
+     */
+    @Test
+    fun `the corpus header counts episodes the cards leave out`() {
+        every { repository.getPodcastSummaries() } returns
+            listOf(PodcastSummary("Podcast A", null, 2, 2400, "2024-01-01", "2024-01-03"))
+        every { repository.getCorpusTotals() } returns CorpusTotals(3, 7200)
+        every { repository.indexBuiltAt() } returns null
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
+
+        resource.podcasts()
+
+        assertEquals(3, ctxSlot.captured.getVariable("totalEpisodes"))
+        assertEquals("2", ctxSlot.captured.getVariable("totalHours"))
+    }
+
+    /** Same hole the tags and years already closed: the podcasts page lands straight in it. */
+    @Test
+    fun `an active podcast stays in the options even when the query excludes it`() {
+        stubSearchDependencies(podcasts = listOf("Podcast B"))
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", podcasts = listOf("Podcast A"))
+
+        assertEquals(listOf("Podcast A", "Podcast B"), ctxSlot.captured.getVariable("podcastOptions"))
+    }
+
+    /**
+     * The last two facets with the old gating. Collections vanish when the query
+     * matches only untagged episodes; episode types when it matches only one
+     * kind -- either way the active filter goes with them.
+     */
+    @Test
+    fun `an active collection and episode type stay in their options`() {
+        stubSearchDependencies()
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("search", capture(ctxSlot)) } returns ""
+
+        search(query = "climate", collections = listOf("science"), episodeTypes = listOf("trailer"))
+
+        assertEquals(listOf("science"), ctxSlot.captured.getVariable("collectionOptions"))
+        assertEquals(listOf("trailer"), ctxSlot.captured.getVariable("episodeTypeOptions"))
+    }
+
     /** A database that has never been written has no build time; the page still renders. */
     @Test
     fun `a missing index build time is passed through as null`() {
         every { repository.getPodcastSummaries() } returns emptyList()
+        every { repository.getCorpusTotals() } returns CorpusTotals(0, 0)
         every { repository.indexBuiltAt() } returns null
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("podcasts", capture(ctxSlot)) } returns ""
@@ -400,10 +504,10 @@ class SearchResourceTest {
         assertNull(ctxSlot.captured.getVariable("indexBuiltAt"))
     }
 
-    // --- JSON API (W7) ---
+    // --- JSON API ---
 
     @Test
-    fun `api search returns the result object itself`() {
+    fun `api search passes the result through, with the filters it was given`() {
         val captured = slot<SearchFilters>()
         val expected = SearchResult(listOf(minimalEpisode()), 1, 1, 10)
         every { repository.search(capture(captured)) } returns expected
@@ -411,9 +515,51 @@ class SearchResourceTest {
         val result =
             resource.apiSearch("kotlin", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "newest", 1, 10)
 
-        assertSame(expected, result)
+        assertEquals(expected.totalCount, result.totalCount)
+        assertEquals(expected.episodes.map { it.id }, result.episodes.map { it.id })
         assertEquals("kotlin", captured.captured.query)
         assertEquals(SortOrder.NEWEST, captured.captured.sort)
+    }
+
+    /**
+     * Every page that renders episode_summary sanitises it first. An API
+     * consumer that drops it into the DOM would be running feed-supplied
+     * script, and nothing in the payload warns them.
+     */
+    @Test
+    fun `the api sanitises the feed-supplied summary`() {
+        val dangerous = minimalEpisode(summary = "<p>Fine</p><script>alert(1)</script>")
+        every { repository.search(any()) } returns SearchResult(listOf(dangerous), 1, 1, 10)
+        every { repository.getEpisodeById("abc") } returns dangerous
+
+        val searched =
+            resource.apiSearch("", emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), "relevance", 1, 10)
+                .episodes
+                .single()
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        for (summary in listOf(searched.episodeSummary, fetched.episodeSummary)) {
+            assertFalse(summary!!.contains("<script"), summary)
+            assertTrue(summary.contains("Fine"), summary)
+        }
+    }
+
+    /**
+     * Plenty of feeds write the summary as prose, and an HTML sanitiser turns
+     * its ampersands and quotes into entities. A summary is treated as markup
+     * only if it contains a `<`, which is the same rule the episode page uses
+     * -- so prose that happens to contain one, an address in angle brackets
+     * say, is sanitised and loses it. Feeds do that rarely enough that one rule
+     * shared with the page beats two that disagree.
+     */
+    @Test
+    fun `the api leaves a plain-text summary exactly as it is`() {
+        val prose = "Ben & Jerry's \"best\" episode: see https://x.test?a=1&b=2"
+        every { repository.getEpisodeById("abc") } returns minimalEpisode(summary = prose)
+
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        assertEquals(prose, fetched.episodeSummary)
     }
 
     /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */
@@ -564,14 +710,20 @@ class SearchResourceTest {
             htmxRequest,
         )
 
-    private fun stubSearchDependencies() {
+    private fun stubSearchDependencies(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) {
         every { repository.search(any()) } returns emptySearchResult()
-        every { repository.getFilterOptions(any()) } returns emptyFilterOptions()
+        every { repository.getFilterOptions(any()) } returns emptyFilterOptions(years, podcasts)
     }
 
     private fun emptySearchResult() = SearchResult(emptyList(), 0, 1, 10)
 
-    private fun emptyFilterOptions() = FilterOptions(emptyList(), emptyList(), emptyList())
+    private fun emptyFilterOptions(
+        years: List<String> = emptyList(),
+        podcasts: List<String> = emptyList(),
+    ) = FilterOptions(podcasts, emptyList(), emptyList(), years)
 
     private fun minimalEpisode(
         summary: String? = null,

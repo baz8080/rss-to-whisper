@@ -25,8 +25,15 @@
         </th:block>
     </p>
 
-    <p th:if="${#lists.isEmpty(summaries)}">
+    <p th:if="${totalEpisodes == 0}">
         Nothing indexed yet. Run <code>index.py</code> over the data directory.
+    </p>
+
+    <!--/* The header counts the whole corpus and the cards group by podcast
+           title, so a corpus whose episodes all lack one has episodes but no
+           cards. Saying nothing would read as a page that failed to load. */-->
+    <p th:if="${totalEpisodes > 0 and #lists.isEmpty(summaries)}">
+        No episode carries a podcast title, so there is nothing to group into cards.
     </p>
 
     <div class="podcast-list">

@@ -538,6 +538,24 @@ class SearchResourceTest {
         }
     }
 
+    /**
+     * Plenty of feeds write the summary as prose, and an HTML sanitiser turns
+     * its ampersands and quotes into entities. A summary is treated as markup
+     * only if it contains a `<`, which is the same rule the episode page uses
+     * -- so prose that happens to contain one, an address in angle brackets
+     * say, is sanitised and loses it. Feeds do that rarely enough that one rule
+     * shared with the page beats two that disagree.
+     */
+    @Test
+    fun `the api leaves a plain-text summary exactly as it is`() {
+        val prose = "Ben & Jerry's \"best\" episode: see https://x.test?a=1&b=2"
+        every { repository.getEpisodeById("abc") } returns minimalEpisode(summary = prose)
+
+        val fetched = resource.apiEpisode("abc").entity as Episode
+
+        assertEquals(prose, fetched.episodeSummary)
+    }
+
     /** The transcript is not in the search payload, but an unbounded page still reads the corpus. */
     @Test
     fun `api search caps the page size`() {

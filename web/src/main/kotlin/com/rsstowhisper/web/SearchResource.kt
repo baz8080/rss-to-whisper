@@ -174,12 +174,17 @@ class SearchResource {
     }
 
     /**
-     * `episode_summary` is feed-supplied HTML, and every page that renders it
-     * sanitises it first. Handing the raw markup to an API consumer moves that
-     * obligation onto them, silently, which is how feed-supplied script ends up
-     * in somebody's dashboard.
+     * Some feeds write `episode_summary` as HTML and some as plain prose, so the
+     * episode page branches on it too. The markup is sanitised, because handing
+     * an API consumer feed-supplied script moves that obligation onto them
+     * silently. The prose is left exactly as it is: an HTML sanitiser turns
+     * "Ben & Jerry's" into entities and deletes anything inside angle brackets,
+     * which for a summary nobody will render as HTML is only damage.
      */
-    private fun withSafeSummary(episode: Episode): Episode = episode.copy(episodeSummary = episode.episodeSummary?.let { sanitizeHtml(it) })
+    private fun withSafeSummary(episode: Episode): Episode =
+        episode.copy(
+            episodeSummary = episode.episodeSummary?.let { if (it.contains('<')) sanitizeHtml(it) else it },
+        )
 
     /** The full episode, transcript included -- which `/api/search` deliberately omits. */
     @GET

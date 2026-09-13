@@ -366,9 +366,19 @@ field is absent from that payload rather than null, so a consumer can tell "not 
 from "this episode has none"; `/api/episode/{id}` returns one episode with it, or a 404
 with a JSON body.
 
-`episodeSummary` comes from the feed and is sanitised before it goes out, the same way the
-HTML pages sanitise it. A page number far enough past the end returns no rows rather than
-wrapping around to the first page.
+`episodeSummary` comes from the feed. A summary containing a `<` is treated as HTML and
+sanitised before it goes out, the same rule the episode page uses; anything else is passed
+through untouched, since running prose through an HTML sanitiser turns its ampersands and
+quotes into entities. Prose that happens to contain a `<` — an address in angle brackets,
+say — is sanitised and loses it, on both the page and the API.
+
+**Every other feed-supplied string in the payload is raw** — `episodeTitle`,
+`podcastTitle`, `snippetText`, the links and the tags are whatever the feed said, because
+an API cannot know how a consumer will render them. Escape them at render time; the HTML
+pages here do it with `th:text`.
+
+A page number far enough past the end returns no rows rather than wrapping around to the
+first page.
 
 ## Pipeline configuration
 

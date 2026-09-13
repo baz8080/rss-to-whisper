@@ -329,7 +329,11 @@ Two things are worth knowing:
   version already indexed is not noticed. Filesystems with coarse timestamps make this
   possible in principle; `--full` is the repair.
 - An empty data directory leaves the database untouched rather than emptying it, which is
-  what an unmounted share looks like.
+  what an unmounted share looks like. So does a run that would remove every indexed
+  episode — a restore that leaves the transcripts truncated but freshly stamped looks
+  exactly like a corpus that has legitimately gone. `--full` is how you say you meant it.
+- A file that cannot be read or stat'ed this time is left as it was, rather than treated
+  as deleted, so a share that blinks costs nothing. The next run picks it up.
 
 `--full` rebuilds both tables from every transcript, and is taken automatically when the
 database predates incremental indexing.

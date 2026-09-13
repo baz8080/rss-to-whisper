@@ -189,7 +189,7 @@ def disambiguate_ids(records):
 
 
 def scan_sources(data_dir):
-    """Map every transcript.json under the data directory to its mtime.
+    """Map every transcript.json under the data directory to its stamp.
 
     Stats only. Reading these is the cost an incremental run exists to avoid,
     and on the corpus sizes in the README it is minutes of network I/O.
@@ -197,25 +197,48 @@ def scan_sources(data_dir):
     Size as well as mtime: a filesystem whose timestamps are coarse can give a
     rewrite the same mtime as the write before it, and a transcript that was
     re-indexed in between would otherwise stay stale until the next --full.
+
+    Returns the stamps alongside the paths whose state could not be
+    established. A file that fails to stat has not been shown to be gone, and
+    an incremental run that treated the two alike would drop its row on a
+    share that blinked.
     """
-    sources = {}
+    sources, unknown = {}, set()
+
     for podcast_name in sorted(os.listdir(data_dir)):
         podcast_path = os.path.join(data_dir, podcast_name)
-        if not os.path.isdir(podcast_path):
+        try:
+            episode_names = os.listdir(podcast_path)
+        except (NotADirectoryError, FileNotFoundError):
+            continue
+        except OSError as e:
+            print(f"  WARNING: Could not list {podcast_path}, leaving it as it was: {e}", file=sys.stderr)
+            unknown.add(podcast_name + os.sep)
             continue
 
-        for episode_name in os.listdir(podcast_path):
-            episode_path = os.path.join(podcast_path, episode_name)
-            json_path = os.path.join(episode_path, "transcript.json")
+        for episode_name in episode_names:
+            json_path = os.path.join(podcast_path, episode_name, "transcript.json")
+            relative = os.path.relpath(json_path, data_dir)
             try:
                 info = os.stat(json_path)
-            except OSError:
+            except (NotADirectoryError, FileNotFoundError):
+                continue
+            except OSError as e:
+                print(f"  WARNING: Could not stat {json_path}, leaving it as it was: {e}", file=sys.stderr)
+                unknown.add(relative)
                 continue
             if not stat.S_ISREG(info.st_mode):
                 continue
-            sources[os.path.relpath(json_path, data_dir)] = (info.st_mtime, info.st_size)
+            sources[relative] = (info.st_mtime, info.st_size)
 
-    return sources
+    return sources, unknown
+
+
+def is_unknown(source_path, unknown):
+    """Whether this run failed to establish what is at this path."""
+    if source_path in unknown:
+        return True
+    return any(source_path.startswith(p) for p in unknown if p.endswith(os.sep))
 
 
 def read_episode(data_dir, source_path, stamp):
@@ -347,7 +370,7 @@ def load_skipped(conn):
     }
 
 
-def run_incremental(conn, data_dir, sources):
+def run_incremental(conn, data_dir, sources, unknown):
     """Bring the database up to date by reading only what changed.
 
     False when it cannot, and the caller should rebuild instead.
@@ -362,7 +385,8 @@ def run_incremental(conn, data_dir, sources):
     known = {p: row["stamp"] for p, row in stored.items()}
     known.update(skipped)
 
-    gone = set(known) - set(sources)
+    # A path this run could not stat has not been shown to be gone.
+    gone = {p for p in set(known) - set(sources) if not is_unknown(p, unknown)}
     fresh = set(sources) - set(known)
     touched = {p for p in set(sources) & set(known) if known[p] != sources[p]}
 
@@ -387,6 +411,19 @@ def run_incremental(conn, data_dir, sources):
     read = {r["source_path"] for r in records}
     drop = (gone & set(stored)) | {p for p in unindexable if p in stored}
     forget = (gone & set(skipped)) | (read & set(skipped))
+
+    # The same refusal a full rebuild makes when nothing is indexable, and
+    # reachable here in a way it is not there: a restore that leaves every
+    # transcript truncated but freshly stamped reads as the whole corpus going
+    # unindexable at once, and this is the routine run, not the deliberate one.
+    remaining = len(set(stored) - drop) + len([r for r in records if r["source_path"] not in stored])
+    if stored and remaining == 0:
+        print(
+            "Every indexed episode would be removed; leaving the existing database untouched.\n"
+            "Re-run with --full if that is really what the data directory now holds.",
+            file=sys.stderr,
+        )
+        return True
 
     # The files that are not being read still take part in deciding ids, so a
     # clash resolves the way a full rebuild would resolve it.
@@ -589,7 +626,7 @@ def main():
     conn.execute("PRAGMA foreign_keys=ON")
 
     t0 = time.time()
-    sources = scan_sources(args.data_dir)
+    sources, unknown = scan_sources(args.data_dir)
     print(f"Found {len(sources)} transcripts in {time.time() - t0:.1f}s")
 
     # The same guard a full rebuild has always had, and it matters more here:
@@ -601,7 +638,7 @@ def main():
         return
 
     if not args.full and schema_is_current(conn):
-        if run_incremental(conn, args.data_dir, sources):
+        if run_incremental(conn, args.data_dir, sources, unknown):
             conn.close()
             return
         print("Some rows predate change tracking; rebuilding in full")

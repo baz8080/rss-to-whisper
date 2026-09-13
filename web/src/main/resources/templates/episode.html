@@ -344,26 +344,24 @@
             }
             if (wordsByCue.size === 0) return disableWords(NO_TIMINGS, NO_TIMINGS_WHY);
 
-            // Keyed to cues this transcript does not have: a re-transcribe
-            // changed the segmentation and only one side of it was reloaded.
-            // Not something the reader can do anything about, and not the same
-            // as the query hiding them.
-            if (!lineEls.some(el => wordsByCue.has(+el.dataset.cue))) {
+            // Asked of the whole sidecar before a line of the transcript is
+            // touched: one cue in common, by ordinal or by coincidence, is not
+            // agreement, and if the file belongs to another decode then none of
+            // its timings belong to this page.
+            if (!sidecarFitsTranscript()) {
                 return disableWords(OUT_OF_DATE, OUT_OF_DATE_WHY);
             }
 
-            // A sidecar can overlap the ordinals and still belong to another
-            // decode. Nothing rebuilt its line, so say the same thing: an
-            // ordinal in common is not agreement.
-            const mismatched = renderWords();
-            if (mismatched > 0 && wordSpans.length === 0) {
-                return disableWords(OUT_OF_DATE, OUT_OF_DATE_WHY);
+            // Nothing split, and the sidecar is this transcript's, so say
+            // which of the two reasons it was: whisper timed no line of it
+            // completely, or every line the query matched keeps its <mark> and
+            // is left whole. Either way the toggle stays live.
+            const short = renderWords();
+            if (wordSpans.length === 0) {
+                return short > 0
+                    ? say('Word timings incomplete', 'Whisper did not time every word in this episode')
+                    : say('Hidden on matched lines', 'Clear the query to see word timings');
             }
-            // Nothing split, but the sidecar is good: every line the query
-            // matched keeps its <mark> and is left whole, so a query that
-            // matched all of them leaves nothing to split. Clearing the query
-            // brings the words back, so the toggle stays live.
-            if (wordSpans.length === 0) return say('Hidden on matched lines', 'Clear the query to see word timings');
 
             // The reader may already be somewhere: play was pressed before this
             // arrived, or a #t= link armed the player without starting it.
@@ -393,9 +391,50 @@
         }
 
         const collapse = s => s.replace(/\s+/g, ' ').trim();
+        // Whitespace dropped entirely: whisper's word array is built from
+        // tokens, and whether one entry is a whole word is the server's
+        // business, not something to condemn a sidecar over.
+        const letters = s => s.replace(/\s/g, '');
 
+        /**
+         * Every cue the sidecar has words for is a cue those words could have
+         * come from. Short of a few is fine -- the pipeline drops a word whose
+         * timings whisper omitted -- but text the line never had means the file
+         * was written against a different decode of this episode.
+         *
+         * Erring towards accepting: what actually reaches the transcript is
+         * gated on an exact rebuild anyway, so being wrong here only costs a
+         * message, and wrongly condemning a good sidecar costs the feature.
+         */
+        function sidecarFitsTranscript() {
+            for (const lineEl of lineEls) {
+                if (lineEl.classList.contains('match')) continue;
+                const words = wordsByCue.get(+lineEl.dataset.cue);
+                if (!words || words.length === 0) continue;
+                const textEl = lineEl.querySelector('.transcript-text');
+                if (!textEl) continue;
+                if (!isSubsequence(letters(words.map(w => w.w).join('')), letters(textEl.textContent))) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function isSubsequence(needle, haystack) {
+            let at = 0;
+            for (const ch of needle) {
+                while (at < haystack.length && haystack[at] !== ch) at++;
+                if (at === haystack.length) return false;
+                at++;
+            }
+            return true;
+        }
+
+        // Returns the number of lines whose words were this line's but could
+        // not rebuild it, so the caller can tell an incomplete sidecar from a
+        // query that hid every line.
         function renderWords() {
-            let mismatched = 0;
+            let short = 0;
             for (const lineEl of lineEls) {
                 // A matched line is already marked up with <mark>; rewriting it
                 // per word would throw those highlights away.
@@ -405,13 +444,12 @@
                 const textEl = lineEl.querySelector('.transcript-text');
                 if (!textEl) continue;
 
-                // Only when the words rebuild the line exactly. The pipeline
-                // drops a word whose timings whisper omitted, and a sidecar
-                // left from an earlier decode can key onto a cue whose text has
-                // changed since -- either way this would quietly rewrite the
-                // transcript the reader came for. The line keeps its own text.
+                // Split only when the words rebuild the line exactly. The
+                // sidecar as a whole has been vouched for by now, but a cue
+                // whose words were dropped would still come out a word short,
+                // and the transcript is what the reader came for.
                 if (collapse(words.map(w => w.w).join('')) !== collapse(textEl.textContent)) {
-                    mismatched++;
+                    short++;
                     continue;
                 }
 
@@ -440,7 +478,7 @@
                     w.end = (next && next.seg === w.seg) ? next.start : w.start;
                 }
             }
-            return mismatched;
+            return short;
         }
 
         // Binary search: last word whose start is at or before now.

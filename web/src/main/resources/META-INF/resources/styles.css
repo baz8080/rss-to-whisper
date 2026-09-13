@@ -476,8 +476,8 @@ a.tag-pill-active:hover {
     background: var(--pico-primary-focus, #b7d4ff);
     border-radius: 3px;
 }
-/* Only when asked for: a transcript permanently mottled with faded words is
-   harder to read than one that never shows its confidence at all. */
+/* Opt-in: a transcript permanently mottled with faded words is harder to read
+   than one that never shows its confidence at all. */
 .transcript.dim-low-confidence .word.low-confidence {
     opacity: 0.45;
 }

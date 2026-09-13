@@ -114,8 +114,7 @@
     <div th:if="${not transcriptLines.isEmpty()}">
         <div class="transcript-header">
             <h3>Transcript</h3>
-            <!--/* Hidden until the sidecar is known to exist: episodes
-                   transcribed before word timings were emitted have none. */-->
+            <!--/* Unhidden by script, and only when word timings are configured. */-->
             <div class="word-controls" id="word-controls" hidden="hidden">
                 <label title="Fade the words whisper was least sure of">
                     <input type="checkbox" id="dim-toggle"/>
@@ -294,19 +293,16 @@
             }
         }
 
-        // --- Word timings ---------------------------------------------------
-        //
-        // words.jsonl.gz is roughly 60 KB per episode, so it is never fetched on
-        // page load: the first play pulls it, and so does ticking the
-        // confidence toggle.
+        // Word timings. words.jsonl.gz is roughly 60 KB per episode, so it is
+        // never fetched on page load: the first play pulls it, and so does
+        // ticking the confidence toggle.
 
         const wordsUrl = [[${wordsUrl}]];
         const wordControls = document.getElementById('word-controls');
         const transcriptEl = document.getElementById('transcript');
         const dimToggle = document.getElementById('dim-toggle');
 
-        // Whisper's own probability. Below this the decoder was guessing, and
-        // the reader deserves to know which words those are.
+        // Whisper's own probability for the word. Below this it was guessing.
         const LOW_CONFIDENCE = 0.4;
 
         let wordsByCue = null;
@@ -344,8 +340,7 @@
         function renderWords() {
             for (const lineEl of lineEls) {
                 // A matched line is already marked up with <mark>; rewriting it
-                // per word would throw the highlights away. Word timing is the
-                // lesser feature here, so it yields.
+                // per word would throw those highlights away.
                 if (lineEl.classList.contains('match')) continue;
                 const words = wordsByCue.get(+lineEl.dataset.cue);
                 if (!words || words.length === 0) continue;
@@ -367,8 +362,7 @@
             wordSpans.sort((a, b) => a.start - b.start);
         }
 
-        // Last word whose start is at or before now, by binary search -- the
-        // same shape as findActiveLine, over a much longer list.
+        // Binary search: last word whose start is at or before now.
         function findWordAt(seconds) {
             let lo = 0, hi = wordSpans.length - 1, result = null;
             while (lo <= hi) {

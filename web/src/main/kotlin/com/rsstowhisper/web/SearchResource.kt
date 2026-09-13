@@ -49,11 +49,9 @@ class SearchResource {
     lateinit var audioBaseUrl: String
 
     /**
-     * Where the pipeline writes its episode directories, so the word-timing
-     * sidecars can be served from beside the audio.
-     *
-     * Optional: blank means the module has no access to that tree, and the
-     * word-timing feature stays hidden rather than half-working.
+     * The pipeline's data directory, so the word-timing sidecars can be served
+     * from beside the audio. Blank means no access to that tree, and the
+     * feature stays hidden rather than half-working.
      */
     @ConfigProperty(name = "app.data.directory", defaultValue = "")
     lateinit var dataDirectory: String
@@ -153,10 +151,10 @@ class SearchResource {
     /**
      * The per-word timings written beside the audio, as gzipped NDJSON.
      *
-     * Served by this module rather than fetched from the audio host: the path
-     * is derivable from a column already in hand, it needs no CORS grant on a
-     * server that only has to serve audio, and Content-Encoding lets the
-     * browser inflate it instead of the page carrying a decompressor.
+     * Served here rather than fetched from the audio host: the path derives
+     * from a column already in hand, it needs no CORS grant on a server that
+     * only has to serve audio, and Content-Encoding lets the browser inflate it
+     * instead of the page carrying a decompressor.
      */
     @GET
     @Path("/episode/{id}/words")
@@ -166,25 +164,19 @@ class SearchResource {
         val wordsPath = wordsFileFor(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
         return Response.ok(Files.readAllBytes(wordsPath))
             .type("application/x-ndjson")
-            // The file is gzip on disk and goes out as-is; the browser inflates it.
+            // Gzip on disk, served as-is for the browser to inflate.
             .header("Content-Encoding", "gzip")
             .header("Cache-Control", "public, max-age=3600")
             .build()
     }
 
-    /**
-     * Null whenever the sidecar cannot be served: no data directory configured,
-     * no such episode, an episode with no audio path, a path that escapes the
-     * data directory, or an episode transcribed before word timings existed.
-     */
     private fun wordsFileFor(id: String): java.nio.file.Path? {
         if (dataDirectory.isBlank()) return null
         val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
 
         val root = java.nio.file.Path.of(dataDirectory).toAbsolutePath().normalize()
-        // episode_relative_audio_path comes from the database, but a path that
-        // reaches outside the data directory must not be servable whatever put
-        // it there.
+        // The relative path comes from the database, but one reaching outside
+        // the data directory must not be servable whatever put it there.
         val audioPath = root.resolve(relative).normalize()
         if (!audioPath.startsWith(root)) return null
 
@@ -311,10 +303,8 @@ class SearchResource {
                 setVariable("linkifiedSummary", linkifiedSummary)
                 setVariable("query", query.trim())
                 setVariable("matchCount", transcriptLines.count { it.matched })
-                // Null hides the feature entirely. Whether this episode actually
-                // has a sidecar is settled by the fetch: episodes transcribed
-                // before word timings existed have none, and the page falls back
-                // silently rather than the server stat'ing the file to render.
+                // Not stat'ed here: whether this episode has a sidecar is
+                // settled by the fetch, which falls back silently on a 404.
                 setVariable("wordsUrl", if (dataDirectory.isBlank()) null else "/episode/$id/words")
             }
 

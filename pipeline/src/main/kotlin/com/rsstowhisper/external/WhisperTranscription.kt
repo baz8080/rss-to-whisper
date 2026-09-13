@@ -7,6 +7,7 @@ import java.io.OutputStreamWriter
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -157,7 +158,14 @@ data class WhisperTranscription(
             )
         }
 
-        /** `HH:MM:SS.mmm`, the WebVTT the server itself emits. */
+        /**
+         * `HH:MM:SS.mmm`, the WebVTT the server itself emits.
+         *
+         * Locale.ROOT because this string is written into transcript.json and
+         * parsed back by the web module: Java renders %d in the digits of the
+         * default locale, so on an ar-SA or fa-IR server every timestamp in the
+         * corpus would be written in digits nothing downstream can read.
+         */
         internal fun timestamp(seconds: Double): String {
             val safe = if (seconds.isFinite() && seconds > 0) seconds else 0.0
             val millisTotal = Math.round(safe * 1000.0)
@@ -165,7 +173,7 @@ data class WhisperTranscription(
             val minutes = millisTotal % 3_600_000 / 60_000
             val secs = millisTotal % 60_000 / 1000
             val millis = millisTotal % 1000
-            return "%02d:%02d:%02d.%03d".format(hours, minutes, secs, millis)
+            return "%02d:%02d:%02d.%03d".format(Locale.ROOT, hours, minutes, secs, millis)
         }
     }
 }

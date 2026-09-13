@@ -26,6 +26,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
+import java.util.Locale
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
@@ -841,7 +842,7 @@ class PodcastPipeline(
         Files.deleteIfExists(episodePath.resolve("transcript.txt"))
 
         val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
-        logger.debug("Transcribed in: ${"%.2f".format(elapsedMinutes)} Minutes")
+        logger.debug("Transcribed in: ${"%.2f".format(Locale.ROOT, elapsedMinutes)} Minutes")
 
         val transcription = WhisperTranscription.parse(json)
         return ScoredTranscription(transcription, TranscriptQuality.score(transcription))

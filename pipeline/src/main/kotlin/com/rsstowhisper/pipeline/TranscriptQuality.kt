@@ -208,7 +208,14 @@ data class QualityReport(
             else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
 
-    private val hasSpeech: Boolean get() = TranscriptQuality.FLAG_NO_SPEECH !in flags
+    /**
+     * Both, because the flag is only as good as whoever wrote the report:
+     * [fromMap] reads `episode_quality` off disk, and a file from another
+     * version need not have flagged what current code flags. `wordCount == 0`
+     * is the condition that raises the flag, so for a report this code scored
+     * the two always agree.
+     */
+    private val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
 
     val summary: String
         get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"

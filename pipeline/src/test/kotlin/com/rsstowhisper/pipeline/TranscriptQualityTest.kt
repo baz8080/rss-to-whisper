@@ -198,6 +198,23 @@ class TranscriptQualityTest {
         assertTrue(awful.isBetterThan(empty))
     }
 
+    /**
+     * A stored report is only as good as the version that wrote it, and this
+     * one says it has no words while flagging nothing -- which on flag count
+     * alone would keep a blank transcript over a real re-decode for good.
+     */
+    @Test
+    fun `a stored report with no words loses even when it flagged nothing`() {
+        val storedBlank =
+            QualityReport.fromMap(
+                mapOf("word_count" to 0, "flags" to emptyList<String>()),
+            )!!
+        val awful = TranscriptQuality.score(transcription(List(20) { " and that is the thing about it really" }))
+
+        assertFalse(storedBlank.isBetterThan(awful))
+        assertTrue(awful.isBetterThan(storedBlank))
+    }
+
     @Test
     fun `fewer flags wins, and punctuation breaks the tie`() {
         val clean = TranscriptQuality.score(healthy())

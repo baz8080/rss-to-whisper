@@ -35,6 +35,8 @@ import org.thymeleaf.context.Context
 import java.io.IOException
 import java.net.URI
 import java.nio.file.Files
+import java.nio.file.InvalidPathException
+import java.nio.file.LinkOption
 import java.security.MessageDigest
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -221,21 +223,34 @@ class SearchResource {
         // The root is resolved for real, so a data directory that is itself a
         // symlink still matches what gets built from it. The episode path is
         // only normalised, which is what stops a database value walking out of
-        // the tree with "..". Symlinks below the root are followed: they are
-        // the operator's own layout -- a library spread across disks links its
-        // show directories elsewhere -- and refusing them would cost those
-        // episodes the feature to guard a tree the operator already owns.
+        // the tree with "..". Directory symlinks below the root are followed:
+        // they are the operator's own layout -- a library spread across disks
+        // links its show directories elsewhere -- and refusing them would cost
+        // those episodes the feature to guard a tree the operator already owns.
         val realRoot =
             try {
                 root.toRealPath()
             } catch (e: IOException) {
                 return null
             }
-        val audioPath = realRoot.resolve(relative).normalize()
-        if (!audioPath.startsWith(realRoot)) return null
 
-        val wordsPath = (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
-        return wordsPath.takeIf { Files.isRegularFile(it) }
+        val wordsPath =
+            try {
+                val audioPath = realRoot.resolve(relative).normalize()
+                (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
+            } catch (e: InvalidPathException) {
+                return null
+            }
+        // Checked on the file that gets opened rather than on the audio path a
+        // level below it: an empty or "." value resolves to the root itself,
+        // and its parent is outside the tree.
+        if (!wordsPath.startsWith(realRoot)) return null
+
+        // The leaf is not followed. A directory symlink is the layout this is
+        // meant to allow; a symlink named words.jsonl.gz is the one thing an
+        // attacker with a foothold in the tree would plant, and following it
+        // buys the layout nothing.
+        return wordsPath.takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
     }
 
     /** The same search as `/search`, for use from a shell or a notebook. */

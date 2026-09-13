@@ -700,6 +700,47 @@ class SearchResourceTest {
         assertArrayEquals(byteArrayOf(9), response.entity as ByteArray)
     }
 
+    /**
+     * The audio path resolving to the root itself: its parent is outside the
+     * tree, and the check has to be on the file that gets opened.
+     */
+    @Test
+    fun `words route refuses a path that resolves to the data directory itself`(
+        @TempDir tmp: Path,
+    ) {
+        val dataDir = tmp.resolve("data")
+        Files.createDirectories(dataDir)
+        Files.write(tmp.resolve(SearchResource.WORDS_FILENAME), byteArrayOf(9))
+        resource.dataDirectory = Optional.of(dataDir.toString())
+
+        for (relative in listOf("", ".", "./")) {
+            every { repository.getEpisodeById("ep1") } returns minimalEpisode(relativeAudioPath = relative)
+            assertEquals(404, resource.episodeWords("ep1", request).status, "relative=<$relative>")
+        }
+    }
+
+    /**
+     * Directory symlinks are the layout this allows; a symlinked sidecar is
+     * what someone with a foothold in the tree would leave behind.
+     */
+    @Test
+    fun `words route refuses a sidecar that is itself a symlink out of the tree`(
+        @TempDir tmp: Path,
+    ) {
+        val outside = tmp.resolve("outside")
+        Files.createDirectories(outside)
+        val secret = outside.resolve("secret.gz")
+        Files.write(secret, byteArrayOf(9))
+        val episodeDir = tmp.resolve("data").resolve("Show").resolve("ep")
+        Files.createDirectories(episodeDir)
+        Files.createSymbolicLink(episodeDir.resolve(SearchResource.WORDS_FILENAME), secret)
+        resource.dataDirectory = Optional.of(tmp.resolve("data").toString())
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(404, resource.episodeWords("ep1", request).status)
+    }
+
     /** A data directory that is not there hides the feature rather than 404ing every episode. */
     @Test
     fun `words route is 404 when the data directory does not exist`(

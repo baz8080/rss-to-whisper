@@ -382,12 +382,14 @@ whatever the request's `Accept-Encoding` says, since the file is only gzip on di
 `curl` it with `--compressed`.
 
 The data directory itself is resolved with `toRealPath`, so a tree that is a symlink
-still matches the paths built from it, and episode paths are normalised, which is what
-refuses a `..` walking out of the tree. Symlinks *below* the data directory are
-followed: a library spread across disks links its show directories elsewhere, and that
-is the operator's own layout rather than something to guard against. If the configured
-directory is not there at all, the feature stays hidden instead of being offered on
-every episode and then failing on each one.
+still matches the paths built from it. The sidecar path is then normalised and must sit
+under that root — which is what refuses a `..` walking out of the tree, and a value that
+resolves to the root itself, whose parent would be outside it. *Directory* symlinks
+below the root are followed, so a library spread across disks can link its show
+directories onto another volume; the sidecar file itself is not followed, since that
+symlink buys the layout nothing and is the one someone with a foothold in the tree would
+leave behind. If the configured directory is not there at all, the feature stays hidden
+instead of being offered on every episode and then failing on each one.
 
 The response revalidates rather than being held: re-transcribing an episode rewrites
 the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar

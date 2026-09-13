@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import java.util.zip.GZIPInputStream
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -11,6 +12,20 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WhisperTranscriptionTest {
+    /** Each of these locales renders `%d` in digits that are not ASCII. */
+    @Test
+    fun `timestamps use ASCII digits whatever the default locale is`() {
+        val original = Locale.getDefault()
+        try {
+            for (tag in listOf("ar-SA", "fa-IR", "bn-IN", "hi-IN-u-nu-deva")) {
+                Locale.setDefault(Locale.forLanguageTag(tag))
+                assertEquals("01:02:03.456", WhisperTranscription.timestamp(3723.456), "under $tag")
+            }
+        } finally {
+            Locale.setDefault(original)
+        }
+    }
+
     private val response =
         """
         {

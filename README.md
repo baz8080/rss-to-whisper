@@ -529,9 +529,10 @@ arrives at the pipeline literally and the config file is not found:
 ```
 
 A bad flag exits `2` with its message on stderr. Unusable configuration exits `1` — that
-covers a missing `--config` as well as a data directory that is missing or not writable. A
-run that found nothing new to transcribe exits `0`, so a wrapper script can tell a failed
-launch from a quiet one.
+covers a missing `--config`, a data directory that is missing or not writable, and a
+whisper server that does not answer the preflight (see
+[When whisper is not there](#when-whisper-is-not-there)). A run that found nothing new to
+transcribe exits `0`, so a wrapper script can tell a failed launch from a quiet one.
 
 ### `pods.yaml`
 
@@ -764,6 +765,26 @@ same episode**: they can interleave into a transcript and a sidecar from differe
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.
+
+### When whisper is not there
+
+The server is asked for its base URL once, before the first feed is fetched; nothing
+listening, and the run exits `1` having downloaded nothing. Any answer counts, a 404
+included — `--request-path` moves whisper.cpp's page off `/`, and a proxy may route only
+`/inference`, neither of which is a reason to refuse to run. Only a gateway saying its
+upstream is gone (`502`, `503`, `504`) or nothing answering at all fails it.
+
+If whisper goes away *during* a run, the run carries on to the end and then exits
+non-zero, naming how many episodes could not reach it. It does not stop early: the
+downloads are not wasted, since a completed `audio.mp3` is kept and the next run skips
+straight to decoding it. What the exit code buys is that a run which downloaded the whole
+backlog and transcribed none of it cannot look successful to whatever is driving it.
+
+Only failures that say nothing is there count — a connection that goes nowhere or dies
+mid-response, a gateway `502`/`503`/`504`, or an empty body. A status the server chose is
+the server talking, and what it is talking about is that request: whisper.cpp answers
+`400` for an mp3 it cannot decode and `500` for one it cannot process, and those episodes
+fail on their own merits as they always did, without failing the run.
 
 ### Error log
 

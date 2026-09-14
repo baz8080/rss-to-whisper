@@ -6,8 +6,12 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+
+/** Nothing was decoded at all: the server could not be reached, or would not answer. */
+class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 open class Transcriber(
     private val serverUrl: String,
@@ -178,16 +182,65 @@ open class Transcriber(
 
         logger.debug("Sending {} to whisper server", audioPath.fileName)
 
-        return httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw RuntimeException("Whisper server returned ${response.code}: ${response.body?.string()}")
+        val response =
+            try {
+                httpClient.newCall(request).execute()
+            } catch (e: IOException) {
+                // Names the cause rather than asserting the server is down: a read
+                // timeout and a local mp3 that will not open arrive the same way.
+                throw TranscriberUnavailable(
+                    "Request to the whisper server at $serverUrl failed (${e.javaClass.simpleName}: ${e.message})",
+                    e,
+                )
             }
-            response.body?.string() ?: throw RuntimeException("Whisper server returned empty body")
+        return response.use {
+            val body =
+                try {
+                    it.body?.string()
+                } catch (e: IOException) {
+                    throw TranscriberUnavailable("The whisper server at $serverUrl stopped mid-response", e)
+                }
+            if (!it.isSuccessful) {
+                val detail = "Whisper server returned ${it.code}: $body"
+                // A status the server chose is about this request, not about the server.
+                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else RuntimeException(detail)
+            }
+            // A decode with no speech still returns a segment list; nothing at all is a broken server.
+            body?.takeIf { text -> text.isNotBlank() }
+                ?: throw TranscriberUnavailable("Whisper server returned an empty body")
+        }
+    }
+
+    /** Whether anything is listening, asked once before a run commits to it. Any answer counts. */
+    open fun ping(): Boolean {
+        val request =
+            try {
+                Request.Builder().url(serverUrl).get().build()
+            } catch (e: IllegalArgumentException) {
+                logger.error("Not a usable whisper server URL: {} ({})", serverUrl, e.message)
+                return false
+            }
+        // The shared client's timeouts are sized for a decode, not for a preflight.
+        val client =
+            httpClient.newBuilder()
+                .callTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build()
+        return try {
+            client.newCall(request).execute().use { it.code !in UPSTREAM_GONE_CODES }
+        } catch (e: IOException) {
+            logger.debug("Whisper server at {} did not answer: {}", serverUrl, e.message)
+            false
         }
     }
 
     companion object {
         const val DEFAULT_MAX_LEN = 200
+
+        private const val PING_TIMEOUT_SECONDS = 15L
+
+        /** The decoder is not there, as against it disliking one request. */
+        private val UPSTREAM_GONE_CODES = setOf(502, 503, 504)
 
         /**
          * Whisper takes an ISO 639-1 code, or "auto" to detect from the audio.

@@ -4,12 +4,16 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.buffer
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.TimeUnit
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class TranscriberTest {
@@ -306,11 +310,117 @@ class TranscriberTest {
         assertTrue(ex.message!!.contains("500"))
     }
 
+    /** whisper.cpp answers 400 for an mp3 it cannot decode, 500 for one it cannot process. */
+    @Test
+    fun `a status the server chose about this request is not the server being gone`(
+        @TempDir tmp: Path,
+    ) {
+        for (code in listOf(400, 404, 413, 500)) {
+            val ex =
+                assertFailsWith<RuntimeException> {
+                    Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                        .transcribe(mp3File(tmp))
+                }
+            assertFalse(ex is TranscriberUnavailable, "$code was treated as an unreachable server")
+        }
+    }
+
+    /** A gateway with nothing behind it, and whisper.cpp's own 503 while its model loads. */
+    @Test
+    fun `a gateway saying its upstream is gone is the server being gone`(
+        @TempDir tmp: Path,
+    ) {
+        for (code in listOf(502, 503, 504)) {
+            assertFailsWith<TranscriberUnavailable>("$code was not treated as an unreachable server") {
+                Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                    .transcribe(mp3File(tmp))
+            }
+        }
+    }
+
+    /** A decode with no speech still returns a segment list. */
     @Test
     fun `transcribe throws on empty body`(
         @TempDir tmp: Path,
     ) {
-        val client =
+        assertFailsWith<TranscriberUnavailable> {
+            Transcriber("http://whisper-server", clientReturning("")).transcribe(mp3File(tmp))
+        }
+        assertFailsWith<TranscriberUnavailable> {
+            Transcriber("http://whisper-server", clientReturning("  \n")).transcribe(mp3File(tmp))
+        }
+    }
+
+    @Test
+    fun `transcribe reports an unreachable server as unavailable rather than an IO error`(
+        @TempDir tmp: Path,
+    ) {
+        val ex =
+            assertFailsWith<TranscriberUnavailable> {
+                Transcriber("http://whisper-server", clientThrowing()).transcribe(mp3File(tmp))
+            }
+        assertTrue(ex.message!!.contains("http://whisper-server"))
+        assertTrue(ex.cause is IOException)
+    }
+
+    @Test
+    fun `ping gets the base url`() {
+        val requests = mutableListOf<okhttp3.Request>()
+        assertTrue(Transcriber("http://whisper-server", clientReturning(captureRequests = requests)).ping())
+
+        val request = requests.single()
+        assertEquals("GET", request.method)
+        assertEquals("http://whisper-server/", request.url.toString())
+
+        assertTrue(Transcriber("http://whisper-server", clientReturning(responseCode = 201)).ping())
+    }
+
+    @Test
+    fun `ping is false only when nothing is there`() {
+        assertFalse(Transcriber("http://whisper-server", clientThrowing()).ping())
+        for (code in listOf(502, 503, 504)) {
+            assertFalse(Transcriber("http://whisper-server", clientReturning(responseCode = code)).ping(), "$code")
+        }
+    }
+
+    /** `--request-path` moves whisper.cpp's page off `/`, and a proxy may route only `/inference`. */
+    @Test
+    fun `ping is true for a server that answers the base url with an error`() {
+        for (code in listOf(401, 404, 500)) {
+            assertTrue(Transcriber("http://whisper-server", clientReturning(responseCode = code)).ping(), "$code")
+        }
+    }
+
+    @Test
+    fun `ping does not inherit the read timeout sized for a decode`() {
+        var readTimeoutMillis = -1
+        val decodeClient =
+            OkHttpClient.Builder()
+                .readTimeout(90, TimeUnit.MINUTES)
+                .addInterceptor { chain ->
+                    readTimeoutMillis = chain.readTimeoutMillis()
+                    Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body("".toResponseBody())
+                        .build()
+                }
+                .build()
+
+        assertTrue(Transcriber("http://whisper-server", decodeClient).ping())
+        assertTrue(
+            readTimeoutMillis in 1..TimeUnit.MINUTES.toMillis(1),
+            "ping read timeout was ${readTimeoutMillis}ms",
+        )
+    }
+
+    @Test
+    fun `a server that stops mid-response is an unreachable server`(
+        @TempDir tmp: Path,
+    ) {
+        val truncated =
             OkHttpClient.Builder()
                 .addInterceptor { chain ->
                     Response.Builder()
@@ -318,12 +428,38 @@ class TranscriberTest {
                         .protocol(Protocol.HTTP_1_1)
                         .code(200)
                         .message("OK")
+                        .body(
+                            object : okhttp3.ResponseBody() {
+                                override fun contentType() = null
+
+                                override fun contentLength() = -1L
+
+                                override fun source(): okio.BufferedSource =
+                                    object : okio.ForwardingSource(okio.Buffer()) {
+                                        override fun read(
+                                            sink: okio.Buffer,
+                                            byteCount: Long,
+                                        ): Long = throw IOException("Connection reset")
+                                    }.buffer()
+                            },
+                        )
                         .build()
                 }
                 .build()
 
-        assertFailsWith<RuntimeException> {
-            Transcriber("http://whisper-server", client).transcribe(mp3File(tmp))
+        assertFailsWith<TranscriberUnavailable> {
+            Transcriber("http://whisper-server", truncated).transcribe(mp3File(tmp))
         }
     }
+
+    /** A typo in `.env` should be reported, not thrown out of the preflight. */
+    @Test
+    fun `ping is false for a url that is not one`() {
+        assertFalse(Transcriber("localhost:8080", clientReturning()).ping())
+    }
+
+    private fun clientThrowing(): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { throw IOException("Connection refused") }
+            .build()
 }

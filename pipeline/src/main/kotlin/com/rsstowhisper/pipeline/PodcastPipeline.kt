@@ -12,6 +12,7 @@ import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
+import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.timeToSeconds
@@ -48,6 +49,11 @@ class PodcastPipeline(
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
 
+    /** What the run's exit code is made of. See [decodingWorked]. */
+    private var decodesAttempted = 0
+    private var decodesSucceeded = 0
+    private var decodesUnreachable = 0
+
     // Anchored on word boundaries so "repeat" does not also swallow "repeating".
     private val excludeKeywordRegex: Regex? =
         config.excludeTitleKeywords
@@ -66,14 +72,48 @@ class PodcastPipeline(
     fun run(): Boolean {
         val dataDir = config.dataDirectory
         orphansRecovered = 0
+        resetDecodeTally()
 
         if (!Files.isWritable(Path.of(dataDir))) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
             return false
         }
 
+        if (!transcriber.ping()) {
+            logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
+            return false
+        }
+
         for (podcast in config.podcasts) {
             processPodcast(podcast, dataDir)
+        }
+        return decodingWorked()
+    }
+
+    private fun resetDecodeTally() {
+        decodesAttempted = 0
+        decodesSucceeded = 0
+        decodesUnreachable = 0
+    }
+
+    /**
+     * Whether the run did its job, which is what the exit code reports.
+     *
+     * Two ways it did not: whisper went away mid-run, or it answered every
+     * request and decoded none of them -- a build that 500s everything passes
+     * the preflight and fails each episode on its own apparent merits.
+     */
+    private fun decodingWorked(): Boolean {
+        if (decodesUnreachable > 0) {
+            logger.error(
+                "$decodesUnreachable episodes got no transcript from the whisper server " +
+                    "at ${config.whisperServerUrl}",
+            )
+            return false
+        }
+        if (decodesAttempted > 0 && decodesSucceeded == 0) {
+            logger.error("None of the $decodesAttempted episodes attempted produced a transcript")
+            return false
         }
         return true
     }
@@ -86,8 +126,14 @@ class PodcastPipeline(
      */
     fun retranscribe(request: RetranscribeRequest): Boolean {
         val dataDir = Path.of(config.dataDirectory)
+        resetDecodeTally()
         if (!Files.isWritable(dataDir)) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
+            return false
+        }
+
+        if (!transcriber.ping()) {
+            logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
 
@@ -107,7 +153,7 @@ class PodcastPipeline(
             }
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
-        return true
+        return decodingWorked()
     }
 
     private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
@@ -806,7 +852,8 @@ class PodcastPipeline(
                 decodeAndScore(audioPath, episodePath, podcast)
             } catch (e: Exception) {
                 // The first decode is still a usable transcript; a failed retry
-                // must not cost the episode entirely.
+                // must not cost the episode entirely, nor fail the run.
+                if (e is TranscriberUnavailable) decodesUnreachable--
                 logger.warn("Retry of $label failed; keeping the first decode", e)
                 return warnIfFlagged(first, label)
             }
@@ -834,7 +881,15 @@ class PodcastPipeline(
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
 
-        val json = transcriber.transcribe(audioPath, podcast.language ?: config.language)
+        decodesAttempted++
+        val json =
+            try {
+                transcriber.transcribe(audioPath, podcast.language ?: config.language)
+            } catch (e: TranscriberUnavailable) {
+                decodesUnreachable++
+                throw e
+            }
+        decodesSucceeded++
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.

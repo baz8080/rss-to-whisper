@@ -58,6 +58,26 @@ Done so far from this list:
 - **W7, JSON API.** `quarkus-rest-jackson`, `/api/search` and `/api/episode/{id}`.
   `Episode` gained `snippetText` and `@get:JsonIgnore` on the three getters that should
   not be in a payload.
+- **P2, whisper preflight.** `Transcriber.ping()` is asked once in `run()` and
+  `retranscribe()` before anything else happens, on its own short timeouts rather than
+  the ninety minutes the decode client allows. A decode that could not reach whisper
+  increments `decodesUnreachable`, which only makes the run exit non-zero at the end --
+  so a run that downloaded the backlog and transcribed none of it cannot look
+  successful. The line drawn is **reachability, not correctness**, and it is the one
+  thing here worth not relitigating: a status the server chose is the server talking,
+  and what it is talking about is that request (whisper.cpp answers 400 "failed to read
+  audio data" for an mp3 it cannot decode, 500 for one it cannot process). So only a
+  connection that goes nowhere or dies mid-response (the body read is inside the guard,
+  not just `execute()`), a gateway `502`/`503`/`504`, or an empty body count, and by the
+  same rule the preflight accepts any answer including a 404 (`--request-path` moves
+  whisper.cpp's page off `/`).
+  The circuit breaker the original entry called for -- a consecutive-failure count that
+  stopped the run early -- was built and then cut. Pipeline and whisper run on the same
+  machine, so an unreachable server fails instantly rather than after a timeout, and the
+  downloads it would have saved are reused by the next run. It cost four guards across
+  four loops and was the source of every review finding, one of which would have let
+  three undecodable mp3s wedge the pipeline permanently. Don't rebuild it without a
+  mid-run failure that actually hurt.
 
 Explicitly declined:
 
@@ -164,37 +184,7 @@ Everything listed here has shipped; see "Done so far" above.
 
 ## Pipeline
 
-Remaining, in suggested order: P2, P3, P8, P7.
-
-### P2. Whisper preflight and circuit breaker
-
-**Why.** `processPodcast` catches every exception per entry and continues, so a whisper
-server that is down causes every remaining episode in every feed to be downloaded and then
-fail one at a time. The downloads are not wasted (the next run finds `audio.mp3` and skips
-straight to decoding), but the run takes hours to report a failure that was known at the
-first episode.
-
-**Where.** `Transcriber`, `PodcastPipeline.run` and `processPodcast`, `AppConfig`.
-
-**Design.**
-
-- Preflight in `run()` before any feed is fetched: one GET to the server's base URL. Any
-  2xx is enough (whisper-server answers `/` with a page; do not depend on a `/health` route
-  without checking the build in use). On failure log an error and return `false`, which
-  `Main` already turns into exit 1.
-- Breaker: wrap `transcriber.transcribe` so connection failures and non-2xx responses throw a
-  dedicated `TranscriberUnavailable` exception, distinct from an empty transcript. Count
-  consecutive occurrences across the whole run in a field like `orphansRecovered`; reset on
-  any success. At `max_consecutive_transcriber_errors` (default 3, in `pods.yaml`) log one
-  error naming the last failure, stop processing further entries and podcasts, and return
-  `false`. Both the feed loop and `recoverAll` must check the tripped state before each decode.
-
-**Tests.** `buildPipeline(transcriberFails = …)` already exists. Assert that with three
-entries and a failing transcriber, `FakeTranscriber.calls` stops at the threshold, later
-downloads do not happen, and `run()` returns `false`. Preflight is HTTP; give `Transcriber`
-an `open fun ping(): Boolean` and override it in `FakeTranscriber`.
-
-**Effort.** Small.
+Remaining, in suggested order: P3, P8, P7.
 
 ### P3. Dry run
 

@@ -270,4 +270,83 @@ class TranscriptQualityTest {
         )
         assertEquals(emptyList<String>(), map["flags"])
     }
+
+    /** A report whose decode carried no word probabilities, as a server ignoring token_timestamps gives. */
+    private fun unmeasured(
+        flags: List<String> = emptyList(),
+        punctuation: Double = 0.15,
+    ) = QualityReport(
+        punctuationPerWord = punctuation,
+        secondsPerCue = 3.0,
+        repeatedShare = 0.0,
+        longestRepeatedCueRun = 1,
+        meanWordProbability = null,
+        lowConfidenceShare = null,
+        wordCount = 160,
+        cueCount = 40,
+        flags = flags,
+    )
+
+    private fun measured(
+        flags: List<String> = emptyList(),
+        punctuation: Double = 0.15,
+    ) = unmeasured(flags, punctuation).copy(
+        meanWordProbability = 0.7,
+        // Consistent with the flags asked for: score() raises low-confidence
+        // from this share, so a clean report cannot carry a failing one.
+        lowConfidenceShare = if (TranscriptQuality.FLAG_LOW_CONFIDENCE in flags) 0.4 else 0.01,
+    )
+
+    /**
+     * The defect: low-confidence cannot be raised without word probabilities, so
+     * a decode scored without them wins on raw count against one that tripped
+     * it -- and the episode never acquires its word timings.
+     */
+    @Test
+    fun `a decode that gained word times is not beaten by low-confidence alone`() {
+        val before = unmeasured()
+        val after = measured(flags = listOf(TranscriptQuality.FLAG_LOW_CONFIDENCE))
+
+        assertFalse(before.isBetterThan(after))
+        assertTrue(after.isBetterThan(before))
+    }
+
+    /** Word times are worth having, not worth trading a better transcript for. */
+    @Test
+    fun `gaining word times does not excuse a flag both reports could raise`() {
+        val before = unmeasured()
+        val after = measured(flags = listOf(TranscriptQuality.FLAG_REPETITION_LOOP))
+
+        assertTrue(before.isBetterThan(after))
+        assertFalse(after.isBetterThan(before))
+    }
+
+    /** Punctuation still decides first: word times are worth having, not worth a worse transcript. */
+    @Test
+    fun `a better punctuated transcript beats one that merely gained word times`() {
+        val before = unmeasured(punctuation = 0.18)
+        val after = measured(punctuation = 0.04)
+
+        assertTrue(before.isBetterThan(after))
+        assertFalse(after.isBetterThan(before))
+    }
+
+    @Test
+    fun `with the flags equal, the one with word times wins`() {
+        val before = unmeasured()
+        val after = measured()
+
+        assertTrue(after.isBetterThan(before))
+        assertFalse(before.isBetterThan(after))
+    }
+
+    /** Both measured, so low-confidence counts normally. */
+    @Test
+    fun `low-confidence still counts when both decodes could raise it`() {
+        val clean = measured()
+        val lowConfidence = measured(flags = listOf(TranscriptQuality.FLAG_LOW_CONFIDENCE))
+
+        assertTrue(clean.isBetterThan(lowConfidence))
+        assertFalse(lowConfidence.isBetterThan(clean))
+    }
 }

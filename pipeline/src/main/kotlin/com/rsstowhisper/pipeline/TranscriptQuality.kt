@@ -197,16 +197,31 @@ data class QualityReport(
      * precision [toMap] stores, or a report read back off disk loses to one in
      * memory on digits it was never able to keep.
      */
-    fun isBetterThan(other: QualityReport): Boolean =
-        when {
+    fun isBetterThan(other: QualityReport): Boolean {
+        // Counting only what both reports could have raised. low-confidence
+        // needs word probabilities, so a decode scored without them cannot trip
+        // it and would win on raw count against one that did.
+        val bothMeasured = hasWordTimes && other.hasWordTimes
+        val mine = comparableFlagCount(bothMeasured)
+        val theirs = other.comparableFlagCount(bothMeasured)
+
+        return when {
             // Ahead of the count because an empty decode trips exactly one
             // flag, so on count alone it beats any decode bad enough to trip
             // two. A poor transcript is worth more than none, and on the orphan
             // path none is permanent.
             hasSpeech != other.hasSpeech -> hasSpeech
-            flags.size != other.flags.size -> flags.size < other.flags.size
-            else -> round(punctuationPerWord) > round(other.punctuationPerWord)
+            mine != theirs -> mine < theirs
+            round(punctuationPerWord) != round(other.punctuationPerWord) ->
+                round(punctuationPerWord) > round(other.punctuationPerWord)
+            // Last, because gaining word times is worth having but not worth
+            // trading a transcript that scored better for.
+            else -> hasWordTimes && !other.hasWordTimes
         }
+    }
+
+    private fun comparableFlagCount(bothMeasured: Boolean): Int =
+        if (bothMeasured) flags.size else flags.count { it != TranscriptQuality.FLAG_LOW_CONFIDENCE }
 
     /**
      * Both, because the flag is only as good as whoever wrote the report:
@@ -216,6 +231,9 @@ data class QualityReport(
      * the two always agree.
      */
     internal val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
+
+    /** Whether the decode carried word probabilities, which is what low-confidence needs. */
+    private val hasWordTimes: Boolean get() = meanWordProbability != null
 
     val summary: String
         get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"
@@ -243,8 +261,11 @@ data class QualityReport(
          * which is what a transcript written before the quality gate looks
          * like -- unscored has to read as no baseline, not as a passing one.
          *
-         * Only [flags] and [punctuationPerWord] decide [isBetterThan]; the rest
-         * are read best-effort so a partial map still compares.
+         * [flags], [punctuationPerWord] and the presence of [meanWordProbability]
+         * decide [isBetterThan]; the rest are read best-effort so a partial map
+         * still compares. A map missing `mean_word_probability` therefore reads
+         * as a decode that had no word times, which is the safe way round: it
+         * loses the tie-break rather than winning it.
          */
         fun fromMap(stored: Map<*, *>?): QualityReport? {
             val flags = (stored?.get("flags") as? List<*>)?.map { it.toString() } ?: return null

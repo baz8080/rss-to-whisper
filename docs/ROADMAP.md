@@ -138,6 +138,10 @@ measurement this document cannot make for you:
 - **#67** — let a podcast supply its own `initial_prompt`, so a non-English feed keeps
   the punctuation lever it currently gives up. Real the first time a non-English feed is
   added; the corpus is entirely English today.
+- **#76** — an unrecognised language code decodes in the wrong language instead of
+  failing: whisper.cpp looks the code up in a map keyed by lower case and never checks
+  the result, so an unmatched one silently selects the wrong language token. Pairs with
+  #67; both are `pods.yaml` going unvalidated, and one pass covers them.
 - **#68** — rank quality flags by severity instead of counting them. Wants corpus data
   from `episode_quality.flags` before the ordering is chosen.
 - **#69** — `--retranscribe-limit` always takes the same prefix, so a permanently flagged

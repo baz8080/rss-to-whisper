@@ -558,9 +558,9 @@ class RetranscribeTest {
     }
 
     /**
-     * Word times are not part of the score -- low-confidence cannot even be
-     * raised without them -- so a decode that lost them reads as an improvement
-     * on the transcript flagged for it, and would take the sidecar down too.
+     * Word times decide only once flags and punctuation are level, so a decode
+     * that lost them can still win on a flag the other tripped -- and would
+     * take the sidecar down with it.
      */
     @Test
     fun `a re-decode with no word timestamps keeps the transcript that has them`(

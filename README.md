@@ -804,17 +804,18 @@ worth trading a better-scoring transcript for.
 
 A re-decode is kept only if it scores at least as well as the transcript it would
 replace, by the same measure the quality gate's retry uses — fewer flags, then better
-punctuation. Whisper is not deterministic, so a redo can come back worse than what it
+punctuation, then word times. Whisper is not deterministic, so a redo can come back worse than what it
 overwrites, and that write is the only copy: re-transcribing can improve an episode or
 leave it alone, never cost it the better decode. A transcript written before the quality
 gate has no score to compare against, so it is simply replaced.
 
 A re-decode that comes back with no word timestamps at all is refused outright when the
 decode on disk had them — judged by its recorded score rather than by whether
-`words.jsonl.gz` is there, since writing the sidecar is allowed to fail. Word times are not part of the score — `low-confidence` cannot
-even be raised without them — so such a decode looks like a clean one, and would both
-replace a transcript flagged for low confidence and take its `words.jsonl.gz` with it. It
-means the server ignored `token_timestamps`, and the warning says so.
+`words.jsonl.gz` is there, since writing the sidecar is allowed to fail. The comparison
+below only reaches word times once the flags and the punctuation are level, so a decode
+that lost them can still win outright on a flag the other tripped — and would take the
+`words.jsonl.gz` with it. It means the server ignored `token_timestamps`, and the warning
+says so.
 
 Otherwise both files are staged beside their originals and moved into place, with the
 sidecar absent for the whole swap: cleared first, restored only once the transcript it

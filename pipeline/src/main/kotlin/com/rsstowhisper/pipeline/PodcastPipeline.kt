@@ -244,10 +244,10 @@ class PodcastPipeline(
             return false
         }
 
-        // Word times are not part of the score -- low-confidence cannot even be
-        // raised without them -- so a decode that came back with none reads as
-        // an improvement on a transcript flagged for low confidence, and would
-        // overwrite it and clear the flag. The server was asked for
+        // The comparison reaches word times only once flags and punctuation are
+        // level, so a decode that came back with none can still win outright on
+        // a flag the other tripped -- overwriting a transcript flagged for low
+        // confidence and taking its sidecar down too. The server was asked for
         // token_timestamps, so this is a server that ignored it.
         //
         // The stored score decides this, not the sidecar file: writing the

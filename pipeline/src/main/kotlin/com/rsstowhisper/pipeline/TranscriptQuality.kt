@@ -212,10 +212,11 @@ data class QualityReport(
             // path none is permanent.
             hasSpeech != other.hasSpeech -> hasSpeech
             mine != theirs -> mine < theirs
-            // Only once the flags agree: gaining word times is worth having,
-            // but not worth trading a transcript that scored better for.
-            hasWordTimes != other.hasWordTimes -> hasWordTimes
-            else -> round(punctuationPerWord) > round(other.punctuationPerWord)
+            round(punctuationPerWord) != round(other.punctuationPerWord) ->
+                round(punctuationPerWord) > round(other.punctuationPerWord)
+            // Last, because gaining word times is worth having but not worth
+            // trading a transcript that scored better for.
+            else -> hasWordTimes && !other.hasWordTimes
         }
     }
 
@@ -260,8 +261,11 @@ data class QualityReport(
          * which is what a transcript written before the quality gate looks
          * like -- unscored has to read as no baseline, not as a passing one.
          *
-         * Only [flags] and [punctuationPerWord] decide [isBetterThan]; the rest
-         * are read best-effort so a partial map still compares.
+         * [flags], [punctuationPerWord] and the presence of [meanWordProbability]
+         * decide [isBetterThan]; the rest are read best-effort so a partial map
+         * still compares. A map missing `mean_word_probability` therefore reads
+         * as a decode that had no word times, which is the safe way round: it
+         * loses the tie-break rather than winning it.
          */
         fun fromMap(stored: Map<*, *>?): QualityReport? {
             val flags = (stored?.get("flags") as? List<*>)?.map { it.toString() } ?: return null

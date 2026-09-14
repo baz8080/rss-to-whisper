@@ -290,7 +290,12 @@ class TranscriptQualityTest {
     private fun measured(
         flags: List<String> = emptyList(),
         punctuation: Double = 0.15,
-    ) = unmeasured(flags, punctuation).copy(meanWordProbability = 0.7, lowConfidenceShare = 0.4)
+    ) = unmeasured(flags, punctuation).copy(
+        meanWordProbability = 0.7,
+        // Consistent with the flags asked for: score() raises low-confidence
+        // from this share, so a clean report cannot carry a failing one.
+        lowConfidenceShare = if (TranscriptQuality.FLAG_LOW_CONFIDENCE in flags) 0.4 else 0.01,
+    )
 
     /**
      * The defect: low-confidence cannot be raised without word probabilities, so
@@ -311,6 +316,16 @@ class TranscriptQualityTest {
     fun `gaining word times does not excuse a flag both reports could raise`() {
         val before = unmeasured()
         val after = measured(flags = listOf(TranscriptQuality.FLAG_REPETITION_LOOP))
+
+        assertTrue(before.isBetterThan(after))
+        assertFalse(after.isBetterThan(before))
+    }
+
+    /** Punctuation still decides first: word times are worth having, not worth a worse transcript. */
+    @Test
+    fun `a better punctuated transcript beats one that merely gained word times`() {
+        val before = unmeasured(punctuation = 0.18)
+        val after = measured(punctuation = 0.04)
 
         assertTrue(before.isBetterThan(after))
         assertFalse(after.isBetterThan(before))

@@ -29,6 +29,9 @@ internal val USAGE =
                                  every transcript.json, which is slow on a
                                  network volume
       --retranscribe-limit <n>   Cap --retranscribe-flagged; 0 means no limit
+      --retranscribe-force       Keep the new decode even if it scores worse.
+                                 Only with --retranscribe / --retranscribe-id,
+                                 never with --retranscribe-flagged
 
     Options override .env, which overrides pods.yaml. Give a second instance its
     own --config and --whisper-url to run two feeds against two whisper servers.
@@ -48,6 +51,7 @@ internal data class Args(
     val retranscribeIds: List<String> = emptyList(),
     val retranscribeFlagged: Boolean = false,
     val retranscribeLimit: Int = 0,
+    val retranscribeForce: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -78,6 +82,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                     args.copy(retranscribeIds = args.retranscribeIds + valueFor(flag, argv, ++i))
                 "--retranscribe-flagged" -> args.copy(retranscribeFlagged = true)
                 "--retranscribe-limit" -> args.copy(retranscribeLimit = intValueFor(flag, argv, ++i))
+                "--retranscribe-force" -> args.copy(retranscribeForce = true)
                 "-h", "--help" -> args.copy(help = true)
                 else ->
                     if (flag.startsWith("-")) {
@@ -87,6 +92,19 @@ internal fun parseArgs(argv: Array<String>): Args {
                     }
             }
         i++
+    }
+    // Refused rather than applied to the named half of a mixed run: the flagged
+    // scan is the one that runs at scale and must never be allowed to make the
+    // corpus worse, and a flag that silently covered only some targets would be
+    // worse than one that says so.
+    if (args.retranscribeForce && args.retranscribeFlagged) {
+        error("--retranscribe-force cannot be used with --retranscribe-flagged")
+    }
+    // Otherwise it is ignored by isRetranscribe and the run quietly follows the
+    // feeds instead -- which is what a script whose target list came out empty
+    // would do, having asked for the opposite.
+    if (args.retranscribeForce && args.retranscribePaths.isEmpty() && args.retranscribeIds.isEmpty()) {
+        error("--retranscribe-force needs a target: --retranscribe or --retranscribe-id")
     }
     return args
 }

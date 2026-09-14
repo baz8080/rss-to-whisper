@@ -535,7 +535,7 @@ below supply the three required values.
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
 | `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
 | `--dry-run` | No equivalent; see [Dry run](#dry-run) |
-| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
+| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -770,6 +770,30 @@ keeps every existing field and replaces only `episode_transcript` and `episode_q
 the best there is. `episode_duration` is replaced too, but only when
 `episode_metadata_recovered` is true, because that number came from the previous decode
 rather than from the feed.
+
+`--retranscribe-force` keeps the new decode whatever it scores. Use it when you are
+redoing an episode for a reason the score cannot see — a corrected `language`, a fixed
+`initial_prompt`, a model change. The comparison counts flags and then compares
+punctuation; it knows nothing about which language the old decode was in, so a
+wrong-language transcript that happens to score a hair better would otherwise win.
+
+It only applies to explicitly named targets, and is refused outright alongside
+`--retranscribe-flagged`: that scan is the one that runs at scale, and it must never be
+able to make the corpus worse. A flag that silently covered only the named half of a
+mixed run would be worse than one that says so.
+
+Force skips the quality comparison and nothing else. An episode with no audio, a decode
+that found no speech, and one that came back without word timestamps are all still
+refused — force means "I know better than the score", not "ignore a server that stopped
+sending `token_timestamps`".
+
+The no-speech refusal is a check in its own right rather than a consequence of the
+comparison, because a blank transcript is not caught by the emptiness test ahead of it:
+segments carrying timestamps and no text render a VTT that is not blank.
+
+It needs a target. `--retranscribe-force` on its own is refused rather than ignored,
+since the run would otherwise fall through to an ordinary feed run — which is what a
+script whose target list came out empty would get, having asked for the opposite.
 
 A re-decode is kept only if it scores at least as well as the transcript it would
 replace, by the same measure the quality gate's retry uses — fewer flags, then better

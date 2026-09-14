@@ -23,6 +23,13 @@ data class RetranscribeRequest(
     val flagged: Boolean = false,
     /** Caps the flagged scan, which can select hundreds on a first run. 0 means no limit. */
     val limit: Int = 0,
+    /**
+     * Keep the new decode whatever it scores. Only meaningful for explicitly
+     * named targets: naming an episode is a statement of intent the score
+     * cannot see, and the reason for redoing it -- a language fix, a corrected
+     * prompt, a model change -- is invisible to a flag count.
+     */
+    val force: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 }

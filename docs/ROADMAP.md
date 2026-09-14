@@ -58,6 +58,17 @@ Done so far from this list:
 - **W7, JSON API.** `quarkus-rest-jackson`, `/api/search` and `/api/episode/{id}`.
   `Episode` gained `snippetText` and `@get:JsonIgnore` on the three getters that should
   not be in a payload.
+- **P2, whisper preflight and circuit breaker.** `Transcriber.ping()` is asked once in
+  `run()` and `retranscribe()` before anything else happens, on its own short timeouts
+  rather than the ninety minutes the decode client allows. `TranscriberUnavailable`
+  covers an unreachable server, a non-2xx, and an empty body -- everything that says
+  nothing was decoded at all, as against a decode that produced nothing. It is counted
+  in `decodeAndScore`, the single choke point every decode path reaches, and cleared by
+  any decode that gets an answer; `max_consecutive_transcriber_errors` (default 3) in a
+  row makes `transcriberIsDown()` true, which the feed loop, `recoverAll`, the
+  re-transcribe loop and the podcast loop all check before their next decode. The state
+  is checked rather than thrown because those loops deliberately swallow a failure per
+  episode, which is exactly what hid a down server.
 
 Explicitly declined:
 
@@ -164,37 +175,7 @@ Everything listed here has shipped; see "Done so far" above.
 
 ## Pipeline
 
-Remaining, in suggested order: P2, P3, P8, P7.
-
-### P2. Whisper preflight and circuit breaker
-
-**Why.** `processPodcast` catches every exception per entry and continues, so a whisper
-server that is down causes every remaining episode in every feed to be downloaded and then
-fail one at a time. The downloads are not wasted (the next run finds `audio.mp3` and skips
-straight to decoding), but the run takes hours to report a failure that was known at the
-first episode.
-
-**Where.** `Transcriber`, `PodcastPipeline.run` and `processPodcast`, `AppConfig`.
-
-**Design.**
-
-- Preflight in `run()` before any feed is fetched: one GET to the server's base URL. Any
-  2xx is enough (whisper-server answers `/` with a page; do not depend on a `/health` route
-  without checking the build in use). On failure log an error and return `false`, which
-  `Main` already turns into exit 1.
-- Breaker: wrap `transcriber.transcribe` so connection failures and non-2xx responses throw a
-  dedicated `TranscriberUnavailable` exception, distinct from an empty transcript. Count
-  consecutive occurrences across the whole run in a field like `orphansRecovered`; reset on
-  any success. At `max_consecutive_transcriber_errors` (default 3, in `pods.yaml`) log one
-  error naming the last failure, stop processing further entries and podcasts, and return
-  `false`. Both the feed loop and `recoverAll` must check the tripped state before each decode.
-
-**Tests.** `buildPipeline(transcriberFails = …)` already exists. Assert that with three
-entries and a failing transcriber, `FakeTranscriber.calls` stops at the threshold, later
-downloads do not happen, and `run()` returns `false`. Preflight is HTTP; give `Transcriber`
-an `open fun ping(): Boolean` and override it in `FakeTranscriber`.
-
-**Effort.** Small.
+Remaining, in suggested order: P3, P8, P7.
 
 ### P3. Dry run
 

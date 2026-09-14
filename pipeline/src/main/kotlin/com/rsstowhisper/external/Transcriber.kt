@@ -6,8 +6,18 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+
+/**
+ * The whisper server could not be reached, or would not answer.
+ *
+ * Distinct from a decode that produced nothing: that is an answer about the
+ * audio, and the episode is dealt with. This says nothing was decoded at all,
+ * and the next episode will fare no better.
+ */
+class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
 open class Transcriber(
     private val serverUrl: String,
@@ -178,16 +188,60 @@ open class Transcriber(
 
         logger.debug("Sending {} to whisper server", audioPath.fileName)
 
-        return httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw RuntimeException("Whisper server returned ${response.code}: ${response.body?.string()}")
+        val response =
+            try {
+                httpClient.newCall(request).execute()
+            } catch (e: IOException) {
+                throw TranscriberUnavailable("Could not reach the whisper server at $serverUrl", e)
             }
-            response.body?.string() ?: throw RuntimeException("Whisper server returned empty body")
+        return response.use {
+            if (!it.isSuccessful) {
+                throw TranscriberUnavailable("Whisper server returned ${it.code}: ${it.body?.string()}")
+            }
+            // A decode that found no speech still answers with a segment list.
+            // Nothing at all is the server being broken, not the audio being
+            // silent, so the next episode will fare no better either.
+            it.body?.string()?.takeIf { body -> body.isNotBlank() }
+                ?: throw TranscriberUnavailable("Whisper server returned an empty body")
+        }
+    }
+
+    /**
+     * Whether the server answers at all, asked once before a run commits to it.
+     *
+     * Any 2xx will do. whisper.cpp's server answers `/` with a page, and which
+     * routes a given build exposes is not worth depending on -- this only has
+     * to tell a server that is up from one that is not.
+     */
+    open fun ping(): Boolean {
+        val request =
+            try {
+                Request.Builder().url(serverUrl).get().build()
+            } catch (e: IllegalArgumentException) {
+                // Caught here rather than left to the first decode: a config
+                // typo should not survive until an episode has been downloaded.
+                logger.error("Not a usable whisper server URL: {} ({})", serverUrl, e.message)
+                return false
+            }
+        // Its own timeouts: the client's are sized for a decode, and a
+        // preflight that can hang for ninety minutes is not a preflight.
+        val client =
+            httpClient.newBuilder()
+                .callTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build()
+        return try {
+            client.newCall(request).execute().use { it.isSuccessful }
+        } catch (e: IOException) {
+            logger.debug("Whisper server at {} did not answer: {}", serverUrl, e.message)
+            false
         }
     }
 
     companion object {
         const val DEFAULT_MAX_LEN = 200
+
+        private const val PING_TIMEOUT_SECONDS = 15L
 
         /**
          * Whisper takes an ISO 639-1 code, or "auto" to detect from the audio.

@@ -529,9 +529,10 @@ arrives at the pipeline literally and the config file is not found:
 ```
 
 A bad flag exits `2` with its message on stderr. Unusable configuration exits `1` — that
-covers a missing `--config` as well as a data directory that is missing or not writable. A
-run that found nothing new to transcribe exits `0`, so a wrapper script can tell a failed
-launch from a quiet one.
+covers a missing `--config`, a data directory that is missing or not writable, and a
+whisper server that does not answer the preflight (see
+[When whisper is not there](#when-whisper-is-not-there)). A run that found nothing new to
+transcribe exits `0`, so a wrapper script can tell a failed launch from a quiet one.
 
 ### `pods.yaml`
 
@@ -543,6 +544,7 @@ launch from a quiet one.
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
 - `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Case does not matter; it is lower-cased before being sent, because whisper.cpp matches the code exactly and silently decodes with the wrong language token when it does not match
 - `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
+- `max_consecutive_transcriber_errors` — give up after this many decodes in a row that could not reach the whisper server (optional, default `3`; `0` never gives up; see [When whisper is not there](#when-whisper-is-not-there))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 
 `name` becomes the show's directory name, so changing it moves every episode of
@@ -764,6 +766,25 @@ same episode**: they can interleave into a transcript and a sidecar from differe
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.
+
+### When whisper is not there
+
+Every episode is downloaded before it is decoded, so a whisper server that is down
+turns a run into hours of fetching audio to fail on one episode at a time — and the
+per-episode error handling that stops one bad episode ending a run is exactly what
+hides it.
+
+Two things prevent that. The server is asked for its base URL once, before the first
+feed is fetched; no answer, and the run exits `1` having downloaded nothing. During the
+run, decodes that could not reach the server are counted, and
+`max_consecutive_transcriber_errors` in a row ends the run. Anything that reaches the
+server resets the count, so an episode that fails on its own merits is not the same
+thing — only an unreachable server, an HTTP error from it, or an empty response body
+counts. Set the key to `0` to never give up.
+
+Giving up this way exits non-zero, so a wrapper script sees a failed run rather than a
+quiet one. Episodes already transcribed are untouched, and the next run picks up where
+this one stopped.
 
 ### Error log
 

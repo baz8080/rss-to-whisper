@@ -12,6 +12,7 @@ import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
+import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.timeToSeconds
@@ -48,6 +49,9 @@ class PodcastPipeline(
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
 
+    /** Reset by any decode that reaches the server. See [transcriberIsDown]. */
+    private var consecutiveTranscriberErrors = 0
+
     // Anchored on word boundaries so "repeat" does not also swallow "repeating".
     private val excludeKeywordRegex: Regex? =
         config.excludeTitleKeywords
@@ -66,16 +70,47 @@ class PodcastPipeline(
     fun run(): Boolean {
         val dataDir = config.dataDirectory
         orphansRecovered = 0
+        consecutiveTranscriberErrors = 0
 
         if (!Files.isWritable(Path.of(dataDir))) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
             return false
         }
 
+        // Asked once, before a feed is fetched. Every episode is downloaded
+        // before it is decoded, so a server that is down otherwise costs a run
+        // of audio fetched at length to fail on one episode at a time.
+        if (!transcriber.ping()) {
+            logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
+            return false
+        }
+
         for (podcast in config.podcasts) {
+            if (transcriberIsDown()) break
             processPodcast(podcast, dataDir)
         }
-        return true
+        return !transcriberIsDown()
+    }
+
+    /**
+     * Whether the run has given up on the whisper server.
+     *
+     * Checked before each decode rather than thrown from one, because the
+     * callers below deliberately swallow a failure per episode so one bad
+     * episode cannot end a run -- which is exactly what hides this.
+     */
+    private fun transcriberIsDown(): Boolean =
+        config.maxConsecutiveTranscriberErrors > 0 &&
+            consecutiveTranscriberErrors >= config.maxConsecutiveTranscriberErrors
+
+    private fun noteTranscriberUnavailable(e: TranscriberUnavailable) {
+        consecutiveTranscriberErrors++
+        if (transcriberIsDown()) {
+            logger.error(
+                "Giving up: $consecutiveTranscriberErrors decodes in a row could not reach the whisper server. " +
+                    "The last said: ${e.message}",
+            )
+        }
     }
 
     /**
@@ -86,8 +121,14 @@ class PodcastPipeline(
      */
     fun retranscribe(request: RetranscribeRequest): Boolean {
         val dataDir = Path.of(config.dataDirectory)
+        consecutiveTranscriberErrors = 0
         if (!Files.isWritable(dataDir)) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
+            return false
+        }
+
+        if (!transcriber.ping()) {
+            logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
 
@@ -100,6 +141,7 @@ class PodcastPipeline(
         logger.info("Re-transcribing ${targets.size} episodes")
         var done = 0
         for (target in targets) {
+            if (transcriberIsDown()) break
             try {
                 if (retranscribeEpisode(target)) done++
             } catch (e: Exception) {
@@ -107,7 +149,7 @@ class PodcastPipeline(
             }
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
-        return true
+        return !transcriberIsDown()
     }
 
     private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
@@ -272,6 +314,11 @@ class PodcastPipeline(
 
         transcribeAll(feed, podcast, pending)
 
+        // Nothing below is worth doing once the run has given up, and the
+        // reports in there would blame skip_after_consecutive for the entries
+        // the breaker is what actually stopped.
+        if (transcriberIsDown()) return
+
         try {
             scanForOrphans(feed, podcast, podPath, dataDir, prefixes, examined, brokeEarly)
         } catch (e: Exception) {
@@ -300,6 +347,7 @@ class PodcastPipeline(
 
         try {
             for ((index, episode) in pending.withIndex()) {
+                if (transcriberIsDown()) break
                 val entry = episode.entry
                 val current = next ?: submitDownload(prefetcher, episode)
                 // Queued behind the current download on the single thread, so it runs during the decode.
@@ -483,7 +531,7 @@ class PodcastPipeline(
         for (parsed in ordered) {
             // Tested before the readdir. Opening the rest of the backlog just to count it
             // costs seconds of network I/O per podcast, and the count is arithmetic.
-            if (budgetSpent()) break
+            if (budgetSpent() || transcriberIsDown()) break
             seen++
 
             val episodeDirPath = podPath.resolve(parsed.dirName)
@@ -834,7 +882,14 @@ class PodcastPipeline(
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
 
-        val json = transcriber.transcribe(audioPath, podcast.language ?: config.language)
+        val json =
+            try {
+                transcriber.transcribe(audioPath, podcast.language ?: config.language)
+            } catch (e: TranscriberUnavailable) {
+                noteTranscriberUnavailable(e)
+                throw e
+            }
+        consecutiveTranscriberErrors = 0
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.

@@ -104,11 +104,16 @@ internal class FakeTranscriber(
     private val failWith: (() -> Nothing)? = null,
     /** Runs mid-transcription, so a test can simulate another instance finishing first. */
     private val onCall: ((Path) -> Unit)? = null,
+    /** The preflight answer. False is a server that is not there at all. */
+    private val pingSucceeds: Boolean = true,
 ) : Transcriber(serverUrl) {
     val calls = mutableListOf<Path>()
 
     /** What each call asked whisper to decode as, in call order. */
     val languages = mutableListOf<String>()
+
+    var pings = 0
+        private set
 
     override fun transcribe(
         audioPath: Path,
@@ -120,6 +125,11 @@ internal class FakeTranscriber(
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response
+    }
+
+    override fun ping(): Boolean {
+        pings++
+        return pingSucceeds
     }
 }
 
@@ -179,8 +189,10 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
     qualityRetry: Boolean = true,
+    maxConsecutiveTranscriberErrors: Int = 3,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
+    transcriberAnswersPing: Boolean = true,
     /** Supply one when the test needs a reference to it before the pipeline exists. */
     feedService: FakeFeedService? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
@@ -194,10 +206,18 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
             qualityRetry = qualityRetry,
+            maxConsecutiveTranscriberErrors = maxConsecutiveTranscriberErrors,
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))
-    val txSvc = FakeTranscriber(FAKE_SERVER_URL, vtts ?: listOf(vtt), transcriberFails, onTranscribe)
+    val txSvc =
+        FakeTranscriber(
+            FAKE_SERVER_URL,
+            vtts ?: listOf(vtt),
+            transcriberFails,
+            onTranscribe,
+            transcriberAnswersPing,
+        )
     val pipeline =
         PodcastPipeline(
             config = config,

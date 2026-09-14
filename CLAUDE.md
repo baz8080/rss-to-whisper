@@ -48,6 +48,7 @@ Configure `pods.yaml` with:
 - `skip_after_consecutive` — stop processing a feed after N already-transcribed episodes in a row (default: 20)
 - `recover_orphans` — transcribe episodes that aged out of the feed before being processed (default: true)
 - `orphan_recovery_limit` — cap orphan recoveries per run across all podcasts (default: 0, no limit)
+- `initial_prompt` — the prompt sent with a feed's decodes, written in its `language`; set per podcast or top-level. A podcast that sets it must set `language` too, and neither may be `auto`
 
 - `notify_url` — POST the run's summary line here as text/plain when a run finishes (optional)
 

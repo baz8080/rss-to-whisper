@@ -45,7 +45,12 @@ class PodcastPipeline(
             .writeTimeout(30, TimeUnit.SECONDS)
             .build(),
     private val feedService: FeedService = FeedService(httpClient),
-    private val transcriber: Transcriber = Transcriber(config.whisperServerUrl),
+    private val transcriber: Transcriber =
+        Transcriber(
+            config.whisperServerUrl,
+            initialPrompt = config.defaultPrompt,
+            promptLanguage = config.defaultPromptLanguage,
+        ),
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
@@ -959,7 +964,11 @@ class PodcastPipeline(
         decodesAttempted++
         val json =
             try {
-                transcriber.transcribe(audioPath, podcast.language ?: config.language)
+                transcriber.transcribe(
+                    audioPath,
+                    podcast.language ?: config.language,
+                    podcast.initialPrompt,
+                )
             } catch (e: TranscriberUnavailable) {
                 decodesUnreachable++
                 throw e

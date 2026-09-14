@@ -137,10 +137,29 @@ English prompt on French audio is the same vocabulary contamination as a
 domain-specific one, and `carry_initial_prompt` would apply it to every window.
 Under `language: auto` it is worse: the prompt would skew whisper's own language
 detection toward English before it decoded anything, breaking the very thing
-`auto` is for. A non-English feed therefore gives up this lever; see
-the `language` key in [`pods.yaml`](#podsyaml). To supply a prompt in another language,
-`Transcriber` takes `initialPrompt` with a matching `promptLanguage`, though
-nothing in `pods.yaml` reaches those yet.
+`auto` is for — so `auto` never takes a prompt, however explicitly one is set.
+
+A feed in another language keeps the lever by supplying its own prompt:
+
+```yaml
+- name: Une Emission Francaise
+  url: https://example.com/fr.rss
+  language: fr
+  initial_prompt: Bonjour, et bienvenue dans cette emission. Aujourd'hui, nous allons parler de plusieurs choses.
+```
+
+The prompt's language is the podcast's `language`, so there is no second key to
+keep in sync — and a podcast that sets `initial_prompt` must set `language` too,
+or the run refuses to start rather than guessing. A top-level `initial_prompt`
+works the same way against the top-level `language`.
+
+The built-in English prompt stays bound to English, whatever the top-level
+`language` is. Only a prompt you actually set belongs to that language; an unset
+one is not "the default, in French".
+
+Keep any prompt generic, and check a new one the way the English default was
+checked: decode an episode with it and confirm no prompt fragment appears in the
+transcript and the word count has not moved.
 
 ### `vad=false` — sent explicitly, and off
 
@@ -544,6 +563,7 @@ transcribe exits `0`, so a wrapper script can tell a failed launch from a quiet 
 - `recover_orphans` — transcribe episodes that aged out of their feed before they were processed (optional, default `true`; see [Orphan recovery](#orphan-recovery))
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
 - `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Case does not matter; it is lower-cased before being sent, because whisper.cpp matches the code exactly and silently decodes with the wrong language token when it does not match
+- `initial_prompt` — the prompt sent with this feed's decodes, written in its `language` (optional; the top-level default is English prose). A podcast that sets it must set `language` too, and neither may be `auto`. See [`prompt` and `carry_initial_prompt`](#prompt-and-carry_initial_prompt--the-single-biggest-lever)
 - `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
 - `notify_url` — POST the run's summary line here when a run finishes (optional; see [Run report](#run-report))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one

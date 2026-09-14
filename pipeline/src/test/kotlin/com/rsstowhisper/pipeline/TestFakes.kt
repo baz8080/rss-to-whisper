@@ -135,16 +135,21 @@ internal class FakeTranscriber(
     /** What each call asked whisper to decode as, in call order. */
     val languages = mutableListOf<String>()
 
+    /** The per-podcast prompt each call carried, null where the default applies. */
+    val prompts = mutableListOf<String?>()
+
     var pings = 0
         private set
 
     override fun transcribe(
         audioPath: Path,
         language: String,
+        prompt: String?,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
         languages.add(language)
+        prompts.add(prompt)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response

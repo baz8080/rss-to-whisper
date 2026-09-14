@@ -145,6 +145,26 @@ class DryRunTest {
         assertTrue(!summary.contains("recovered"), summary)
     }
 
+    /** The report records work done, and latest-run.json would lose the last real run. */
+    @Test
+    fun `a dry run writes no run report`(
+        @TempDir tempDir: Path,
+    ) {
+        val logs = Files.createDirectories(tempDir.resolve("logs"))
+        val lastReal = logs.resolve(RunReport.LATEST_FILENAME)
+        Files.writeString(lastReal, "{\"totals\":{\"transcribed\":41}}")
+
+        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, entries(3), dryRun = true)
+
+        assertTrue(pipeline.run())
+
+        assertEquals("{\"totals\":{\"transcribed\":41}}", Files.readString(lastReal))
+        assertTrue(
+            Files.list(logs).use { it.toList() }.none { it.fileName.toString().startsWith("run-") },
+            "a dry run left a stamped report behind",
+        )
+    }
+
     @Test
     fun `a dry run lists the episodes a re-transcription would redo`(
         @TempDir tempDir: Path,

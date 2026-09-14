@@ -86,6 +86,20 @@ Done so far from this list:
   the podcast directory was the only thing a walk created. Whisper is not pinged, so a dry
   run works with the server off, and `--retranscribe` lists its targets rather than
   redoing them.
+- **P8, run report and notification.** `RunReport` accumulates per-podcast counts of
+  transcribed, recovered, failed and skipped-by-reason, and writes
+  `logs/run-<stamp>.json` plus a copy at `logs/latest-run.json`. It builds a plain Map
+  rather than serialising itself, which keeps the JSON shape snake_case like
+  `transcript.json` without annotating anything. `Notifier` POSTs the tally line as
+  text/plain to `notify_url`, which is what ntfy.sh takes. Both are best-effort: a report
+  that cannot be written and a notification that fails are warnings, because the run has
+  already done its work by then -- and both happen in a `finally`, since a run that died
+  is exactly when its summary is worth having. The report gets its own mapper: the
+  episode one sorts keys, which would alphabetise it and make the insertion order the
+  class relies on inert. Reports are pruned at 14 days like the error log, and a stamped
+  name already taken gets a `-2` suffix, because two instances share a data directory and
+  the stamp is only to the second. The web side of the original entry -- W4 showing
+  `latest-run.json` -- was not built; the file is there if it is ever wanted.
 
 Explicitly declined:
 
@@ -193,29 +207,6 @@ Everything listed here has shipped; see "Done so far" above.
 ## Pipeline
 
 Remaining, in suggested order: P8, P7.
-
-### P8. Run summary file and notification
-
-**Why.** The run tally counts warnings and errors; nothing records what was actually done.
-A JSON summary per run feeds the stats page (W4) and a notification.
-
-**Where.** `Logging.kt` (`RunTally`), `PodcastPipeline`, `Main`, `AppConfig`.
-
-**Design.**
-
-- A `RunReport` accumulator in `PodcastPipeline`: per podcast, counts of transcribed,
-  recovered, skipped by `SkipReason`, failed, plus start and end times. Serialise with the
-  existing `jsonMapper` to `<data-dir>/logs/run-<yyyyMMdd-HHmmss>.json` and copy to
-  `logs/latest-run.json`.
-- `notify_url` in `pods.yaml`: POST the tally line (the string `RunTally.summary` returns)
-  as `text/plain`. That is exactly what ntfy.sh expects; other services can adapt. No auth,
-  no retries; a failure to notify is a WARN.
-- W4 can show `latest-run.json` when the web module has a data directory (W6's config).
-
-**Tests.** Report contents after a mixed run in `PodcastPipelineRunTest`; notification via
-an `open fun notify(url, body)` overridden in a fake.
-
-**Effort.** Small.
 
 ### P7. Episode lock for two instances on one data directory
 

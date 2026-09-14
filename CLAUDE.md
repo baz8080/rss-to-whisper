@@ -49,8 +49,11 @@ Configure `pods.yaml` with:
 - `recover_orphans` — transcribe episodes that aged out of the feed before being processed (default: true)
 - `orphan_recovery_limit` — cap orphan recoveries per run across all podcasts (default: 0, no limit)
 
+- `notify_url` — POST the run's summary line here as text/plain when a run finishes (optional)
+
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, and the run
-prints a warning/error count when it finishes.
+prints a warning/error count when it finishes. Every run also writes what it did to
+`<data-dir>/logs/run-<stamp>.json`, copied to `logs/latest-run.json`.
 
 No external tools are required on `PATH` — transcription is HTTP-only against the whisper.cpp server, which handles audio decoding itself.
 

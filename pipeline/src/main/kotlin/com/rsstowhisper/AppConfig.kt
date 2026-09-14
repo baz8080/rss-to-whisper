@@ -25,6 +25,8 @@ data class AppConfig(
     val qualityRetry: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
+    /** POSTed the run's summary line as text/plain when set. See [Notifier]. */
+    val notifyUrl: String? = null,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {

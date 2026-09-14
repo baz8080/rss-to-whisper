@@ -98,8 +98,10 @@ Done so far from this list:
   episode one sorts keys, which would alphabetise it and make the insertion order the
   class relies on inert. Reports are pruned at 14 days like the error log, and a stamped
   name already taken gets a `-2` suffix, because two instances share a data directory and
-  the stamp is only to the second. The web side of the original entry -- W4 showing
-  `latest-run.json` -- was not built; the file is there if it is ever wanted.
+  the stamp is only to the second. A dry run writes no report at all: a report records
+  work done, and one from a dry run would overwrite `latest-run.json` with a record of
+  none. The web side of the original entry -- W4 showing `latest-run.json` -- was not
+  built; the file is there if it is ever wanted.
 
 Explicitly declined:
 
@@ -206,7 +208,7 @@ Everything listed here has shipped; see "Done so far" above.
 
 ## Pipeline
 
-Remaining, in suggested order: P8, P7.
+Remaining: P7.
 
 ### P7. Episode lock for two instances on one data directory
 

@@ -1,6 +1,7 @@
 package com.rsstowhisper.pipeline
 
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.TranscriberRejected
 import com.rsstowhisper.external.TranscriberUnavailable
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -84,6 +85,36 @@ class WhisperCircuitBreakerTest {
                 onTranscribe = {
                     call++
                     if (call != 3) throw TranscriberUnavailable("nothing listening")
+                },
+            )
+
+        assertTrue(pipeline.run())
+
+        assertEquals(5, txSvc.calls.size)
+    }
+
+    /**
+     * A refusal is still an answer. Two unreachable decodes either side of one
+     * mp3 whisper refused must not add up to a server that was demonstrably
+     * there in between.
+     */
+    @Test
+    fun `a refusal from the server clears the count as surely as a decode does`(
+        @TempDir tempDir: Path,
+    ) {
+        var call = 0
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                entries(5),
+                maxConsecutiveTranscriberErrors = 3,
+                onTranscribe = {
+                    call++
+                    if (call == 3) {
+                        throw TranscriberRejected("Whisper server returned 400: failed to read audio data")
+                    }
+                    throw TranscriberUnavailable("nothing listening")
                 },
             )
 

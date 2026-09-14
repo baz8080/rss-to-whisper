@@ -19,6 +19,16 @@ import java.util.concurrent.TimeUnit
  */
 class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
+/**
+ * The whisper server answered, and refused this request.
+ *
+ * The refusal is about this audio -- whisper.cpp answers 400 "failed to read
+ * audio data" for an mp3 it cannot decode. The episode fails on its own
+ * merits, and the server having answered at all is the evidence the pipeline's
+ * breaker is counting.
+ */
+class TranscriberRejected(message: String) : RuntimeException(message)
+
 open class Transcriber(
     private val serverUrl: String,
     private val httpClient: OkHttpClient =
@@ -195,8 +205,17 @@ open class Transcriber(
                 throw TranscriberUnavailable("Could not reach the whisper server at $serverUrl", e)
             }
         return response.use {
+            // Read first, and inside the guard: a server killed mid-response
+            // fails here rather than at execute(), and that is the same
+            // unreachable server by a later name.
+            val body =
+                try {
+                    it.body?.string()
+                } catch (e: IOException) {
+                    throw TranscriberUnavailable("The whisper server at $serverUrl stopped mid-response", e)
+                }
             if (!it.isSuccessful) {
-                val detail = "Whisper server returned ${it.code}: ${it.body?.string()}"
+                val detail = "Whisper server returned ${it.code}: $body"
                 // A status the server chose is the server talking, and what it
                 // is talking about is almost always THIS request. whisper.cpp
                 // answers 400 "failed to read audio data" for an mp3 it cannot
@@ -205,12 +224,12 @@ open class Transcriber(
                 // the run -- and abandon it again on every later run, because
                 // the episodes ahead of them are already transcribed and so
                 // never decode to clear the count.
-                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else RuntimeException(detail)
+                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else TranscriberRejected(detail)
             }
             // A decode that found no speech still answers with a segment list.
             // Nothing at all is the server being broken, not the audio being
             // silent, so the next episode will fare no better either.
-            it.body?.string()?.takeIf { body -> body.isNotBlank() }
+            body?.takeIf { text -> text.isNotBlank() }
                 ?: throw TranscriberUnavailable("Whisper server returned an empty body")
         }
     }

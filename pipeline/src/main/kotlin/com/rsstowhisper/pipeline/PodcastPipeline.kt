@@ -12,6 +12,7 @@ import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
+import com.rsstowhisper.external.TranscriberRejected
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
@@ -890,6 +891,13 @@ class PodcastPipeline(
                 transcriber.transcribe(audioPath, podcast.language ?: config.language)
             } catch (e: TranscriberUnavailable) {
                 noteTranscriberUnavailable(e)
+                throw e
+            } catch (e: TranscriberRejected) {
+                // A refusal is still an answer, so it clears the count as
+                // surely as a decode does. Leaving it standing would let two
+                // unreachable decodes either side of a bad mp3 add up to a
+                // server that was demonstrably there in between.
+                consecutiveTranscriberErrors = 0
                 throw e
             }
         consecutiveTranscriberErrors = 0

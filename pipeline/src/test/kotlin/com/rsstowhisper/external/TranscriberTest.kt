@@ -4,6 +4,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.buffer
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.IOException
@@ -322,12 +323,10 @@ class TranscriberTest {
         @TempDir tmp: Path,
     ) {
         for (code in listOf(400, 404, 413, 500)) {
-            val ex =
-                assertFailsWith<RuntimeException> {
-                    Transcriber("http://whisper-server", clientReturning(responseCode = code))
-                        .transcribe(mp3File(tmp))
-                }
-            assertFalse(ex is TranscriberUnavailable, "$code was treated as an unreachable server")
+            assertFailsWith<TranscriberRejected>("$code was treated as an unreachable server") {
+                Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                    .transcribe(mp3File(tmp))
+            }
         }
     }
 
@@ -438,6 +437,48 @@ class TranscriberTest {
             readTimeoutMillis in 1..TimeUnit.MINUTES.toMillis(1),
             "ping read timeout was ${readTimeoutMillis}ms",
         )
+    }
+
+    /**
+     * Only `execute()` used to be guarded, so a server killed while its
+     * response was still streaming failed at the body read instead -- which is
+     * the same unreachable server, arriving as a raw IOException that the
+     * pipeline's per-episode catch would swallow.
+     */
+    @Test
+    fun `a server that stops mid-response is an unreachable server`(
+        @TempDir tmp: Path,
+    ) {
+        val truncated =
+            OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body(
+                            object : okhttp3.ResponseBody() {
+                                override fun contentType() = null
+
+                                override fun contentLength() = -1L
+
+                                override fun source(): okio.BufferedSource =
+                                    object : okio.ForwardingSource(okio.Buffer()) {
+                                        override fun read(
+                                            sink: okio.Buffer,
+                                            byteCount: Long,
+                                        ): Long = throw IOException("Connection reset")
+                                    }.buffer()
+                            },
+                        )
+                        .build()
+                }
+                .build()
+
+        assertFailsWith<TranscriberUnavailable> {
+            Transcriber("http://whisper-server", truncated).transcribe(mp3File(tmp))
+        }
     }
 
     /** A typo in `.env` should be reported, not thrown out of the preflight. */

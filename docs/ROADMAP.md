@@ -73,9 +73,11 @@ Done so far from this list:
   audio data" for an mp3 it cannot decode and 500 for one it cannot process. Counting
   those would let three bad audio files abandon the run -- and abandon every later run,
   because the episodes ahead of them are already transcribed and so never decode to
-  clear the count. So only a connection that goes nowhere, a gateway `502`/`503`/`504`,
-  or an empty body count, and by the same rule the preflight accepts any answer
-  including a 404 (`--request-path` moves whisper.cpp's page off `/`).
+  clear the count. So a refused request raises `TranscriberRejected` instead, which
+  clears the count as surely as a decode does; only a connection that goes nowhere or
+  dies mid-response (the body read is inside the guard, not just `execute()`), a gateway
+  `502`/`503`/`504`, or an empty body count. By the same rule the preflight accepts any
+  answer including a 404 (`--request-path` moves whisper.cpp's page off `/`).
 
 Explicitly declined:
 

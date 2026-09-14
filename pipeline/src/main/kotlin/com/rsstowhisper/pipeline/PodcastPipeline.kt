@@ -15,6 +15,7 @@ import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
+import com.rsstowhisper.resolvePath
 import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
@@ -49,6 +50,9 @@ class PodcastPipeline(
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
 
+    private var wouldTranscribe = 0
+    private var wouldRecover = 0
+
     /** What the run's exit code is made of. See [decodingWorked]. */
     private var decodesAttempted = 0
     private var decodesSucceeded = 0
@@ -72,6 +76,8 @@ class PodcastPipeline(
     fun run(): Boolean {
         val dataDir = config.dataDirectory
         orphansRecovered = 0
+        wouldTranscribe = 0
+        wouldRecover = 0
         resetDecodeTally()
 
         if (!Files.isWritable(Path.of(dataDir))) {
@@ -79,13 +85,18 @@ class PodcastPipeline(
             return false
         }
 
-        if (!transcriber.ping()) {
+        // A dry run never decodes, so it must not refuse to run when whisper is off.
+        if (!config.dryRun && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
 
         for (podcast in config.podcasts) {
             processPodcast(podcast, dataDir)
+        }
+        if (config.dryRun) {
+            logger.info("Dry run: would transcribe $wouldTranscribe and recover $wouldRecover episodes")
+            return true
         }
         return decodingWorked()
     }
@@ -132,7 +143,7 @@ class PodcastPipeline(
             return false
         }
 
-        if (!transcriber.ping()) {
+        if (!config.dryRun && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
@@ -141,6 +152,12 @@ class PodcastPipeline(
         if (targets.isEmpty()) {
             logger.error("Nothing matched the re-transcription request")
             return false
+        }
+
+        if (config.dryRun) {
+            targets.forEach { logger.info("Would re-transcribe ${it.parent.fileName}/${it.fileName}") }
+            logger.info("Dry run: would re-transcribe ${targets.size} episodes")
+            return true
         }
 
         logger.info("Re-transcribing ${targets.size} episodes")
@@ -262,7 +279,8 @@ class PodcastPipeline(
 
         logger.debug("Downloaded ${podcast.url}")
 
-        val podPath = createPath(Path.of(dataDir), podcast.name)
+        val podPath =
+            if (config.dryRun) resolvePath(Path.of(dataDir), podcast.name) else createPath(Path.of(dataDir), podcast.name)
         val skipThreshold = config.skipAfterConsecutive
         val minDuration = podcast.minEpisodeDurationSeconds ?: config.minEpisodeDurationSeconds
         val prefixes = feedPrefixes(feed, podcast, minDuration)
@@ -316,7 +334,13 @@ class PodcastPipeline(
             }
         }
 
-        transcribeAll(feed, podcast, pending)
+        if (config.dryRun) {
+            pending.forEach { logger.info("Would transcribe ${podcast.name}/${it.episodeDirPath.fileName}") }
+            logger.info("${podcast.name}: would transcribe ${pending.size} episodes")
+            wouldTranscribe += pending.size
+        } else {
+            transcribeAll(feed, podcast, pending)
+        }
 
         try {
             scanForOrphans(feed, podcast, podPath, dataDir, prefixes, examined, brokeEarly)
@@ -553,15 +577,22 @@ class PodcastPipeline(
                 }
                 else -> {
                     if (recovered == 0) {
-                        logger.info("${podcast.name}: recovering episodes that are no longer in the feed")
+                        logger.info("${podcast.name}: episodes that are no longer in the feed")
                     }
-                    try {
-                        if (recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)) {
-                            recovered++
-                            orphansRecovered++
+                    if (config.dryRun) {
+                        logger.info("Would recover ${podcast.name}/${parsed.dirName}")
+                        recovered++
+                        orphansRecovered++
+                        wouldRecover++
+                    } else {
+                        try {
+                            if (recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)) {
+                                recovered++
+                                orphansRecovered++
+                            }
+                        } catch (e: Exception) {
+                            logger.error("Couldn't recover ${parsed.dirName}", e)
                         }
-                    } catch (e: Exception) {
-                        logger.error("Couldn't recover ${parsed.dirName}", e)
                     }
                 }
             }

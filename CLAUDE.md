@@ -24,6 +24,9 @@ Three-stage pipeline for podcast transcription and full-text search:
 ./transcribe
 ```
 
+`--dry-run` reports what a run would do — every filter applied, nothing downloaded,
+decoded or created, and the whisper server never contacted.
+
 `./transcribe` is a wrapper that runs `:pipeline:installDist` and execs the launcher,
 passing arguments through. `./gradlew :pipeline:run` still works for a single instance.
 

@@ -23,6 +23,8 @@ data class AppConfig(
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
     val qualityRetry: Boolean = true,
+    /** Set by --dry-run only; pods.yaml cannot turn this on. */
+    val dryRun: Boolean = false,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {
@@ -82,6 +84,7 @@ data class AppConfig(
                 recoverOrphans = args.recoverOrphans ?: raw.recoverOrphans,
                 orphanRecoveryLimit = args.orphanRecoveryLimit ?: raw.orphanRecoveryLimit,
                 qualityRetry = args.qualityRetry ?: raw.qualityRetry,
+                dryRun = args.dryRun,
             )
         }
 

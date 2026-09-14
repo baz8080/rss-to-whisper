@@ -15,6 +15,9 @@ internal val USAGE =
       --orphan-limit <n>     Recover at most n orphans this run; 0 means no limit
       --quality-retry        Decode a flagged transcript a second time (default)
       --no-quality-retry     Keep the first decode whatever it scores
+      --dry-run              Report what the run would do and change nothing.
+                             Creates no directories, downloads nothing, and
+                             never contacts the whisper server
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -40,6 +43,7 @@ internal data class Args(
     val recoverOrphans: Boolean? = null,
     val orphanRecoveryLimit: Int? = null,
     val qualityRetry: Boolean? = null,
+    val dryRun: Boolean = false,
     val retranscribePaths: List<String> = emptyList(),
     val retranscribeIds: List<String> = emptyList(),
     val retranscribeFlagged: Boolean = false,
@@ -67,6 +71,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--orphan-limit" -> args.copy(orphanRecoveryLimit = intValueFor(flag, argv, ++i))
                 "--quality-retry" -> args.copy(qualityRetry = true)
                 "--no-quality-retry" -> args.copy(qualityRetry = false)
+                "--dry-run" -> args.copy(dryRun = true)
                 "--retranscribe" ->
                     args.copy(retranscribePaths = args.retranscribePaths + valueFor(flag, argv, ++i))
                 "--retranscribe-id" ->

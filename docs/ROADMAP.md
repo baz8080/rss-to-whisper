@@ -79,6 +79,14 @@ Done so far from this list:
   three undecodable mp3s wedge the pipeline permanently. Don't rebuild it without a
   mid-run failure that actually hurt.
 
+- **P3, dry run.** `--dry-run` sets `AppConfig.dryRun` (from `Args` only -- `load` forces
+  it, so `pods.yaml` cannot turn it on). The decide-then-do split in `processPodcast` is
+  what makes this cheap: the decision pass is untouched and only the doing pass branches.
+  `resolvePath` is `createPath` without the `createDirectories`, which is the one trap --
+  the podcast directory was the only thing a walk created. Whisper is not pinged, so a dry
+  run works with the server off, and `--retranscribe` lists its targets rather than
+  redoing them.
+
 Explicitly declined:
 
 - Replacing that parser with a per-request in-memory FTS5 table so highlighting has the
@@ -184,29 +192,7 @@ Everything listed here has shipped; see "Done so far" above.
 
 ## Pipeline
 
-Remaining, in suggested order: P3, P8, P7.
-
-### P3. Dry run
-
-**Why.** Global exclusions, per-podcast excludes, the duration floor, `skip_after_consecutive`
-and orphan recovery interact. Seeing what a run *would* do before spending GPU hours on it
-is worth a flag.
-
-**Where.** `Args`, `AppConfig`, `PodcastPipeline`.
-
-**Design.**
-
-- `--dry-run`: walk feeds and apply every filter exactly as now, but at the point where the
-  pipeline would download, log `INFO would transcribe <podcast>/<dir>` and count instead.
-  In the orphan scan, list each candidate directory instead of decoding it.
-- Nothing may be created: `createPath` makes the podcast and episode directories, so in dry
-  run resolve the path without creating (`findExistingEpisodeDir` or a plain `resolve`).
-- Finish with a per-podcast and total summary line, and exit 0.
-
-**Tests.** Run with `dryRun = true` over a feed of new episodes: `FakeFeedService.downloads`
-empty, `FakeTranscriber.calls` empty, no directories under the data dir afterwards.
-
-**Effort.** Small.
+Remaining, in suggested order: P8, P7.
 
 ### P8. Run summary file and notification
 

@@ -456,6 +456,67 @@ class RetranscribeTest {
 
     /** Unscored is not the same as passing: there is nothing to lose the decode to. */
     @Test
+    fun `--retranscribe-force keeps a decode that scored worse`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra = mapOf("episode_quality" to qualityMap(flags = emptyList(), punctuation = 0.16)),
+            )
+        val before = readTranscript(dir)["episode_transcript"]
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(loopingJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), force = true))
+
+        assertFalse(before == readTranscript(dir)["episode_transcript"], "the forced decode was discarded")
+    }
+
+    /** The same request without the flag is the control: the decode is refused. */
+    @Test
+    fun `without the flag the same decode is discarded`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra = mapOf("episode_quality" to qualityMap(flags = emptyList(), punctuation = 0.16)),
+            )
+        val before = readTranscript(dir)["episode_transcript"]
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(loopingJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertEquals(before, readTranscript(dir)["episode_transcript"])
+    }
+
+    /**
+     * Force means "I know better than the score", not "ignore a server that
+     * stopped sending token_timestamps" -- that would silently drop the
+     * words.jsonl.gz the episode already has.
+     */
+    @Test
+    fun `--retranscribe-force does not override the missing word timestamps guard`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra =
+                    mapOf(
+                        "episode_quality" to
+                            qualityMap(flags = emptyList(), punctuation = 0.16, meanWordProbability = 0.9),
+                    ),
+            )
+        val before = readTranscript(dir)["episode_transcript"]
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(WORDLESS_JSON))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), force = true))
+
+        assertEquals(before, readTranscript(dir)["episode_transcript"])
+    }
+
+    @Test
     fun `a transcript written before the quality gate is replaced without comparison`(
         @TempDir tempDir: Path,
     ) {

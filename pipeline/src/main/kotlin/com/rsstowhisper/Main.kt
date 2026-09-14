@@ -47,6 +47,7 @@ fun main(argv: Array<String>) {
                         ids = args.retranscribeIds,
                         flagged = args.retranscribeFlagged,
                         limit = args.retranscribeLimit,
+                        force = args.retranscribeForce,
                     ),
                 )
             } else {

@@ -134,4 +134,31 @@ class ArgsTest {
         assertEquals(true, parseArgs(arrayOf("--quality-retry")).qualityRetry)
         assertEquals(false, parseArgs(arrayOf("--no-quality-retry")).qualityRetry)
     }
+
+    @Test
+    fun `force is off unless asked for`() {
+        assertFalse(parseArgs(arrayOf("--retranscribe-id", "abcd1234")).retranscribeForce)
+        assertTrue(
+            parseArgs(arrayOf("--retranscribe-id", "abcd1234", "--retranscribe-force")).retranscribeForce,
+        )
+    }
+
+    /**
+     * The flagged scan runs at scale and must never make the corpus worse, so
+     * the combination is refused rather than quietly applying to the named half.
+     */
+    @Test
+    fun `force cannot be combined with the flagged scan`() {
+        val ex =
+            assertFailsWith<IllegalStateException> {
+                parseArgs(arrayOf("--retranscribe-flagged", "--retranscribe-force"))
+            }
+        assertTrue(ex.message!!.contains("--retranscribe-flagged"), ex.message!!)
+
+        // Including when a named target is present too: which half it applied to
+        // would be invisible.
+        assertFailsWith<IllegalStateException> {
+            parseArgs(arrayOf("--retranscribe", "Show/ep", "--retranscribe-flagged", "--retranscribe-force"))
+        }
+    }
 }

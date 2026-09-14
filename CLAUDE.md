@@ -58,6 +58,8 @@ prints a warning/error count when it finishes. Every run also writes what it did
 
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.
+`--retranscribe-force` keeps a worse-scoring decode for explicitly named targets, and is
+refused alongside `--retranscribe-flagged`.
 
 No external tools are required on `PATH` — transcription is HTTP-only against the whisper.cpp server, which handles audio decoding itself.
 

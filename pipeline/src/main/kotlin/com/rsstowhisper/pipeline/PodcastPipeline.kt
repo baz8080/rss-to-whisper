@@ -179,7 +179,7 @@ class PodcastPipeline(
         for (target in targets) {
             val attempted =
                 try {
-                    if (retranscribeEpisode(target)) done++
+                    if (retranscribeEpisode(target, request.force)) done++
                     true
                 } catch (e: TranscriberUnavailable) {
                     // Nothing was decoded, so nothing was learned about this
@@ -213,7 +213,10 @@ class PodcastPipeline(
         }
     }
 
-    private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
+    private fun retranscribeEpisode(
+        episodeDirPath: Path,
+        force: Boolean = false,
+    ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
@@ -266,11 +269,12 @@ class PodcastPipeline(
         // it. Judged the way transcribeEpisode judges its retry, so redoing an
         // episode can improve it or leave it alone, never cost it a decode.
         if (previous != null && previous.isBetterThan(scored.quality)) {
+            val outcome = if (force) "keeping it anyway, as asked" else "keeping the existing transcript"
             logger.warn(
                 "Re-transcription of $label scored worse than what is on disk " +
-                    "(${scored.quality.summary} against ${previous.summary}); keeping the existing transcript",
+                    "(${scored.quality.summary} against ${previous.summary}); $outcome",
             )
-            return false
+            if (!force) return false
         }
 
         // Every other field was derived from a feed entry that may no longer

@@ -515,6 +515,7 @@ below supply the three required values.
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
 | `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
+| `--dry-run` | No equivalent; see [Dry run](#dry-run) |
 | `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
@@ -766,6 +767,28 @@ same episode**: they can interleave into a transcript and a sidecar from differe
 
 An id is part of a path, not a unique key, so `--retranscribe-id` redoes every copy it
 finds rather than guessing which was meant.
+
+### Dry run
+
+`--dry-run` walks every feed and applies every filter exactly as a real run does, then
+reports what it would have done instead of doing it:
+
+```
+Would transcribe Ask a Spaceman/2024-03-14-a1b2c3d4-what-is-dark-matter
+Ask a Spaceman: would transcribe 4 episodes
+Would recover Ask a Spaceman/2019-01-01-deadbeef-aged-out
+Dry run: would transcribe 12 and recover 3 episodes
+```
+
+Nothing is downloaded, nothing is decoded, and no podcast or episode directory is
+created — useful because the global exclusions, per-podcast excludes, the duration floor,
+`skip_after_consecutive` and orphan recovery interact, and reading the result is cheaper
+than spending GPU hours on a misconfiguration.
+
+The whisper server is never contacted, so a dry run works with it switched off. It exits
+`0`. Combined with `--retranscribe`, it lists the episodes that would be redone without
+touching their transcripts — worth doing before `--retranscribe-flagged`, which selects
+across the whole corpus.
 
 ### When whisper is not there
 

@@ -58,6 +58,29 @@ internal fun logged(block: () -> Unit): List<String> {
     return messages.toList()
 }
 
+/** Only the ERROR-level messages, which are what the run tally and pipeline-errors.log count. */
+internal fun loggedAtError(block: () -> Unit): List<String> {
+    val root =
+        (LoggerFactory.getILoggerFactory() as LoggerContext)
+            .getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
+    val messages = Collections.synchronizedList(mutableListOf<String>())
+    val appender =
+        object : AppenderBase<ILoggingEvent>() {
+            override fun append(event: ILoggingEvent) {
+                if (event.level == ch.qos.logback.classic.Level.ERROR) messages.add(event.formattedMessage)
+            }
+        }
+    appender.start()
+    root.addAppender(appender)
+    try {
+        block()
+    } finally {
+        root.detachAppender(appender)
+        appender.stop()
+    }
+    return messages.toList()
+}
+
 /** Segments with no per-word times, which is what a server decoding without token_timestamps returns. */
 internal val WORDLESS_JSON =
     """{"task":"transcribe","segments":[""" +
@@ -189,6 +212,7 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
     qualityRetry: Boolean = true,
+    dryRun: Boolean = false,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
     transcriberAnswersPing: Boolean = true,
@@ -205,6 +229,7 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
             qualityRetry = qualityRetry,
+            dryRun = dryRun,
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))

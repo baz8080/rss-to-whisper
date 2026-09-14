@@ -36,17 +36,19 @@ fun timeToSeconds(timeStr: String?): Int {
     }
 }
 
-fun createPath(
+/** Where [createPath] would put it, without creating anything. */
+fun resolvePath(
     parentPath: Path,
     directoryName: String,
 ): Path {
     val escaped = escapeFilename(directoryName)
-    val existing = findCaseInsensitive(parentPath, escaped)
-    if (existing != null) return existing
-    val pathToCreate = parentPath.resolve(escaped)
-    Files.createDirectories(pathToCreate)
-    return pathToCreate
+    return findCaseInsensitive(parentPath, escaped) ?: parentPath.resolve(escaped)
 }
+
+fun createPath(
+    parentPath: Path,
+    directoryName: String,
+): Path = resolvePath(parentPath, directoryName).also { Files.createDirectories(it) }
 
 /**
  * `escapeFilename` preserves case, so re-capitalising a podcast's name in

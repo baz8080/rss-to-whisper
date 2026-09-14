@@ -95,6 +95,56 @@ class DryRunTest {
         assertTrue(Files.notExists(orphan.resolve("transcript.json")))
     }
 
+    /** A podcast with no directory yet has nothing orphaned, and saying so is not an error. */
+    @Test
+    fun `a dry run over a data directory with nothing in it logs no errors`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, entries(2), dryRun = true)
+
+        val errors = loggedAtError { pipeline.run() }
+
+        assertEquals(emptyList(), errors)
+    }
+
+    /** Recovery refuses a zero-byte mp3, so a dry run must not offer it. */
+    @Test
+    fun `a dry run does not offer an orphan whose audio is empty`(
+        @TempDir tempDir: Path,
+    ) {
+        val orphan = tempDir.resolve("Show").resolve("2019-01-01-deadbeef-aged-out")
+        Files.createDirectories(orphan)
+        Files.writeString(orphan.resolve("audio.mp3"), "")
+
+        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, entries(1), dryRun = true)
+
+        val messages = logged { pipeline.run() }
+
+        assertTrue(messages.none { it.startsWith("Would recover") }, "logged: $messages")
+        assertTrue(
+            messages.any { it == "Dry run: would transcribe 1 and recover 0 episodes" },
+            "logged: $messages",
+        )
+    }
+
+    /** The summary is shared with a real run, and must not claim work that did not happen. */
+    @Test
+    fun `a dry run does not report orphans as recovered`(
+        @TempDir tempDir: Path,
+    ) {
+        val orphan = tempDir.resolve("Show").resolve("2019-01-01-deadbeef-aged-out")
+        Files.createDirectories(orphan)
+        Files.writeString(orphan.resolve("audio.mp3"), "fake-mp3-bytes")
+
+        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, entries(1), dryRun = true)
+
+        val messages = logged { pipeline.run() }
+
+        val summary = messages.single { it.contains("directories absent from the feed") }
+        assertTrue(summary.contains("1 to recover"), summary)
+        assertTrue(!summary.contains("recovered"), summary)
+    }
+
     @Test
     fun `a dry run lists the episodes a re-transcription would redo`(
         @TempDir tempDir: Path,

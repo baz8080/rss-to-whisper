@@ -500,6 +500,10 @@ class PodcastPipeline(
             return
         }
 
+        // A dry run does not create it, and a podcast with no directory has nothing
+        // orphaned -- listing it would only raise an error about its own absence.
+        if (!Files.isDirectory(podPath)) return
+
         val onDisk =
             try {
                 Files.newDirectoryStream(podPath).use { stream ->
@@ -577,22 +581,22 @@ class PodcastPipeline(
                 }
                 else -> {
                     if (recovered == 0) {
-                        logger.info("${podcast.name}: episodes that are no longer in the feed")
+                        val what = if (config.dryRun) "listing" else "recovering"
+                        logger.info("${podcast.name}: $what episodes that are no longer in the feed")
                     }
-                    if (config.dryRun) {
-                        logger.info("Would recover ${podcast.name}/${parsed.dirName}")
-                        recovered++
-                        orphansRecovered++
-                        wouldRecover++
-                    } else {
-                        try {
-                            if (recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)) {
-                                recovered++
-                                orphansRecovered++
+                    try {
+                        val done =
+                            if (config.dryRun) {
+                                reportWouldRecover(podcast, episodeDirPath, parsed)
+                            } else {
+                                recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)
                             }
-                        } catch (e: Exception) {
-                            logger.error("Couldn't recover ${parsed.dirName}", e)
+                        if (done) {
+                            recovered++
+                            orphansRecovered++
                         }
+                    } catch (e: Exception) {
+                        logger.error("Couldn't recover ${parsed.dirName}", e)
                     }
                 }
             }
@@ -607,8 +611,8 @@ class PodcastPipeline(
         }
         logger.info(
             "${podcast.name}: ${candidates.size} directories absent from the feed " +
-                "($recovered recovered, $alreadyDone already settled, $withoutAudio without audio, " +
-                "$pending not examined)",
+                "($recovered ${if (config.dryRun) "to recover" else "recovered"}, $alreadyDone already settled, " +
+                "$withoutAudio without audio, $pending not examined)",
         )
     }
 
@@ -657,6 +661,29 @@ class PodcastPipeline(
         )
     }
 
+    private fun reportWouldRecover(
+        podcast: PodcastConfig,
+        episodeDirPath: Path,
+        parsed: EpisodeDirName,
+    ): Boolean {
+        if (!hasUsableAudio(episodeDirPath, parsed)) return false
+        logger.info("Would recover ${podcast.name}/${parsed.dirName}")
+        wouldRecover++
+        return true
+    }
+
+    /** A zero-byte mp3 is a download that died. Recovery refuses it, so a dry run must not offer it. */
+    private fun hasUsableAudio(
+        episodeDirPath: Path,
+        parsed: EpisodeDirName,
+    ): Boolean {
+        if (Files.size(episodeDirPath.resolve(AUDIO_FILENAME)) == 0L) {
+            logger.warn("Cannot recover ${parsed.dirName}: its audio file is empty")
+            return false
+        }
+        return true
+    }
+
     private fun recoverEpisode(
         feed: SyndFeed,
         podcast: PodcastConfig,
@@ -665,10 +692,7 @@ class PodcastPipeline(
         dataDir: String,
     ): Boolean {
         val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
-        if (Files.size(audioPath) == 0L) {
-            logger.warn("Cannot recover ${parsed.dirName}: its audio file is empty")
-            return false
-        }
+        if (!hasUsableAudio(episodeDirPath, parsed)) return false
 
         logger.info("Recovering ${parsed.dirName}")
         val scored =

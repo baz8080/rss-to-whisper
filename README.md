@@ -749,6 +749,21 @@ feed has nothing left to fetch. `--retranscribe-flagged` reads every `transcript
 under the data directory, which is slow on a network volume; `--retranscribe-limit`
 caps it, since a first pass over the corpus can select hundreds.
 
+**The limit is a rolling window, not a fixed prefix.** Each attempt writes the time into
+a `retranscribe-attempted` file in the episode directory, and the flagged scan takes the
+least recently attempted first — never-attempted episodes ahead of everything, then
+oldest attempt, with the directory name breaking ties so a run over the same corpus picks
+the same episodes. Without that, an episode whose flags cannot clear — genuinely bad
+audio, a music-heavy show, one that is mostly silence — would sit at the front of the
+sorted list forever and starve everything behind it, costing decode time on every run and
+changing nothing.
+
+The time is recorded for every attempt, not every success, because the episodes that
+starve the selection are exactly the ones each re-decode refuses. The exception is a
+decode that could not reach the whisper server: nothing was learned about that episode,
+so it keeps its place rather than rotating away untried — otherwise a server that died
+partway through would send the rest of the window to the back of the queue unexamined.
+
 Each target needs its `audio.mp3`; one without it is reported and skipped. The rewrite
 keeps every existing field and replaces only `episode_transcript` and `episode_quality`
 — all the rest came from a feed entry that may no longer exist, so what is on disk is

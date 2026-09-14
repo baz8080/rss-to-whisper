@@ -283,6 +283,30 @@ class TranscriberTest {
         assertEquals(null, fields["prompt"])
     }
 
+    /**
+     * The pair is resolved in AppConfig and honoured in Transcriber, and the bug
+     * this covers lived between the two: binding the built-in English prompt to a
+     * non-English top-level language put "Hello, and welcome back to the show"
+     * into a French decode, carried into every window.
+     */
+    @Test
+    fun `a non-English config with no prompt of its own sends none`(
+        @TempDir tmp: Path,
+    ) {
+        val config = com.rsstowhisper.AppConfig(language = "fr")
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber(
+            "http://whisper-server",
+            clientReturning("{}", captureRequests = requests),
+            initialPrompt = config.defaultPrompt,
+            promptLanguage = config.defaultPromptLanguage,
+        ).transcribe(mp3File(tmp), config.language)
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals(null, fields["prompt"])
+        assertEquals(null, fields["carry_initial_prompt"])
+    }
+
     /** An upper-case code reaches whisper as the wrong language, not as an error. */
     @Test
     fun `transcribe lower-cases the language code it posts`(

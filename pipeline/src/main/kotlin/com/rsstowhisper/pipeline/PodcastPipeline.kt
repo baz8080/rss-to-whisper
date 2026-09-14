@@ -48,8 +48,8 @@ class PodcastPipeline(
     private val transcriber: Transcriber =
         Transcriber(
             config.whisperServerUrl,
-            initialPrompt = config.initialPrompt,
-            promptLanguage = config.language,
+            initialPrompt = config.defaultPrompt,
+            promptLanguage = config.defaultPromptLanguage,
         ),
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */

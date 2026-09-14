@@ -8,6 +8,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AppConfigTest {
@@ -382,12 +383,53 @@ class AppConfigTest {
     }
 
     @Test
-    fun `the top-level initial prompt defaults to the English one`(
+    fun `the default prompt is the English one, bound to English`(
         @TempDir tmp: Path,
     ) {
         val config = configWith(tmp, "language: en" + System.lineSeparator())
 
-        assertEquals(Transcriber.DEFAULT_INITIAL_PROMPT, config.initialPrompt)
+        assertNull(config.initialPrompt)
+        assertEquals(Transcriber.DEFAULT_INITIAL_PROMPT, config.defaultPrompt)
+        assertEquals("en", config.defaultPromptLanguage)
+    }
+
+    /**
+     * The built-in prompt is English prose. Binding it to a non-English
+     * top-level language would send English text into that decode, which is the
+     * contamination the prompt-matching rule exists to prevent.
+     */
+    @Test
+    fun `a non-English top-level language does not adopt the built-in English prompt`(
+        @TempDir tmp: Path,
+    ) {
+        val config = configWith(tmp, "language: fr" + System.lineSeparator())
+
+        assertEquals("en", config.defaultPromptLanguage)
+    }
+
+    @Test
+    fun `a top-level prompt that was set belongs to the top-level language`(
+        @TempDir tmp: Path,
+    ) {
+        val config =
+            configWith(
+                tmp,
+                "language: fr" + System.lineSeparator() + "initial_prompt: Bonjour, et bienvenue.",
+            )
+
+        assertEquals("Bonjour, et bienvenue.", config.defaultPrompt)
+        assertEquals("fr", config.defaultPromptLanguage)
+    }
+
+    /** Nothing was set, so there is no prompt to complain about. */
+    @Test
+    fun `auto with no prompt of its own loads`(
+        @TempDir tmp: Path,
+    ) {
+        val config = configWith(tmp, "language: auto" + System.lineSeparator())
+
+        assertEquals("auto", config.language)
+        assertNull(config.initialPrompt)
     }
 
     @Test

@@ -153,6 +153,10 @@ keep in sync — and a podcast that sets `initial_prompt` must set `language` to
 or the run refuses to start rather than guessing. A top-level `initial_prompt`
 works the same way against the top-level `language`.
 
+The built-in English prompt stays bound to English, whatever the top-level
+`language` is. Only a prompt you actually set belongs to that language; an unset
+one is not "the default, in French".
+
 Keep any prompt generic, and check a new one the way the English default was
 checked: decode an episode with it and confirm no prompt fragment appears in the
 transcript and the word count has not moved.

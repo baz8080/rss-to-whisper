@@ -22,8 +22,12 @@ data class AppConfig(
     val orphanRecoveryLimit: Int = 0,
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
-    /** Written in [language]. A podcast that overrides one overrides both, or gets neither. */
-    val initialPrompt: String = Transcriber.DEFAULT_INITIAL_PROMPT,
+    /**
+     * Written in [language]. Null is not "the English default in this language":
+     * it means nothing was set, so the built-in English prompt applies and stays
+     * bound to English.
+     */
+    val initialPrompt: String? = null,
     val qualityRetry: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
@@ -38,7 +42,7 @@ data class AppConfig(
      * a feed thinking it has the punctuation lever when it does not.
      */
     internal fun validate() {
-        if (initialPrompt.isNotBlank() && language.lowercase() == Transcriber.AUTO_LANGUAGE) {
+        if (!initialPrompt.isNullOrBlank() && language.lowercase() == Transcriber.AUTO_LANGUAGE) {
             error("initial_prompt is set but language is \"auto\", so there is no language it is written in")
         }
         for (podcast in podcasts) {
@@ -52,6 +56,21 @@ data class AppConfig(
             }
         }
     }
+
+    /** The prompt sent when no podcast overrides it. */
+    internal val defaultPrompt: String
+        get() = initialPrompt ?: Transcriber.DEFAULT_INITIAL_PROMPT
+
+    /**
+     * The language [defaultPrompt] is written in.
+     *
+     * Only a prompt that was actually set belongs to [language]. The built-in
+     * one is English prose, so pairing it with a non-English `language` would
+     * send English text into a French decode -- the contamination the
+     * prompt-matching rule exists to prevent.
+     */
+    internal val defaultPromptLanguage: String
+        get() = if (initialPrompt != null) language else Transcriber.DEFAULT_LANGUAGE
 
     companion object {
         // Whole-word matches only: a substring match on "repeat" also swallows

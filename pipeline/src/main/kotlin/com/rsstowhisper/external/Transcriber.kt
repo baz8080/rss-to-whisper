@@ -186,7 +186,12 @@ open class Transcriber(
             try {
                 httpClient.newCall(request).execute()
             } catch (e: IOException) {
-                throw TranscriberUnavailable("Could not reach the whisper server at $serverUrl", e)
+                // Names the cause rather than asserting the server is down: a read
+                // timeout and a local mp3 that will not open arrive the same way.
+                throw TranscriberUnavailable(
+                    "Request to the whisper server at $serverUrl failed (${e.javaClass.simpleName}: ${e.message})",
+                    e,
+                )
             }
         return response.use {
             val body =

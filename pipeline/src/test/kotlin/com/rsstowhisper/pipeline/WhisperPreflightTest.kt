@@ -63,7 +63,7 @@ class WhisperPreflightTest {
     }
 
     @Test
-    fun `the count of unreachable episodes reaches the log`(
+    fun `the count of episodes that got no transcript reaches the log`(
         @TempDir tempDir: Path,
     ) {
         val (pipeline, _, _) =
@@ -77,7 +77,7 @@ class WhisperPreflightTest {
         val messages = logged { pipeline.run() }
 
         assertTrue(
-            messages.any { it.contains("3 episodes could not reach the whisper server") },
+            messages.any { it.contains("3 episodes got no transcript from the whisper server") },
             "logged: $messages",
         )
     }
@@ -115,15 +115,41 @@ class WhisperPreflightTest {
     fun `an episode that fails on its own merits does not fail the run`(
         @TempDir tempDir: Path,
     ) {
+        var call = 0
         val (pipeline, txSvc, _) =
             buildPipeline(
                 tempDir,
                 podcasts,
                 entries(3),
-                transcriberFails = { throw RuntimeException("Whisper server returned 400: failed to read audio data") },
+                onTranscribe = {
+                    call++
+                    if (call == 2) throw RuntimeException("Whisper server returned 400: failed to read audio data")
+                },
             )
 
         assertTrue(pipeline.run())
+
+        assertEquals(3, txSvc.calls.size)
+    }
+
+    /**
+     * A build that answers every request without decoding anything passes the
+     * preflight and fails each episode on its own apparent merits, so nothing
+     * below would notice. The run still transcribed nothing.
+     */
+    @Test
+    fun `a run that decoded nothing at all reports itself as failed`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                entries(3),
+                transcriberFails = { throw RuntimeException("Whisper server returned 500: failed to process audio") },
+            )
+
+        assertFalse(pipeline.run())
 
         assertEquals(3, txSvc.calls.size)
     }

@@ -560,7 +560,7 @@ class PodcastPipelineRunTest {
     }
 
     @Test
-    fun `run keeps going when the transcriber fails on one episode`(
+    fun `run attempts every episode even when the transcriber fails on all of them`(
         @TempDir tempDir: Path,
     ) {
         val feed =
@@ -577,7 +577,8 @@ class PodcastPipelineRunTest {
                 transcriberFails = { throw IllegalStateException("whisper is down") },
             )
 
-        assertTrue(pipeline.run())
+        // False because nothing decoded, but only after every episode was tried.
+        assertFalse(pipeline.run())
 
         assertEquals(3, txSvc.calls.size)
         assertEquals(3, feedSvc.downloads.size)

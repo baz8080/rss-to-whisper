@@ -177,6 +177,7 @@ class PodcastPipeline(
         logger.info("Re-transcribing ${targets.size} episodes")
         var done = 0
         for (target in targets) {
+            markRetranscribeAttempted(target)
             try {
                 if (retranscribeEpisode(target)) done++
             } catch (e: Exception) {
@@ -185,6 +186,21 @@ class PodcastPipeline(
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
         return decodingWorked()
+    }
+
+    /**
+     * Recorded for every attempt, not every success: the episodes that starve
+     * the selection are exactly the ones `retranscribeEpisode` keeps refusing.
+     */
+    private fun markRetranscribeAttempted(episodeDirPath: Path) {
+        try {
+            Files.writeString(
+                episodeDirPath.resolve(RETRANSCRIBE_ATTEMPTED_FILENAME),
+                DateTimeFormatter.ISO_INSTANT.format(Instant.now()),
+            )
+        } catch (e: Exception) {
+            logger.warn("Could not record the re-transcription attempt for ${episodeDirPath.fileName}", e)
+        }
     }
 
     private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
@@ -995,6 +1011,13 @@ class PodcastPipeline(
 
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */
         internal const val RECOVERY_FAILED_FILENAME = "recovery-failed"
+
+        /**
+         * When `--retranscribe-flagged` last picked this episode, whatever came
+         * of it. Written before the decode, so an episode that crashes the run
+         * still rotates to the back rather than being picked again forever.
+         */
+        internal const val RETRANSCRIBE_ATTEMPTED_FILENAME = "retranscribe-attempted"
 
         private val logger = LoggerFactory.getLogger(PodcastPipeline::class.java)
         private val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd")

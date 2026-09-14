@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
 import kotlin.io.path.name
 
 /**
@@ -82,6 +83,11 @@ internal object RetranscribeTargets {
     /**
      * Reads every `transcript.json` under the data directory. Slow on a network
      * volume, which is why it is opt-in and why `--retranscribe-limit` exists.
+     *
+     * Least-recently-attempted first, so the limit is a rolling window rather
+     * than a fixed prefix. An episode whose flags cannot clear -- bad audio, a
+     * music-heavy show -- would otherwise sit at the front of the sorted list
+     * forever and starve everything behind it.
      */
     private fun findFlagged(
         dataDir: Path,
@@ -106,8 +112,27 @@ internal object RetranscribeTargets {
             if (flags.isArray && !flags.isEmpty) flagged.add(episodeDir)
         }
 
-        logger.info("Found ${flagged.size} flagged episodes")
-        return if (limit > 0) flagged.take(limit) else flagged
+        // Never attempted sorts first; the name breaks ties so a run with the
+        // same corpus picks the same episodes, which shuffling would not.
+        val ordered =
+            flagged.sortedWith(
+                compareBy<Path, Instant?>(nullsFirst()) { lastAttempted(it) }.thenBy { it.name },
+            )
+
+        logger.info("Found ${ordered.size} flagged episodes")
+        return if (limit > 0) ordered.take(limit) else ordered
+    }
+
+    private fun lastAttempted(episodeDir: Path): Instant? {
+        val marker = episodeDir.resolve(PodcastPipeline.RETRANSCRIBE_ATTEMPTED_FILENAME)
+        return try {
+            Instant.parse(Files.readString(marker).trim())
+        } catch (e: Exception) {
+            // Absent is the common case. Unreadable or malformed is treated the
+            // same way: never attempted, so it goes to the front rather than
+            // being skipped for a marker nobody can read.
+            null
+        }
     }
 
     /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. */

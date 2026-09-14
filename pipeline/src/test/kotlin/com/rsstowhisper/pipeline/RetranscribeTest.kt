@@ -5,6 +5,7 @@ import com.rsstowhisper.PodcastConfig
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -193,6 +194,77 @@ class RetranscribeTest {
         assertEquals(2, found.size)
     }
 
+    private fun markAttempted(
+        episodeDir: Path,
+        at: String,
+    ) {
+        Files.writeString(episodeDir.resolve(PodcastPipeline.RETRANSCRIBE_ATTEMPTED_FILENAME), at)
+    }
+
+    /**
+     * The starvation #69 is about: an episode whose flags cannot clear sits at
+     * the front of the sorted list forever, so a repeated limited run redoes the
+     * same prefix and never reaches the tail.
+     */
+    @Test
+    fun `the flagged scan takes the least recently attempted first`(
+        @TempDir tempDir: Path,
+    ) {
+        // Named so the alphabetical order is the opposite of the answer, or the
+        // test would pass on the old prefix behaviour.
+        val fresh = episode(tempDir, dirName = "2024-01-01-11111111-fresh")
+        val stale = episode(tempDir, dirName = "2024-01-02-22222222-stale")
+        markAttempted(fresh, "2026-01-01T00:00:00Z")
+        markAttempted(stale, "2020-01-01T00:00:00Z")
+
+        val found = RetranscribeTargets.find(tempDir, RetranscribeRequest(flagged = true, limit = 1))
+
+        assertEquals(listOf(stale), found)
+    }
+
+    @Test
+    fun `an episode never attempted is taken before any that has been`(
+        @TempDir tempDir: Path,
+    ) {
+        val attempted = episode(tempDir, dirName = "2024-01-01-11111111-attempted")
+        val untouched = episode(tempDir, dirName = "2024-01-02-22222222-untouched")
+        markAttempted(attempted, "2020-01-01T00:00:00Z")
+
+        val found = RetranscribeTargets.find(tempDir, RetranscribeRequest(flagged = true))
+
+        assertEquals(listOf(untouched, attempted), found)
+    }
+
+    /** Shuffling would fix the starvation too, but a run you cannot repeat is worse to measure. */
+    @Test
+    fun `episodes attempted at the same time keep a stable order`(
+        @TempDir tempDir: Path,
+    ) {
+        val first = episode(tempDir, dirName = "2024-01-01-11111111-one")
+        val second = episode(tempDir, dirName = "2024-01-02-22222222-two")
+        markAttempted(first, "2020-01-01T00:00:00Z")
+        markAttempted(second, "2020-01-01T00:00:00Z")
+
+        repeat(3) {
+            assertEquals(listOf(first, second), RetranscribeTargets.find(tempDir, RetranscribeRequest(flagged = true)))
+        }
+    }
+
+    /** A marker nobody can parse must not hide the episode; it reads as never attempted. */
+    @Test
+    fun `an unreadable attempt marker is treated as never attempted`(
+        @TempDir tempDir: Path,
+    ) {
+        val attempted = episode(tempDir, dirName = "2024-01-01-11111111-attempted")
+        val broken = episode(tempDir, dirName = "2024-01-02-22222222-broken")
+        markAttempted(attempted, "2020-01-01T00:00:00Z")
+        markAttempted(broken, "not a timestamp")
+
+        val found = RetranscribeTargets.find(tempDir, RetranscribeRequest(flagged = true))
+
+        assertEquals(listOf(broken, attempted), found)
+    }
+
     /** The error log lives beside the podcast directories and holds no episodes. */
     @Test
     fun `the flagged scan does not walk into the logs directory`(
@@ -230,6 +302,59 @@ class RetranscribeTest {
 
         // No feed was fetched: the targets are already on disk.
         assertTrue(feedSvc.requestedUrls.isEmpty())
+    }
+
+    private fun attemptMarker(episodeDir: Path): Path = episodeDir.resolve(PodcastPipeline.RETRANSCRIBE_ATTEMPTED_FILENAME)
+
+    /**
+     * The whole point of recording the attempt: the episodes that starve the
+     * selection are the ones every re-decode refuses, so a marker written only
+     * on success would never reach them.
+     */
+    @Test
+    fun `a re-decode that is discarded still records the attempt`(
+        @TempDir tempDir: Path,
+    ) {
+        // On disk: one flag and good punctuation. The re-decode loops, so it
+        // scores worse and is refused -- which is how an episode starves.
+        val dir =
+            episode(
+                tempDir,
+                extra = mapOf("episode_quality" to qualityMap(flags = listOf("unpunctuated"), punctuation = 0.16)),
+            )
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(loopingJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue(Files.exists(attemptMarker(dir)), "no attempt marker after a discarded re-decode")
+        assertTrue(Instant.parse(Files.readString(attemptMarker(dir))).epochSecond > 0)
+    }
+
+    /** No audio returns before anything is decoded, and that is still an attempt. */
+    @Test
+    fun `an episode with no audio still records the attempt`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        Files.delete(dir.resolve("audio.mp3"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue(Files.exists(attemptMarker(dir)), "no attempt marker after an episode with no audio")
+    }
+
+    /** A dry run reports what it would redo; recording an attempt would be doing something. */
+    @Test
+    fun `a dry run records no attempt`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, dryRun = true)
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertFalse(Files.exists(attemptMarker(dir)))
     }
 
     @Test

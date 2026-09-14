@@ -56,6 +56,9 @@ Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, and t
 prints a warning/error count when it finishes. Every run also writes what it did to
 `<data-dir>/logs/run-<stamp>.json`, copied to `logs/latest-run.json`.
 
+`--retranscribe-flagged` selects least-recently-attempted first, tracked by a
+`retranscribe-attempted` file per episode, so its limit is a rolling window.
+
 No external tools are required on `PATH` — transcription is HTTP-only against the whisper.cpp server, which handles audio decoding itself.
 
 ### Indexer

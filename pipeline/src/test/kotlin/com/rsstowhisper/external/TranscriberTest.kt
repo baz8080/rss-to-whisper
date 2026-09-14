@@ -240,6 +240,49 @@ class TranscriberTest {
         assertEquals("true", fields["carry_initial_prompt"])
     }
 
+    /** A podcast's own prompt is written in its own language, so it needs no matching. */
+    @Test
+    fun `an explicit prompt overrides the default and rides whatever the language`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "fr", "Bonjour, et bienvenue.")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals("Bonjour, et bienvenue.", fields["prompt"])
+        assertEquals("true", fields["carry_initial_prompt"])
+    }
+
+    /**
+     * An initial prompt skews whisper's own language detection before it decodes
+     * anything, so "auto" takes none however explicitly it was asked for.
+     */
+    @Test
+    fun `auto never takes a prompt, even one passed explicitly`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "auto", "Bonjour, et bienvenue.")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals(null, fields["prompt"])
+        assertEquals(null, fields["carry_initial_prompt"])
+    }
+
+    @Test
+    fun `a blank explicit prompt sends none rather than falling back to the default`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "en", "")
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals(null, fields["prompt"])
+    }
+
     /** An upper-case code reaches whisper as the wrong language, not as an error. */
     @Test
     fun `transcribe lower-cases the language code it posts`(

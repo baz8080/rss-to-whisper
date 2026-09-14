@@ -22,6 +22,8 @@ data class AppConfig(
     val orphanRecoveryLimit: Int = 0,
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
+    /** Written in [language]. A podcast that overrides one overrides both, or gets neither. */
+    val initialPrompt: String = Transcriber.DEFAULT_INITIAL_PROMPT,
     val qualityRetry: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
@@ -29,6 +31,28 @@ data class AppConfig(
     val notifyUrl: String? = null,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
+    /**
+     * A prompt biases vocabulary as well as style, so one sent against the wrong
+     * language contaminates the transcript -- and under "auto" it skews whisper's
+     * own detection before it decodes anything. Silently dropping it would leave
+     * a feed thinking it has the punctuation lever when it does not.
+     */
+    internal fun validate() {
+        if (initialPrompt.isNotBlank() && language.lowercase() == Transcriber.AUTO_LANGUAGE) {
+            error("initial_prompt is set but language is \"auto\", so there is no language it is written in")
+        }
+        for (podcast in podcasts) {
+            val prompt = podcast.initialPrompt ?: continue
+            if (prompt.isBlank()) continue
+            val podcastLanguage =
+                podcast.language
+                    ?: error("${podcast.name} sets initial_prompt but no language, so there is no language it is written in")
+            if (podcastLanguage.lowercase() == Transcriber.AUTO_LANGUAGE) {
+                error("${podcast.name} sets initial_prompt but its language is \"auto\", which never takes a prompt")
+            }
+        }
+    }
+
     companion object {
         // Whole-word matches only: a substring match on "repeat" also swallows
         // "Repeating FRB Mystery", and "archives" swallows "Inside the Archives".
@@ -79,6 +103,7 @@ data class AppConfig(
             val envVerbose = env["PIPELINE_VERBOSE"]?.takeIf { it.isNotBlank() }?.toBoolean()
 
             val raw: AppConfig = mapper.readValue(File(configPath))
+            raw.validate()
             return raw.copy(
                 dataDirectory = dataDirectory,
                 whisperServerUrl = whisperServerUrl,
@@ -122,4 +147,9 @@ data class PodcastConfig(
      * Null falls back to the top-level `language` in pods.yaml.
      */
     val language: String? = null,
+    /**
+     * Written in this podcast's [language], which it must therefore set.
+     * Keep it generic: a prompt biases vocabulary as well as style.
+     */
+    val initialPrompt: String? = null,
 )

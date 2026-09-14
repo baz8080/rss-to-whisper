@@ -105,6 +105,8 @@ open class Transcriber(
     open fun transcribe(
         audioPath: Path,
         language: String = DEFAULT_LANGUAGE,
+        /** Overrides [initialPrompt]; written in [language] by construction, so it is not matched. */
+        prompt: String? = null,
     ): String {
         // whisper.cpp looks the code up in a map keyed by lower case and never
         // checks the result: an unmatched one returns -1, which its caller adds
@@ -156,20 +158,24 @@ open class Transcriber(
         // For "auto" it is worse than useless: an English prompt skews whisper's
         // own language detection toward English before it decodes anything, so
         // the detection the setting exists to enable is what it would break.
-        val promptApplies = code == promptLanguage.lowercase()
-        if (initialPrompt.isNotBlank() && promptApplies) {
-            bodyBuilder.addFormDataPart("prompt", initialPrompt)
+        // Never under "auto", whatever the caller passed: an initial prompt skews
+        // whisper's own language detection before it decodes anything.
+        val effectivePrompt =
+            when {
+                code == AUTO_LANGUAGE -> ""
+                prompt != null -> prompt
+                code == promptLanguage.lowercase() -> initialPrompt
+                else -> ""
+            }
+        if (effectivePrompt.isNotBlank()) {
+            bodyBuilder.addFormDataPart("prompt", effectivePrompt)
             // Without this the prompt conditions only the FIRST window, so an
             // episode that degrades part-way through still degrades -- which is
             // exactly what a whole-episode failure looks like. 13/13 fixed with
             // it, 12/13 without.
             bodyBuilder.addFormDataPart("carry_initial_prompt", "true")
-        } else if (initialPrompt.isNotBlank()) {
-            logger.debug(
-                "Decoding as {}; the initial prompt is {} so it is not being sent",
-                code,
-                promptLanguage,
-            )
+        } else if (initialPrompt.isNotBlank() || prompt != null) {
+            logger.debug("Decoding as {}; no prompt is being sent", code)
         }
 
         val requestBody = bodyBuilder.build()
@@ -248,6 +254,9 @@ open class Transcriber(
          * podcast opts out of it rather than into it.
          */
         const val DEFAULT_LANGUAGE = "en"
+
+        /** Whisper detects the language from the audio. Never takes a prompt. */
+        const val AUTO_LANGUAGE = "auto"
 
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5

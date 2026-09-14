@@ -1,5 +1,6 @@
 package com.rsstowhisper
 
+import com.rsstowhisper.external.Transcriber
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.nio.file.Path
@@ -343,5 +344,99 @@ class AppConfigTest {
         val overridden = AppConfig.load(Args(recoverOrphans = true, orphanRecoveryLimit = 5), env)
         assertTrue(overridden.recoverOrphans)
         assertEquals(5, overridden.orphanRecoveryLimit)
+    }
+
+    private fun configWith(
+        tmp: Path,
+        body: String,
+    ): AppConfig {
+        val yaml = tmp.resolve("pods.yaml").toFile()
+        yaml.writeText(body)
+        return AppConfig.load(
+            mapOf(
+                "PIPELINE_CONFIG_PATH" to yaml.absolutePath,
+                "PIPELINE_DATA_DIRECTORY" to "/data",
+                "PIPELINE_WHISPER_SERVER_URL" to "http://whisper",
+            ),
+        )
+    }
+
+    @Test
+    fun `a podcast can supply its own initial prompt`(
+        @TempDir tmp: Path,
+    ) {
+        val config =
+            configWith(
+                tmp,
+                """
+                language: en
+                podcasts:
+                - name: Une Emission
+                  url: https://example.com/fr.rss
+                  language: fr
+                  initial_prompt: Bonjour, et bienvenue dans cette emission.
+                """.trimIndent(),
+            )
+
+        assertEquals("Bonjour, et bienvenue dans cette emission.", config.podcasts.single().initialPrompt)
+    }
+
+    @Test
+    fun `the top-level initial prompt defaults to the English one`(
+        @TempDir tmp: Path,
+    ) {
+        val config = configWith(tmp, "language: en" + System.lineSeparator())
+
+        assertEquals(Transcriber.DEFAULT_INITIAL_PROMPT, config.initialPrompt)
+    }
+
+    @Test
+    fun `a prompt against auto is refused rather than silently dropped`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(tmp, "language: auto" + System.lineSeparator() + "initial_prompt: Hello there.")
+            }
+        assertTrue(e.message!!.contains("auto"), e.message!!)
+    }
+
+    @Test
+    fun `a podcast prompt with no language of its own is refused`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(
+                    tmp,
+                    """
+                    podcasts:
+                    - name: Une Emission
+                      url: https://example.com/fr.rss
+                      initial_prompt: Bonjour.
+                    """.trimIndent(),
+                )
+            }
+        assertTrue(e.message!!.contains("Une Emission"), e.message!!)
+    }
+
+    @Test
+    fun `a podcast prompt against auto is refused`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(
+                    tmp,
+                    """
+                    podcasts:
+                    - name: Mixed Show
+                      url: https://example.com/x.rss
+                      language: auto
+                      initial_prompt: Bonjour.
+                    """.trimIndent(),
+                )
+            }
+        assertTrue(e.message!!.contains("Mixed Show"), e.message!!)
     }
 }

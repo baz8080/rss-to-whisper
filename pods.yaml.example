@@ -74,7 +74,12 @@ podcasts:
   min_episode_duration_seconds: 0
 
 # A feed in another language overrides the global setting rather than forcing
-# every other show to be detected.
+# every other show to be detected. Its own initial_prompt keeps the punctuation
+# lever the English default cannot give it -- written in the feed's own language,
+# and generic, since a prompt biases vocabulary as well as style.
 - name: Une Emission Francaise
   url: https://example.com/fr.rss
   language: fr
+  initial_prompt: >-
+    Bonjour, et bienvenue dans cette emission. Aujourd'hui, nous allons parler
+    de plusieurs choses, et je pense que cela vous plaira. Commencons.

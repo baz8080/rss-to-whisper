@@ -2,6 +2,7 @@ package com.rsstowhisper.pipeline
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.TranscriberUnavailable
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -250,7 +251,6 @@ class RetranscribeTest {
         }
     }
 
-    /** A marker nobody can parse must not hide the episode; it reads as never attempted. */
     @Test
     fun `an unreadable attempt marker is treated as never attempted`(
         @TempDir tempDir: Path,
@@ -330,7 +330,6 @@ class RetranscribeTest {
         assertTrue(Instant.parse(Files.readString(attemptMarker(dir))).epochSecond > 0)
     }
 
-    /** No audio returns before anything is decoded, and that is still an attempt. */
     @Test
     fun `an episode with no audio still records the attempt`(
         @TempDir tempDir: Path,
@@ -344,7 +343,6 @@ class RetranscribeTest {
         assertTrue(Files.exists(attemptMarker(dir)), "no attempt marker after an episode with no audio")
     }
 
-    /** A dry run reports what it would redo; recording an attempt would be doing something. */
     @Test
     fun `a dry run records no attempt`(
         @TempDir tempDir: Path,
@@ -355,6 +353,29 @@ class RetranscribeTest {
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
 
         assertFalse(Files.exists(attemptMarker(dir)))
+    }
+
+    /**
+     * A server that dies partway would otherwise send the rest of the window to
+     * the back of the queue unexamined, for as many runs as it takes to come
+     * round again.
+     */
+    @Test
+    fun `an episode whose decode could not reach whisper records no attempt`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                transcriberFails = { throw TranscriberUnavailable("nothing listening") },
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertFalse(Files.exists(attemptMarker(dir)), "an untried episode was rotated to the back")
     }
 
     @Test

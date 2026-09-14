@@ -114,10 +114,18 @@ internal object RetranscribeTargets {
 
         // Never attempted sorts first; the name breaks ties so a run with the
         // same corpus picks the same episodes, which shuffling would not.
+        //
+        // Read once each, not inside the comparator: that is one open per
+        // episode rather than one per comparison, on a scan already slow enough
+        // to need a limit -- and a key that cannot change underneath the sort
+        // while another instance is writing markers to the same directory.
         val ordered =
-            flagged.sortedWith(
-                compareBy<Path, Instant?>(nullsFirst()) { lastAttempted(it) }.thenBy { it.name },
-            )
+            flagged
+                .map { it to lastAttempted(it) }
+                .sortedWith(
+                    compareBy<Pair<Path, Instant?>, Instant?>(nullsFirst()) { it.second }
+                        .thenBy { it.first.name },
+                ).map { it.first }
 
         logger.info("Found ${ordered.size} flagged episodes")
         return if (limit > 0) ordered.take(limit) else ordered

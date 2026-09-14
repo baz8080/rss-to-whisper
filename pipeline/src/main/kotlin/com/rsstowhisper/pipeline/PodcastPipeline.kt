@@ -177,12 +177,22 @@ class PodcastPipeline(
         logger.info("Re-transcribing ${targets.size} episodes")
         var done = 0
         for (target in targets) {
-            markRetranscribeAttempted(target)
-            try {
-                if (retranscribeEpisode(target)) done++
-            } catch (e: Exception) {
-                logger.error("Could not re-transcribe ${target.fileName}", e)
-            }
+            val attempted =
+                try {
+                    if (retranscribeEpisode(target)) done++
+                    true
+                } catch (e: TranscriberUnavailable) {
+                    // Nothing was decoded, so nothing was learned about this
+                    // episode. Rotating it to the back would mean a server that
+                    // died on the third target sent the rest of the window away
+                    // unexamined, for as many runs as it takes to come round.
+                    logger.error("Could not re-transcribe ${target.fileName}: ${e.message}")
+                    false
+                } catch (e: Exception) {
+                    logger.error("Could not re-transcribe ${target.fileName}", e)
+                    true
+                }
+            if (attempted) markRetranscribeAttempted(target)
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
         return decodingWorked()
@@ -1012,11 +1022,7 @@ class PodcastPipeline(
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */
         internal const val RECOVERY_FAILED_FILENAME = "recovery-failed"
 
-        /**
-         * When `--retranscribe-flagged` last picked this episode, whatever came
-         * of it. Written before the decode, so an episode that crashes the run
-         * still rotates to the back rather than being picked again forever.
-         */
+        /** When `--retranscribe-flagged` last decoded this episode, whatever came of it. */
         internal const val RETRANSCRIBE_ATTEMPTED_FILENAME = "retranscribe-attempted"
 
         private val logger = LoggerFactory.getLogger(PodcastPipeline::class.java)

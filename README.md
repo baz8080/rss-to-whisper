@@ -759,8 +759,10 @@ sorted list forever and starve everything behind it, costing decode time on ever
 changing nothing.
 
 The time is recorded for every attempt, not every success, because the episodes that
-starve the selection are exactly the ones each re-decode refuses. It is written before
-the decode, so an episode that crashes the run still rotates to the back.
+starve the selection are exactly the ones each re-decode refuses. The exception is a
+decode that could not reach the whisper server: nothing was learned about that episode,
+so it keeps its place rather than rotating away untried — otherwise a server that died
+partway through would send the rest of the window to the back of the queue unexamined.
 
 Each target needs its `audio.mp3`; one without it is reported and skipped. The rewrite
 keeps every existing field and replaces only `episode_transcript` and `episode_quality`

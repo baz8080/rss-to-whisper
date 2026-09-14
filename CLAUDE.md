@@ -50,6 +50,9 @@ Configure `pods.yaml` with:
 - `orphan_recovery_limit` — cap orphan recoveries per run across all podcasts (default: 0, no limit)
 - `initial_prompt` — the prompt sent with a feed's decodes, written in its `language`; set per podcast or top-level. A podcast that sets it must set `language` too, and neither may be `auto`
 
+`language` is checked against whisper's own code list at startup — an unrecognised one
+would otherwise decode in the wrong language silently.
+
 - `notify_url` — POST the run's summary line here as text/plain when a run finishes (optional)
 
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, and the run

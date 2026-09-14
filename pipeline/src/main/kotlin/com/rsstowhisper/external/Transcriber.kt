@@ -258,6 +258,25 @@ open class Transcriber(
         /** Whisper detects the language from the audio. Never takes a prompt. */
         const val AUTO_LANGUAGE = "auto"
 
+        /**
+         * Every code whisper.cpp recognises, from the `g_lang` map in its
+         * source. It is the model's own token set rather than server config, so
+         * it does not drift; hardcoding it costs a hundred short strings and
+         * catches a typo that shape validation cannot. Note `haw` and `yue`:
+         * not every code is two letters.
+         */
+        val SUPPORTED_LANGUAGES: Set<String> =
+            setOf(
+                "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs",
+                "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu",
+                "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka",
+                "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml",
+                "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
+                "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
+                "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo",
+                "yue", "zh",
+            )
+
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5
 

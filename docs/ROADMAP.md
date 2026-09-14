@@ -1,8 +1,13 @@
 # Roadmap
 
-Planned features, with enough detail that a later session can pick any one up cold.
+Every feature this document planned has now shipped or been declined; what is left
+lives in the issues linked below. It stays as the record of what was built and why,
+and of what was deliberately not.
+
 The site and pipeline are for personal use: prefer the small, direct implementation
-over the general one, and stop when the feature works for one person.
+over the general one, and stop when the feature works for one person. Read
+"Explicitly declined" before adding anything -- most of it was declined on that
+principle rather than on difficulty.
 
 Done so far from this list:
 
@@ -98,8 +103,10 @@ Done so far from this list:
   episode one sorts keys, which would alphabetise it and make the insertion order the
   class relies on inert. Reports are pruned at 14 days like the error log, and a stamped
   name already taken gets a `-2` suffix, because two instances share a data directory and
-  the stamp is only to the second. The web side of the original entry -- W4 showing
-  `latest-run.json` -- was not built; the file is there if it is ever wanted.
+  the stamp is only to the second. A dry run writes no report at all: a report records
+  work done, and one from a dry run would overwrite `latest-run.json` with a record of
+  none. The web side of the original entry -- W4 showing `latest-run.json` -- was not
+  built; the file is there if it is ever wanted.
 
 Explicitly declined:
 
@@ -110,6 +117,20 @@ Explicitly declined:
   would not use it. `/api/episode/{id}` returns the stored VTT, which covers the one case
   that mattered. Note that SRT would still need cue *end* times, which `parseTranscript`
   discards -- its regex captures only the start.
+- **P7, episode lock for two instances on one data directory.** Two instances with
+  different `pods.yaml` files already work: different feeds mean different podcast
+  directories and no `audio.mp3.part` collision. The lock only buys two instances sharing
+  the *same* feeds, which the README forbids and nobody wants -- the dual-instance setup
+  it was written for paid off on an M2 and is not how this runs now. Against that it is
+  the riskiest thing left: since P5 the download is submitted to the prefetch thread
+  before the current episode decodes, so the lock has to be taken on the main thread at
+  submit time and released after the decode or when the pending future is abandoned --
+  a lifetime across an async boundary with three exit paths, which a fake transcriber
+  cannot really test. A wrong lock is worse than none: too short a stale window and both
+  instances decode the same episode, too long and a crashed run blocks an episode for
+  hours, and either way it fails silently. The shared-data-directory case that does bite
+  -- both instances writing `logs/` -- is already handled by the run report's stamped
+  filename suffix. Reopen this only if two instances ever need the same feeds.
 
 Filed as issues rather than carried here, because each needs a judgement or a
 measurement this document cannot make for you:
@@ -117,6 +138,10 @@ measurement this document cannot make for you:
 - **#67** — let a podcast supply its own `initial_prompt`, so a non-English feed keeps
   the punctuation lever it currently gives up. Real the first time a non-English feed is
   added; the corpus is entirely English today.
+- **#76** — an unrecognised language code decodes in the wrong language instead of
+  failing: whisper.cpp looks the code up in a map keyed by lower case and never checks
+  the result, so an unmatched one silently selects the wrong language token. Pairs with
+  #67; both are `pods.yaml` going unvalidated, and one pass covers them.
 - **#68** — rank quality flags by severity instead of counting them. Wants corpus data
   from `episode_quality.flags` before the ordering is chosen.
 - **#69** — `--retranscribe-limit` always takes the same prefix, so a permanently flagged
@@ -206,34 +231,4 @@ Everything listed here has shipped; see "Done so far" above.
 
 ## Pipeline
 
-Remaining, in suggested order: P8, P7.
-
-### P7. Episode lock for two instances on one data directory
-
-**Why.** The README says two instances must not share feeds because both would stage the
-same `audio.mp3.part` and one would delete the other's. A lock per episode directory lifts
-that restriction.
-
-**Where.** `PodcastPipeline.transcribeAll` and `recoverEpisode`, README section
-"Running two instances at once".
-
-**Design.** `Files.createFile(episodeDir.resolve(".transcribing"))` is atomic and fails if
-the file exists; write pid and timestamp into it. If it exists and is younger than six
-hours, skip the episode with a debug line; older is stale (a crashed run) and is taken
-over. The existing "transcribed by something else" check in `writeTranscriptArtifacts`
-stays as the last line of defence.
-
-Since P5 the download no longer sits next to the decode: `transcribeAll` submits the
-download for episode N+1 to the prefetch thread before decoding N. Take the lock on the
-main thread at submit time, so the other instance is excluded from the download as well as
-the decode, and release it after the decode or when the pending future is abandoned in the
-`finally`. A lock taken inside the submitted task instead would release before the decode
-and let both instances decode the same episode.
-
-**Gotchas.** `O_EXCL` semantics hold on local disks and NFSv3+, and on SMB in practice; say
-so in the README rather than promising more.
-
-**Tests.** The `onTranscribe` hook in `buildPipeline` already simulates another instance;
-add a case with a fresh lock (skipped) and a stale lock (processed).
-
-**Effort.** Small.
+Everything listed here has shipped; see "Done so far" above.

@@ -197,16 +197,30 @@ data class QualityReport(
      * precision [toMap] stores, or a report read back off disk loses to one in
      * memory on digits it was never able to keep.
      */
-    fun isBetterThan(other: QualityReport): Boolean =
-        when {
+    fun isBetterThan(other: QualityReport): Boolean {
+        // Counting only what both reports could have raised. low-confidence
+        // needs word probabilities, so a decode scored without them cannot trip
+        // it and would win on raw count against one that did.
+        val bothMeasured = hasWordTimes && other.hasWordTimes
+        val mine = comparableFlagCount(bothMeasured)
+        val theirs = other.comparableFlagCount(bothMeasured)
+
+        return when {
             // Ahead of the count because an empty decode trips exactly one
             // flag, so on count alone it beats any decode bad enough to trip
             // two. A poor transcript is worth more than none, and on the orphan
             // path none is permanent.
             hasSpeech != other.hasSpeech -> hasSpeech
-            flags.size != other.flags.size -> flags.size < other.flags.size
+            mine != theirs -> mine < theirs
+            // Only once the flags agree: gaining word times is worth having,
+            // but not worth trading a transcript that scored better for.
+            hasWordTimes != other.hasWordTimes -> hasWordTimes
             else -> round(punctuationPerWord) > round(other.punctuationPerWord)
         }
+    }
+
+    private fun comparableFlagCount(bothMeasured: Boolean): Int =
+        if (bothMeasured) flags.size else flags.count { it != TranscriptQuality.FLAG_LOW_CONFIDENCE }
 
     /**
      * Both, because the flag is only as good as whoever wrote the report:
@@ -216,6 +230,9 @@ data class QualityReport(
      * the two always agree.
      */
     internal val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
+
+    /** Whether the decode carried word probabilities, which is what low-confidence needs. */
+    private val hasWordTimes: Boolean get() = meanWordProbability != null
 
     val summary: String
         get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"

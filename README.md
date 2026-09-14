@@ -795,6 +795,13 @@ It needs a target. `--retranscribe-force` on its own is refused rather than igno
 since the run would otherwise fall through to an ordinary feed run — which is what a
 script whose target list came out empty would get, having asked for the opposite.
 
+Flags are counted only where both decodes could have raised them. `low-confidence`
+needs word probabilities, so a decode scored without them cannot trip it and would
+otherwise win on raw count against one that did — keeping a transcript with no word
+timings forever, since every re-decode that finally produced them would be discarded.
+With the flags level, the decode that has word timings wins; it is worth having, but not
+worth trading a better-scoring transcript for.
+
 A re-decode is kept only if it scores at least as well as the transcript it would
 replace, by the same measure the quality gate's retry uses — fewer flags, then better
 punctuation. Whisper is not deterministic, so a redo can come back worse than what it

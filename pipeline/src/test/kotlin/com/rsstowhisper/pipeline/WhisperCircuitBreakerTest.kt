@@ -11,12 +11,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-/**
- * A whisper server that is down used to cost a whole run: every episode is
- * downloaded before it is decoded, and the per-episode catch that stops one
- * bad episode ending a run is exactly what hides a server that will fail on
- * all of them. These cover the preflight and the give-up threshold.
- */
 class WhisperCircuitBreakerTest {
     private val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
 
@@ -64,9 +58,7 @@ class WhisperCircuitBreakerTest {
         assertFalse(pipeline.run())
 
         assertEquals(3, txSvc.calls.size)
-        // One episode is prefetched while the current one decodes, so the last
-        // failure can have one download already in flight behind it -- but no
-        // more: the rest of the feed must stay unfetched.
+        // One episode is prefetched during the current decode, so one extra download is expected.
         assertTrue(feedSvc.downloads.size <= 4, "downloaded ${feedSvc.downloads.size} episodes")
     }
 
@@ -93,11 +85,6 @@ class WhisperCircuitBreakerTest {
         assertEquals(5, txSvc.calls.size)
     }
 
-    /**
-     * A refusal is still an answer. Two unreachable decodes either side of one
-     * mp3 whisper refused must not add up to a server that was demonstrably
-     * there in between.
-     */
     @Test
     fun `a refusal from the server clears the count as surely as a decode does`(
         @TempDir tempDir: Path,
@@ -123,11 +110,6 @@ class WhisperCircuitBreakerTest {
         assertEquals(5, txSvc.calls.size)
     }
 
-    /**
-     * The breaker is for a server that is not there. An episode whose decode
-     * throws for its own reasons says nothing about the next one, and must not
-     * end the run.
-     */
     @Test
     fun `an ordinary decode failure never trips the breaker`(
         @TempDir tempDir: Path,
@@ -194,11 +176,6 @@ class WhisperCircuitBreakerTest {
         assertEquals(listOf("https://feed"), feedSvc.requestedUrls)
     }
 
-    /**
-     * Orphan recovery reports what it left for a later run as the orphan limit
-     * being reached. Reaching it with the breaker already tripped names the
-     * wrong cause for a run that stopped for a quite different reason.
-     */
     @Test
     fun `giving up does not blame the orphan limit for what it left behind`(
         @TempDir tempDir: Path,
@@ -224,11 +201,6 @@ class WhisperCircuitBreakerTest {
         )
     }
 
-    /**
-     * The same mis-blame one level down: the breaker can trip during recovery
-     * itself, and the summary there reports what it did not reach as the
-     * orphan limit -- a limit that may not even be set.
-     */
     @Test
     fun `orphan recovery names the breaker, not the orphan limit, for what it left`(
         @TempDir tempDir: Path,

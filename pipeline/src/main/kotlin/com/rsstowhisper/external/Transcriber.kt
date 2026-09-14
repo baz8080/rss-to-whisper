@@ -10,23 +10,10 @@ import java.io.IOException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
-/**
- * The whisper server could not be reached, or would not answer.
- *
- * Distinct from a decode that produced nothing: that is an answer about the
- * audio, and the episode is dealt with. This says nothing was decoded at all,
- * and the next episode will fare no better.
- */
+/** Nothing was decoded at all: the server could not be reached, or would not answer. */
 class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
-/**
- * The whisper server answered, and refused this request.
- *
- * The refusal is about this audio -- whisper.cpp answers 400 "failed to read
- * audio data" for an mp3 it cannot decode. The episode fails on its own
- * merits, and the server having answered at all is the evidence the pipeline's
- * breaker is counting.
- */
+/** The server answered and refused this request. The episode fails on its own merits. */
 class TranscriberRejected(message: String) : RuntimeException(message)
 
 open class Transcriber(
@@ -205,9 +192,6 @@ open class Transcriber(
                 throw TranscriberUnavailable("Could not reach the whisper server at $serverUrl", e)
             }
         return response.use {
-            // Read first, and inside the guard: a server killed mid-response
-            // fails here rather than at execute(), and that is the same
-            // unreachable server by a later name.
             val body =
                 try {
                     it.body?.string()
@@ -216,46 +200,25 @@ open class Transcriber(
                 }
             if (!it.isSuccessful) {
                 val detail = "Whisper server returned ${it.code}: $body"
-                // A status the server chose is the server talking, and what it
-                // is talking about is almost always THIS request. whisper.cpp
-                // answers 400 "failed to read audio data" for an mp3 it cannot
-                // decode and 500 for one it cannot process; counting those
-                // against the breaker would let three bad audio files abandon
-                // the run -- and abandon it again on every later run, because
-                // the episodes ahead of them are already transcribed and so
-                // never decode to clear the count.
+                // A status the server chose is about this request, not about the server.
                 throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else TranscriberRejected(detail)
             }
-            // A decode that found no speech still answers with a segment list.
-            // Nothing at all is the server being broken, not the audio being
-            // silent, so the next episode will fare no better either.
+            // A decode with no speech still returns a segment list; nothing at all is a broken server.
             body?.takeIf { text -> text.isNotBlank() }
                 ?: throw TranscriberUnavailable("Whisper server returned an empty body")
         }
     }
 
-    /**
-     * Whether anything is listening, asked once before a run commits to it.
-     *
-     * Any answer at all counts, including a 404: this has to tell a server that
-     * is there from one that is not, and which routes a given build exposes is
-     * not something to depend on. whisper.cpp serves `/` with a page, but
-     * `--request-path` moves that, and a proxy may route only `/inference` --
-     * none of which is a reason to refuse to run. The exception is a gateway
-     * saying its upstream is gone, which is exactly what this is looking for.
-     */
+    /** Whether anything is listening, asked once before a run commits to it. Any answer counts. */
     open fun ping(): Boolean {
         val request =
             try {
                 Request.Builder().url(serverUrl).get().build()
             } catch (e: IllegalArgumentException) {
-                // Caught here rather than left to the first decode: a config
-                // typo should not survive until an episode has been downloaded.
                 logger.error("Not a usable whisper server URL: {} ({})", serverUrl, e.message)
                 return false
             }
-        // Its own timeouts: the client's are sized for a decode, and a
-        // preflight that can hang for ninety minutes is not a preflight.
+        // The shared client's timeouts are sized for a decode, not for a preflight.
         val client =
             httpClient.newBuilder()
                 .callTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -274,11 +237,7 @@ open class Transcriber(
 
         private const val PING_TIMEOUT_SECONDS = 15L
 
-        /**
-         * Statuses that mean the decoder is not there, rather than that it
-         * disliked one request: a gateway with nothing behind it, and
-         * whisper.cpp's own 503 while it is still loading its model.
-         */
+        /** The decoder is not there, as against it disliking one request. */
         private val UPSTREAM_GONE_CODES = setOf(502, 503, 504)
 
         /**

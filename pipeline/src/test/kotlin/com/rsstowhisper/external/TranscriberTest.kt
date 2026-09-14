@@ -310,14 +310,7 @@ class TranscriberTest {
         assertTrue(ex.message!!.contains("500"))
     }
 
-    /**
-     * whisper.cpp answers 400 "failed to read audio data" for an mp3 it cannot
-     * decode, and 500 for one it cannot process. Both are the server talking
-     * about THIS request, so neither is evidence about the next episode -- and
-     * counting them would let three bad audio files abandon the run, then
-     * abandon every later run too, since the episodes ahead of them are already
-     * transcribed and never decode to clear the count.
-     */
+    /** whisper.cpp answers 400 for an mp3 it cannot decode, 500 for one it cannot process. */
     @Test
     fun `a status the server chose about this request is not the server being gone`(
         @TempDir tmp: Path,
@@ -343,11 +336,7 @@ class TranscriberTest {
         }
     }
 
-    /**
-     * A decode that found no speech still answers with a segment list, so an
-     * empty body is the server being broken rather than the audio being
-     * silent -- and the next episode will fare no better.
-     */
+    /** A decode with no speech still returns a segment list. */
     @Test
     fun `transcribe throws on empty body`(
         @TempDir tmp: Path,
@@ -360,11 +349,6 @@ class TranscriberTest {
         }
     }
 
-    /**
-     * A server that is not listening surfaces as an IOException from OkHttp.
-     * Left as one, it reads to the pipeline like any other bad episode, and a
-     * whole run is spent downloading audio to fail on it one file at a time.
-     */
     @Test
     fun `transcribe reports an unreachable server as unavailable rather than an IO error`(
         @TempDir tmp: Path,
@@ -397,11 +381,7 @@ class TranscriberTest {
         }
     }
 
-    /**
-     * `--request-path` moves whisper.cpp's page off `/`, and a proxy may route
-     * only `/inference`. Neither is a reason to refuse to run: something
-     * answered, which is all the preflight is asking.
-     */
+    /** `--request-path` moves whisper.cpp's page off `/`, and a proxy may route only `/inference`. */
     @Test
     fun `ping is true for a server that answers the base url with an error`() {
         for (code in listOf(401, 404, 500)) {
@@ -409,11 +389,6 @@ class TranscriberTest {
         }
     }
 
-    /**
-     * The decode client reads for ninety minutes, which is right for a decode
-     * and useless for a preflight: a server that accepts the connection and
-     * then says nothing would hang the run before it started.
-     */
     @Test
     fun `ping does not inherit the read timeout sized for a decode`() {
         var readTimeoutMillis = -1
@@ -439,12 +414,6 @@ class TranscriberTest {
         )
     }
 
-    /**
-     * Only `execute()` used to be guarded, so a server killed while its
-     * response was still streaming failed at the body read instead -- which is
-     * the same unreachable server, arriving as a raw IOException that the
-     * pipeline's per-episode catch would swallow.
-     */
     @Test
     fun `a server that stops mid-response is an unreachable server`(
         @TempDir tmp: Path,
@@ -487,7 +456,6 @@ class TranscriberTest {
         assertFalse(Transcriber("localhost:8080", clientReturning()).ping())
     }
 
-    /** An OkHttp client that cannot reach anything, which is what a server that is down looks like. */
     private fun clientThrowing(): OkHttpClient =
         OkHttpClient.Builder()
             .addInterceptor { throw IOException("Connection refused") }

@@ -88,6 +88,12 @@ APP_AUDIO_BASE_URL=http://your-audio-server:port
 - Always run `./gradlew ktlintFormat && ./gradlew test` before committing
 - `pipeline` JVM heap is set to 4GB by default (`-Xmx4g`) to handle large whisper model loads
 - Thymeleaf is used as a plain library in `web` (no Quarkiverse extension) via a hand-rolled CDI producer
+- **Comment sparingly.** Do not narrate what the code already says, and do not restate a
+  design decision at each site that follows it — state it once, in `docs/ROADMAP.md` or
+  the PR, and let the code stand. A comment earns its place only when it records
+  something the reader cannot see: an external system's behaviour, a measurement, or a
+  trap that would otherwise be refactored away. Prefer one line to a block; no KDoc on a
+  test whose name already says what it asserts.
 
 ## Planned work
 

@@ -78,9 +78,6 @@ class PodcastPipeline(
             return false
         }
 
-        // Asked once, before a feed is fetched. Every episode is downloaded
-        // before it is decoded, so a server that is down otherwise costs a run
-        // of audio fetched at length to fail on one episode at a time.
         if (!transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
@@ -93,13 +90,7 @@ class PodcastPipeline(
         return !transcriberIsDown()
     }
 
-    /**
-     * Whether the run has given up on the whisper server.
-     *
-     * Checked before each decode rather than thrown from one, because the
-     * callers below deliberately swallow a failure per episode so one bad
-     * episode cannot end a run -- which is exactly what hides this.
-     */
+    /** Checked before each decode, not thrown: the callers below swallow a failure per episode. */
     private fun transcriberIsDown(): Boolean =
         config.maxConsecutiveTranscriberErrors > 0 &&
             consecutiveTranscriberErrors >= config.maxConsecutiveTranscriberErrors
@@ -315,9 +306,6 @@ class PodcastPipeline(
 
         transcribeAll(feed, podcast, pending)
 
-        // Nothing below is worth doing once the run has given up, and the
-        // reports in there would blame skip_after_consecutive for the entries
-        // the breaker is what actually stopped.
         if (transcriberIsDown()) return
 
         try {
@@ -575,8 +563,6 @@ class PodcastPipeline(
             logger.warn("${podcast.name}: $withoutAudio directories have neither audio nor a transcript")
         }
         if (pending > 0) {
-            // Two things stop this loop, and naming the wrong one sends whoever
-            // reads the log to a limit that may not even be set.
             val why = if (transcriberIsDown()) "the whisper server stopped answering" else "--orphan-limit reached"
             logger.info("${podcast.name}: $pending left for a later run; $why")
         }
@@ -893,10 +879,7 @@ class PodcastPipeline(
                 noteTranscriberUnavailable(e)
                 throw e
             } catch (e: TranscriberRejected) {
-                // A refusal is still an answer, so it clears the count as
-                // surely as a decode does. Leaving it standing would let two
-                // unreachable decodes either side of a bad mp3 add up to a
-                // server that was demonstrably there in between.
+                // A refusal is still an answer.
                 consecutiveTranscriberErrors = 0
                 throw e
             }

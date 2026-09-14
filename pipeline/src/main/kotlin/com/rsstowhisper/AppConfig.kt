@@ -23,8 +23,6 @@ data class AppConfig(
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
     val qualityRetry: Boolean = true,
-    /** Consecutive failures to reach whisper before the run gives up, 0 to never. */
-    val maxConsecutiveTranscriberErrors: Int = 3,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {

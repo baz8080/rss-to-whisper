@@ -45,7 +45,6 @@ Configure `pods.yaml` with:
 - `skip_after_consecutive` — stop processing a feed after N already-transcribed episodes in a row (default: 20)
 - `recover_orphans` — transcribe episodes that aged out of the feed before being processed (default: true)
 - `orphan_recovery_limit` — cap orphan recoveries per run across all podcasts (default: 0, no limit)
-- `max_consecutive_transcriber_errors` — give up after N decodes in a row that could not reach the whisper server (default: 3, 0 never gives up). The server is also pinged once before the first feed is fetched.
 
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, and the run
 prints a warning/error count when it finishes.

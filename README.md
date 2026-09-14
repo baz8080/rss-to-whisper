@@ -544,7 +544,6 @@ transcribe exits `0`, so a wrapper script can tell a failed launch from a quiet 
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
 - `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Case does not matter; it is lower-cased before being sent, because whisper.cpp matches the code exactly and silently decodes with the wrong language token when it does not match
 - `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
-- `max_consecutive_transcriber_errors` — give up after this many decodes in a row that could not reach the whisper server (optional, default `3`; `0` never gives up; see [When whisper is not there](#when-whisper-is-not-there))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 
 `name` becomes the show's directory name, so changing it moves every episode of
@@ -769,32 +768,23 @@ finds rather than guessing which was meant.
 
 ### When whisper is not there
 
-Every episode is downloaded before it is decoded, so a whisper server that is down
-turns a run into hours of fetching audio to fail on one episode at a time — and the
-per-episode error handling that stops one bad episode ending a run is exactly what
-hides it.
+The server is asked for its base URL once, before the first feed is fetched; nothing
+listening, and the run exits `1` having downloaded nothing. Any answer counts, a 404
+included — `--request-path` moves whisper.cpp's page off `/`, and a proxy may route only
+`/inference`, neither of which is a reason to refuse to run. Only a gateway saying its
+upstream is gone (`502`, `503`, `504`) or nothing answering at all fails it.
 
-Two things prevent that. The server is asked for its base URL once, before the first
-feed is fetched; nothing listening, and the run exits `1` having downloaded nothing. Any
-answer counts, a 404 included — `--request-path` moves whisper.cpp's page off `/`, and a
-proxy may route only `/inference`, neither of which is a reason to refuse to run.
+If whisper goes away *during* a run, the run carries on to the end and then exits
+non-zero, naming how many episodes could not reach it. It does not stop early: the
+downloads are not wasted, since a completed `audio.mp3` is kept and the next run skips
+straight to decoding it. What the exit code buys is that a run which downloaded the whole
+backlog and transcribed none of it cannot look successful to whatever is driving it.
 
-During the run, decodes that could not reach the server are counted, and
-`max_consecutive_transcriber_errors` in a row ends the run. Only failures that say
-nothing is there count: a connection that goes nowhere or dies mid-response, a gateway
-answering `502`, `503` or `504`, or an empty response body. A status the server chose is
-the server talking, and
-what it is talking about is this request — whisper.cpp answers `400` for an mp3 it cannot
-decode and `500` for one it cannot process, and those episodes fail on their own merits
-as they always did. Counting them would let three bad audio files abandon the run, and
-abandon every later run too, since the episodes ahead of them are already transcribed and
-so never decode to clear the count. Anything that reaches the server resets the count — a
-refusal as surely as a decode, so two unreachable episodes either side of a bad mp3 do not
-add up to three. Set the key to `0` to never give up.
-
-Giving up this way exits non-zero, so a wrapper script sees a failed run rather than a
-quiet one. Episodes already transcribed are untouched, and the next run picks up where
-this one stopped.
+Only failures that say nothing is there count — a connection that goes nowhere or dies
+mid-response, a gateway `502`/`503`/`504`, or an empty body. A status the server chose is
+the server talking, and what it is talking about is that request: whisper.cpp answers
+`400` for an mp3 it cannot decode and `500` for one it cannot process, and those episodes
+fail on their own merits as they always did, without failing the run.
 
 ### Error log
 

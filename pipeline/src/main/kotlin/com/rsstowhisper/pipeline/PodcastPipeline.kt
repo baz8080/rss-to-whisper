@@ -12,7 +12,6 @@ import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
-import com.rsstowhisper.external.TranscriberRejected
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
@@ -50,8 +49,8 @@ class PodcastPipeline(
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
 
-    /** Reset by any decode that reaches the server. See [transcriberIsDown]. */
-    private var consecutiveTranscriberErrors = 0
+    /** Decodes that could not reach whisper. The run reports itself as failed if any did. */
+    private var decodesUnreachable = 0
 
     // Anchored on word boundaries so "repeat" does not also swallow "repeating".
     private val excludeKeywordRegex: Regex? =
@@ -71,7 +70,7 @@ class PodcastPipeline(
     fun run(): Boolean {
         val dataDir = config.dataDirectory
         orphansRecovered = 0
-        consecutiveTranscriberErrors = 0
+        decodesUnreachable = 0
 
         if (!Files.isWritable(Path.of(dataDir))) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
@@ -84,25 +83,18 @@ class PodcastPipeline(
         }
 
         for (podcast in config.podcasts) {
-            if (transcriberIsDown()) break
             processPodcast(podcast, dataDir)
         }
-        return !transcriberIsDown()
+        return reportUnreachableDecodes()
     }
 
-    /** Checked before each decode, not thrown: the callers below swallow a failure per episode. */
-    private fun transcriberIsDown(): Boolean =
-        config.maxConsecutiveTranscriberErrors > 0 &&
-            consecutiveTranscriberErrors >= config.maxConsecutiveTranscriberErrors
-
-    private fun noteTranscriberUnavailable(e: TranscriberUnavailable) {
-        consecutiveTranscriberErrors++
-        if (transcriberIsDown()) {
-            logger.error(
-                "Giving up: $consecutiveTranscriberErrors decodes in a row could not reach the whisper server. " +
-                    "The last said: ${e.message}",
-            )
-        }
+    /** False when whisper went away mid-run, so a run that transcribed nothing does not exit 0. */
+    private fun reportUnreachableDecodes(): Boolean {
+        if (decodesUnreachable == 0) return true
+        logger.error(
+            "$decodesUnreachable episodes could not reach the whisper server at ${config.whisperServerUrl}",
+        )
+        return false
     }
 
     /**
@@ -113,7 +105,7 @@ class PodcastPipeline(
      */
     fun retranscribe(request: RetranscribeRequest): Boolean {
         val dataDir = Path.of(config.dataDirectory)
-        consecutiveTranscriberErrors = 0
+        decodesUnreachable = 0
         if (!Files.isWritable(dataDir)) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
             return false
@@ -133,7 +125,6 @@ class PodcastPipeline(
         logger.info("Re-transcribing ${targets.size} episodes")
         var done = 0
         for (target in targets) {
-            if (transcriberIsDown()) break
             try {
                 if (retranscribeEpisode(target)) done++
             } catch (e: Exception) {
@@ -141,7 +132,7 @@ class PodcastPipeline(
             }
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
-        return !transcriberIsDown()
+        return reportUnreachableDecodes()
     }
 
     private fun retranscribeEpisode(episodeDirPath: Path): Boolean {
@@ -306,8 +297,6 @@ class PodcastPipeline(
 
         transcribeAll(feed, podcast, pending)
 
-        if (transcriberIsDown()) return
-
         try {
             scanForOrphans(feed, podcast, podPath, dataDir, prefixes, examined, brokeEarly)
         } catch (e: Exception) {
@@ -336,7 +325,6 @@ class PodcastPipeline(
 
         try {
             for ((index, episode) in pending.withIndex()) {
-                if (transcriberIsDown()) break
                 val entry = episode.entry
                 val current = next ?: submitDownload(prefetcher, episode)
                 // Queued behind the current download on the single thread, so it runs during the decode.
@@ -520,7 +508,7 @@ class PodcastPipeline(
         for (parsed in ordered) {
             // Tested before the readdir. Opening the rest of the backlog just to count it
             // costs seconds of network I/O per podcast, and the count is arithmetic.
-            if (budgetSpent() || transcriberIsDown()) break
+            if (budgetSpent()) break
             seen++
 
             val episodeDirPath = podPath.resolve(parsed.dirName)
@@ -563,8 +551,7 @@ class PodcastPipeline(
             logger.warn("${podcast.name}: $withoutAudio directories have neither audio nor a transcript")
         }
         if (pending > 0) {
-            val why = if (transcriberIsDown()) "the whisper server stopped answering" else "--orphan-limit reached"
-            logger.info("${podcast.name}: $pending left for a later run; $why")
+            logger.info("${podcast.name}: $pending left for a later run; --orphan-limit reached")
         }
         logger.info(
             "${podcast.name}: ${candidates.size} directories absent from the feed " +
@@ -844,7 +831,8 @@ class PodcastPipeline(
                 decodeAndScore(audioPath, episodePath, podcast)
             } catch (e: Exception) {
                 // The first decode is still a usable transcript; a failed retry
-                // must not cost the episode entirely.
+                // must not cost the episode entirely, nor fail the run.
+                if (e is TranscriberUnavailable) decodesUnreachable--
                 logger.warn("Retry of $label failed; keeping the first decode", e)
                 return warnIfFlagged(first, label)
             }
@@ -876,14 +864,9 @@ class PodcastPipeline(
             try {
                 transcriber.transcribe(audioPath, podcast.language ?: config.language)
             } catch (e: TranscriberUnavailable) {
-                noteTranscriberUnavailable(e)
-                throw e
-            } catch (e: TranscriberRejected) {
-                // A refusal is still an answer.
-                consecutiveTranscriberErrors = 0
+                decodesUnreachable++
                 throw e
             }
-        consecutiveTranscriberErrors = 0
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.

@@ -189,7 +189,6 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
     qualityRetry: Boolean = true,
-    maxConsecutiveTranscriberErrors: Int = 3,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
     transcriberAnswersPing: Boolean = true,
@@ -206,7 +205,6 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
             qualityRetry = qualityRetry,
-            maxConsecutiveTranscriberErrors = maxConsecutiveTranscriberErrors,
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))

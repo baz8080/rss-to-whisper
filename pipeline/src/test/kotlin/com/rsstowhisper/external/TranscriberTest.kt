@@ -316,10 +316,12 @@ class TranscriberTest {
         @TempDir tmp: Path,
     ) {
         for (code in listOf(400, 404, 413, 500)) {
-            assertFailsWith<TranscriberRejected>("$code was treated as an unreachable server") {
-                Transcriber("http://whisper-server", clientReturning(responseCode = code))
-                    .transcribe(mp3File(tmp))
-            }
+            val ex =
+                assertFailsWith<RuntimeException> {
+                    Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                        .transcribe(mp3File(tmp))
+                }
+            assertFalse(ex is TranscriberUnavailable, "$code was treated as an unreachable server")
         }
     }
 

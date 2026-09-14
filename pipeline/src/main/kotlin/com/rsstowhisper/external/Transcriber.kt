@@ -13,9 +13,6 @@ import java.util.concurrent.TimeUnit
 /** Nothing was decoded at all: the server could not be reached, or would not answer. */
 class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
-/** The server answered and refused this request. The episode fails on its own merits. */
-class TranscriberRejected(message: String) : RuntimeException(message)
-
 open class Transcriber(
     private val serverUrl: String,
     private val httpClient: OkHttpClient =
@@ -201,7 +198,7 @@ open class Transcriber(
             if (!it.isSuccessful) {
                 val detail = "Whisper server returned ${it.code}: $body"
                 // A status the server chose is about this request, not about the server.
-                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else TranscriberRejected(detail)
+                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else RuntimeException(detail)
             }
             // A decode with no speech still returns a segment list; nothing at all is a broken server.
             body?.takeIf { text -> text.isNotBlank() }

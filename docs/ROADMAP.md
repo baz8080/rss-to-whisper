@@ -58,26 +58,26 @@ Done so far from this list:
 - **W7, JSON API.** `quarkus-rest-jackson`, `/api/search` and `/api/episode/{id}`.
   `Episode` gained `snippetText` and `@get:JsonIgnore` on the three getters that should
   not be in a payload.
-- **P2, whisper preflight and circuit breaker.** `Transcriber.ping()` is asked once in
-  `run()` and `retranscribe()` before anything else happens, on its own short timeouts
-  rather than the ninety minutes the decode client allows. `TranscriberUnavailable` is
-  counted in `decodeAndScore`, the single choke point every decode path reaches, and
-  cleared by any decode that gets an answer; `max_consecutive_transcriber_errors`
-  (default 3) in a row makes `transcriberIsDown()` true, which the feed loop,
-  `recoverAll`, the re-transcribe loop and the podcast loop all check before their next
-  decode. The state is checked rather than thrown because those loops deliberately
-  swallow a failure per episode, which is exactly what hid a down server.
-  The line both halves draw is **reachability, not correctness**, and it is the one
-  thing here worth not relitigating. A status the server chose is the server talking,
-  and what it is talking about is that request: whisper.cpp answers 400 "failed to read
-  audio data" for an mp3 it cannot decode and 500 for one it cannot process. Counting
-  those would let three bad audio files abandon the run -- and abandon every later run,
-  because the episodes ahead of them are already transcribed and so never decode to
-  clear the count. So a refused request raises `TranscriberRejected` instead, which
-  clears the count as surely as a decode does; only a connection that goes nowhere or
-  dies mid-response (the body read is inside the guard, not just `execute()`), a gateway
-  `502`/`503`/`504`, or an empty body count. By the same rule the preflight accepts any
-  answer including a 404 (`--request-path` moves whisper.cpp's page off `/`).
+- **P2, whisper preflight.** `Transcriber.ping()` is asked once in `run()` and
+  `retranscribe()` before anything else happens, on its own short timeouts rather than
+  the ninety minutes the decode client allows. A decode that could not reach whisper
+  increments `decodesUnreachable`, which only makes the run exit non-zero at the end --
+  so a run that downloaded the backlog and transcribed none of it cannot look
+  successful. The line drawn is **reachability, not correctness**, and it is the one
+  thing here worth not relitigating: a status the server chose is the server talking,
+  and what it is talking about is that request (whisper.cpp answers 400 "failed to read
+  audio data" for an mp3 it cannot decode, 500 for one it cannot process). So only a
+  connection that goes nowhere or dies mid-response (the body read is inside the guard,
+  not just `execute()`), a gateway `502`/`503`/`504`, or an empty body count, and by the
+  same rule the preflight accepts any answer including a 404 (`--request-path` moves
+  whisper.cpp's page off `/`).
+  The circuit breaker the original entry called for -- a consecutive-failure count that
+  stopped the run early -- was built and then cut. Pipeline and whisper run on the same
+  machine, so an unreachable server fails instantly rather than after a timeout, and the
+  downloads it would have saved are reused by the next run. It cost four guards across
+  four loops and was the source of every review finding, one of which would have let
+  three undecodable mp3s wedge the pipeline permanently. Don't rebuild it without a
+  mid-run failure that actually hurt.
 
 Explicitly declined:
 

@@ -75,9 +75,10 @@ data class AppConfig(
         val code = value.lowercase()
         if (code == Transcriber.AUTO_LANGUAGE || code in Transcriber.SUPPORTED_LANGUAGES) return
         error(
-            "$what is \"$value\", which whisper does not recognise. Use an ISO 639-1 code " +
-                "(\"en\", \"fr\", \"de\") or \"auto\"; a language name is not one, and nor is a " +
-                "region tag like \"en-US\".",
+            "$what is \"$value\". Use an ISO 639-1 code (\"en\", \"fr\", \"de\") or \"auto\". A region " +
+                "tag like \"en-US\" or a 639-2 code like \"eng\" would decode in the wrong language; a " +
+                "name like \"english\" decodes correctly but is refused, since the initial prompt is " +
+                "matched on the code.",
         )
     }
 

@@ -259,11 +259,16 @@ open class Transcriber(
         const val AUTO_LANGUAGE = "auto"
 
         /**
-         * Every code whisper.cpp recognises, from the `g_lang` map in its
-         * source. It is the model's own token set rather than server config, so
-         * it does not drift; hardcoding it costs a hundred short strings and
-         * catches a typo that shape validation cannot. Note `haw` and `yue`:
-         * not every code is two letters.
+         * whisper.cpp's `g_lang` codes, hardcoded because the alternatives are
+         * worse: a shape check would reject `haw` and `yue`, which are three
+         * letters, and asking the server would put a network call in config
+         * loading.
+         *
+         * It tracks a version rather than being fixed -- `yue` was added at one
+         * point -- so a language a newer whisper gained has to be added here
+         * before it can be used. Whisper's full names (`english`) are
+         * deliberately absent: it accepts them, but the initial prompt is
+         * matched on the code, so a name would silently drop the prompt.
          */
         val SUPPORTED_LANGUAGES: Set<String> =
             setOf(

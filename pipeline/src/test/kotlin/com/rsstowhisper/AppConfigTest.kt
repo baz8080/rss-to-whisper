@@ -501,13 +501,27 @@ class AppConfigTest {
     fun `a code whisper does not recognise is refused at load`(
         @TempDir tmp: Path,
     ) {
-        for (bad in listOf("en-US", "pt-BR", "eng", "deu", "eb", "english", "fr ")) {
+        for (bad in listOf("en-US", "pt-BR", "eng", "deu", "eb", "fr ")) {
             val e =
                 assertFailsWith<IllegalStateException>("accepted $bad") {
                     configWith(tmp, "language: \"$bad\"")
                 }
             assertTrue(e.message!!.contains(bad), e.message!!)
         }
+    }
+
+    /**
+     * whisper does accept a full name -- whisper_lang_id falls back to matching
+     * g_lang's values -- so this one decodes correctly and is refused anyway:
+     * the initial prompt is matched on the code, so a name would silently drop
+     * the lever that fixes unpunctuated decodes.
+     */
+    @Test
+    fun `a language name is refused even though whisper would accept it`(
+        @TempDir tmp: Path,
+    ) {
+        val e = assertFailsWith<IllegalStateException> { configWith(tmp, "language: english") }
+        assertTrue(e.message!!.contains("english"), e.message!!)
     }
 
     @Test

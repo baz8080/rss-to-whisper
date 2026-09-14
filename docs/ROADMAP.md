@@ -86,7 +86,12 @@ Done so far from this list:
   `transcript.json` without annotating anything. `Notifier` POSTs the tally line as
   text/plain to `notify_url`, which is what ntfy.sh takes. Both are best-effort: a report
   that cannot be written and a notification that fails are warnings, because the run has
-  already done its work by then. The web side of the original entry -- W4 showing
+  already done its work by then -- and both happen in a `finally`, since a run that died
+  is exactly when its summary is worth having. The report gets its own mapper: the
+  episode one sorts keys, which would alphabetise it and make the insertion order the
+  class relies on inert. Reports are pruned at 14 days like the error log, and a stamped
+  name already taken gets a `-2` suffix, because two instances share a data directory and
+  the stamp is only to the second. The web side of the original entry -- W4 showing
   `latest-run.json` -- was not built; the file is there if it is ever wanted.
 
 Explicitly declined:

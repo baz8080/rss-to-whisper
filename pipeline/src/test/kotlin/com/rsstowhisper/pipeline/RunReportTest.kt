@@ -133,6 +133,98 @@ class RunReportTest {
         assertTrue((report["duration_seconds"] as Int) >= 0)
     }
 
+    /**
+     * An entry with no date passes every skip rule and then fails the
+     * date-prefix requirement, in the decide pass, before anything is
+     * downloaded. It is still an episode this run did not get.
+     */
+    @Test
+    fun `an entry that fails before it is downloaded is counted as failed`(
+        @TempDir tempDir: Path,
+    ) {
+        val feed = makeFeed(makeEntry("Undated", publishedDate = null), makeEntry("Real Episode"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(PodcastConfig(name = "Show", url = "https://feed")), feed)
+
+        pipeline.run()
+
+        val show = podcast(readReport(tempDir), "Show")
+        assertEquals(1, show["transcribed"])
+        assertEquals(1, show["failed"])
+    }
+
+    /** Two instances can share a data directory, and the stamp is only to the second. */
+    @Test
+    fun `a second report in the same second does not overwrite the first`(
+        @TempDir tempDir: Path,
+    ) {
+        val logs = Files.createDirectories(tempDir.resolve("logs"))
+        val podcasts = listOf(PodcastConfig(name = "Show", url = "https://feed"))
+
+        buildPipeline(tempDir, podcasts, makeFeed(makeEntry("One"))).first.run()
+        buildPipeline(tempDir, podcasts, makeFeed(makeEntry("Two"))).first.run()
+
+        val stamped = Files.list(logs).use { it.toList() }.filter { it.fileName.toString().startsWith("run-") }
+        assertEquals(2, stamped.size, "expected two reports, got $stamped")
+    }
+
+    @Test
+    fun `reports older than the retention window are pruned`(
+        @TempDir tempDir: Path,
+    ) {
+        val logs = Files.createDirectories(tempDir.resolve("logs"))
+        val old = Files.writeString(logs.resolve("run-20200101-000000.json"), "{}")
+        Files.setLastModifiedTime(
+            old,
+            java.nio.file.attribute.FileTime.from(java.time.Instant.now().minus(java.time.Duration.ofDays(30))),
+        )
+
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(PodcastConfig(name = "Show", url = "https://feed")), makeFeed(makeEntry("One")))
+        pipeline.run()
+
+        assertTrue(Files.notExists(old), "the old report was not pruned")
+        assertTrue(Files.exists(logs.resolve(RunReport.LATEST_FILENAME)))
+    }
+
+    /** The report is what says how far a run got, so it must outlive the run dying. */
+    @Test
+    fun `a run that throws still leaves a report`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("One")),
+                onTranscribe = { throw OutOfMemoryError("whisper ate the heap") },
+            )
+
+        try {
+            pipeline.run()
+        } catch (_: OutOfMemoryError) {
+            // expected: an Error ends the run
+        }
+
+        assertTrue(Files.exists(tempDir.resolve("logs").resolve(RunReport.LATEST_FILENAME)))
+    }
+
+    /** The keys are written in the order the report declares them, not alphabetically. */
+    @Test
+    fun `the report keeps its own key order`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(PodcastConfig(name = "Show", url = "https://feed")), makeFeed(makeEntry("One")))
+
+        pipeline.run()
+
+        val json = Files.readString(tempDir.resolve("logs").resolve(RunReport.LATEST_FILENAME))
+        assertTrue(
+            json.indexOf("started_at") < json.indexOf("finished_at"),
+            "keys came out alphabetised: $json",
+        )
+    }
+
     /** A report that cannot be written must not take the run down with it. */
     @Test
     fun `a run whose report cannot be written still succeeds`(

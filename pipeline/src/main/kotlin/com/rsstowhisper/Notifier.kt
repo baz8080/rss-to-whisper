@@ -29,15 +29,17 @@ open class Notifier(
             try {
                 Request.Builder().url(url).post(body.toRequestBody(TEXT_PLAIN)).build()
             } catch (e: IllegalArgumentException) {
-                logger.warn("Not a usable notify_url: $url (${e.message})")
+                logger.warn("Not a usable notify_url (${e.message})")
                 return
             }
+        // Host only: an ntfy topic is the whole credential, and this goes to the error log.
+        val host = request.url.host
         try {
             httpClient.newCall(request).execute().use {
-                if (!it.isSuccessful) logger.warn("Notification to $url returned ${it.code}")
+                if (!it.isSuccessful) logger.warn("Notification to $host returned ${it.code}")
             }
         } catch (e: Exception) {
-            logger.warn("Could not notify $url: ${e.message}")
+            logger.warn("Could not notify $host: ${e.message}")
         }
     }
 

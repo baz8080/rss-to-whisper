@@ -87,10 +87,13 @@ class PodcastPipeline(
             return false
         }
 
-        for (podcast in config.podcasts) {
-            processPodcast(podcast, dataDir)
+        try {
+            for (podcast in config.podcasts) {
+                processPodcast(podcast, dataDir)
+            }
+        } finally {
+            report.write(dataDir)
         }
-        report.write(dataDir, jsonMapper)
         return decodingWorked()
     }
 
@@ -313,11 +316,13 @@ class PodcastPipeline(
                 val mp3Info = getMp3Info(entry, episodeDirPath, dataDir)
                 if (mp3Info == null) {
                     logger.warn("${entry.title} has no mp3 link. Skipping")
+                    report.forPodcast(podcast.name).failed++
                     continue
                 }
                 pending += PendingEpisode(entry, episodeDirPath, mp3Info)
             } catch (e: Exception) {
                 logger.error("Couldn't process episode entry: ${entry.title}", e)
+                report.forPodcast(podcast.name).failed++
             }
         }
 

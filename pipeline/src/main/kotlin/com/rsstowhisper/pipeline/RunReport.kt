@@ -1,6 +1,7 @@
 package com.rsstowhisper.pipeline
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
@@ -70,17 +71,15 @@ internal class RunReport {
      * The timestamped file is the history; the stable name is what anything
      * watching the data directory can read without listing it first.
      */
-    fun write(
-        dataDirectory: String,
-        mapper: ObjectMapper,
-    ): Path? {
+    fun write(dataDirectory: String): Path? {
         val finishedAt = Instant.now()
         return try {
             val logDir = Path.of(dataDirectory).resolve("logs")
             Files.createDirectories(logDir)
-            val path = logDir.resolve("run-${FILE_STAMP.format(finishedAt)}.json")
+            val path = freeName(logDir, FILE_STAMP.format(finishedAt))
             Files.writeString(path, mapper.writeValueAsString(toMap(finishedAt)))
             Files.copy(path, logDir.resolve(LATEST_FILENAME), StandardCopyOption.REPLACE_EXISTING)
+            prune(logDir)
             path
         } catch (e: Exception) {
             logger.warn("Could not write the run report under $dataDirectory", e)
@@ -88,11 +87,41 @@ internal class RunReport {
         }
     }
 
+    /** Two instances can share a data directory, and the stamp is only to the second. */
+    private fun freeName(
+        logDir: Path,
+        stamp: String,
+    ): Path {
+        val first = logDir.resolve("run-$stamp.json")
+        if (Files.notExists(first)) return first
+        return generateSequence(2) { it + 1 }
+            .map { logDir.resolve("run-$stamp-$it.json") }
+            .first { Files.notExists(it) }
+    }
+
+    /** Matches the error log's retention, so the reports cannot outgrow what they describe. */
+    private fun prune(logDir: Path) {
+        val cutoff = Instant.now().minus(Duration.ofDays(MAX_HISTORY_DAYS))
+        try {
+            Files.newDirectoryStream(logDir, "run-*.json").use { stream ->
+                stream.filter { Files.getLastModifiedTime(it).toInstant() < cutoff }
+                    .forEach { Files.deleteIfExists(it) }
+            }
+        } catch (e: Exception) {
+            logger.debug("Could not prune old run reports in {}: {}", logDir, e.message)
+        }
+    }
+
     companion object {
         const val LATEST_FILENAME = "latest-run.json"
+        const val MAX_HISTORY_DAYS = 14L
 
         private val logger = LoggerFactory.getLogger(RunReport::class.java)
         private val STAMP = DateTimeFormatter.ISO_INSTANT.withZone(ZoneOffset.UTC)
         private val FILE_STAMP = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss").withZone(ZoneOffset.UTC)
+
+        // Its own mapper: the episode one sorts keys, which would alphabetise the
+        // report and make the insertion order used throughout this class inert.
+        private val mapper = ObjectMapper().apply { enable(SerializationFeature.INDENT_OUTPUT) }
     }
 }

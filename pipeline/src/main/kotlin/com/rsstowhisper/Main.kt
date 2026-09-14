@@ -39,22 +39,27 @@ fun main(argv: Array<String>) {
 
     val pipeline = PodcastPipeline(config)
     val ok =
-        if (args.isRetranscribe) {
-            pipeline.retranscribe(
-                RetranscribeRequest(
-                    paths = args.retranscribePaths,
-                    ids = args.retranscribeIds,
-                    flagged = args.retranscribeFlagged,
-                    limit = args.retranscribeLimit,
-                ),
-            )
-        } else {
-            pipeline.run()
+        try {
+            if (args.isRetranscribe) {
+                pipeline.retranscribe(
+                    RetranscribeRequest(
+                        paths = args.retranscribePaths,
+                        ids = args.retranscribeIds,
+                        flagged = args.retranscribeFlagged,
+                        limit = args.retranscribeLimit,
+                    ),
+                )
+            } else {
+                pipeline.run()
+            }
+        } finally {
+            // A run that died still has to say so: silence is the one outcome
+            // indistinguishable from a run that never launched.
+            println(tally.summary(logPath))
+            // Without the log path -- it is a local filesystem path, and the
+            // notification may land on a public topic.
+            config.notifyUrl?.takeIf { it.isNotBlank() }?.let { Notifier().notify(it, tally.summary(null)) }
         }
-
-    val summary = tally.summary(logPath)
-    println(summary)
-    config.notifyUrl?.takeIf { it.isNotBlank() }?.let { Notifier().notify(it, summary) }
     if (!ok) {
         exitProcess(1)
     }

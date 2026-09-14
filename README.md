@@ -812,8 +812,13 @@ anything watching the directory can read without listing it first.
 ```
 
 The skip counts are by the reason the pipeline actually applied, which is what answers
-"why did this feed transcribe nothing this week". A report that cannot be written is a
-warning; it never fails the run.
+"why did this feed transcribe nothing this week". `failed` counts episodes this run tried
+for and did not get, whether they fell over before the download or during the decode.
+
+Reports are kept for 14 days, matching the error log. Two instances sharing a data
+directory each write their own stamped file; `latest-run.json` is whichever finished last.
+A report that cannot be written is a warning and never fails the run, and it is written
+even when a run dies part-way, since that is when knowing how far it got matters most.
 
 Set `notify_url` in `pods.yaml` to have the run POST its summary line — the same
 `Run finished: N warnings, M errors` that goes to stdout — as `text/plain` when it

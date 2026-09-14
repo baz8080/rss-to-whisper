@@ -30,8 +30,8 @@ pipeline/.env
 
 # Byte-compiled Python, which running index.py locally leaves behind
 __pycache__/
+*.pyc
 
 # Node, only ever installed ad hoc for browser-driven checks
 node_modules/
 package-lock.json
-*.pyc

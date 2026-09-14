@@ -17,11 +17,15 @@
     --app-pill-hover-color: #1e293b;
     --app-pill-active-background: #334155;
     --app-pill-active-color: #f1f5f9;
+    --app-pill-active-hover-background: #1e293b;
+    --app-pill-active-hover-color: #ffffff;
 }
 
-/* Pico's own guard, so an explicit light theme still wins over the system. */
+/* Pico's own guard verbatim: its dark block is excluded by any data-theme at
+   all, so a narrower :not([data-theme="light"]) would serve this palette dark
+   while Pico served its light one for, say, data-theme="auto". */
 @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
+    :root:not([data-theme]) {
         --app-snippet-background: #1c212c;
         --app-line-active-background: #1e2740;
         --app-line-match-background: #2a2410;
@@ -32,6 +36,8 @@
         --app-pill-hover-color: #e2e6ee;
         --app-pill-active-background: #c8cedb;
         --app-pill-active-color: #181c25;
+        --app-pill-active-hover-background: #dfe4ee;
+        --app-pill-active-hover-color: #0f1218;
     }
 }
 
@@ -47,6 +53,8 @@
     --app-pill-hover-color: #e2e6ee;
     --app-pill-active-background: #c8cedb;
     --app-pill-active-color: #181c25;
+    --app-pill-active-hover-background: #dfe4ee;
+    --app-pill-active-hover-color: #0f1218;
 }
 body {
     max-width: none;
@@ -231,8 +239,8 @@ a.tag-pill:hover {
     color: var(--app-pill-active-color);
 }
 a.tag-pill-active:hover {
-    background: var(--app-pill-hover-background);
-    color: var(--app-pill-hover-color);
+    background: var(--app-pill-active-hover-background);
+    color: var(--app-pill-active-hover-color);
 }
 .htmx-indicator {
     opacity: 0;

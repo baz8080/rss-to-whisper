@@ -27,3 +27,7 @@ pipeline/.env
 
 # Claude
 .claude/
+
+# Byte-compiled Python, which running index.py locally leaves behind
+__pycache__/
+*.pyc

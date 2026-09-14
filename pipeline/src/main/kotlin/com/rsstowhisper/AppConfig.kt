@@ -23,6 +23,8 @@ data class AppConfig(
     /** Fallback for podcasts that do not set their own. See [PodcastConfig.language]. */
     val language: String = Transcriber.DEFAULT_LANGUAGE,
     val qualityRetry: Boolean = true,
+    /** POSTed the run's summary line as text/plain when set. See [Notifier]. */
+    val notifyUrl: String? = null,
     val podcasts: List<PodcastConfig> = emptyList(),
 ) {
     companion object {

@@ -47,6 +47,11 @@ language: en
 # transcript.json under episode_quality.
 quality_retry: true
 
+# POST the run's summary line here as text/plain when a run finishes, which is
+# what ntfy.sh expects. No auth and no retries; a notification that fails is a
+# warning and nothing more. Omit the key to send nothing.
+# notify_url: https://ntfy.sh/your-topic-here
+
 # Skip episodes shorter than this. Below ~150s a feed is almost entirely
 # trailers, promos and hiatus notices. Feeds without an itunes:duration are
 # never filtered on length. Set to 0 to disable.

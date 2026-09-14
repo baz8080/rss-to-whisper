@@ -544,6 +544,7 @@ transcribe exits `0`, so a wrapper script can tell a failed launch from a quiet 
 - `orphan_recovery_limit` — at most this many orphans per run, across all podcasts (optional, default `0`, meaning no limit)
 - `language` — ISO 639-1 code whisper decodes in, or `auto` to detect from the audio (optional, default `en`). Case does not matter; it is lower-cased before being sent, because whisper.cpp matches the code exactly and silently decodes with the wrong language token when it does not match
 - `quality_retry` — decode a flagged transcript a second time and keep the better one (optional, default `true`; see [Transcript quality gate](#transcript-quality-gate))
+- `notify_url` — POST the run's summary line here when a run finishes (optional; see [Run report](#run-report))
 - `podcasts` — list of RSS feeds to process, each with `name`, `url`, optional `collections`, optional `excludes`, an optional `min_episode_duration_seconds` that overrides the global floor, and an optional `language` that overrides the global one
 
 `name` becomes the show's directory name, so changing it moves every episode of
@@ -785,6 +786,40 @@ mid-response, a gateway `502`/`503`/`504`, or an empty body. A status the server
 the server talking, and what it is talking about is that request: whisper.cpp answers
 `400` for an mp3 it cannot decode and `500` for one it cannot process, and those episodes
 fail on their own merits as they always did, without failing the run.
+
+### Run report
+
+The error log says whether anything went wrong. It does not say what was done, so every
+run also writes `<data-dir>/logs/run-<yyyyMMdd-HHmmss>.json` and copies it to
+`logs/latest-run.json` — the stamped file is the history, the stable name is what
+anything watching the directory can read without listing it first.
+
+```json
+{
+  "started_at": "2026-09-14T02:00:03Z",
+  "finished_at": "2026-09-14T06:41:55Z",
+  "duration_seconds": 16912,
+  "totals": { "transcribed": 41, "recovered": 3, "failed": 1, "skipped": 112 },
+  "podcasts": {
+    "Ask a Spaceman": {
+      "transcribed": 4,
+      "recovered": 0,
+      "failed": 0,
+      "skipped": { "global_keyword": 2, "too_short": 1 }
+    }
+  }
+}
+```
+
+The skip counts are by the reason the pipeline actually applied, which is what answers
+"why did this feed transcribe nothing this week". A report that cannot be written is a
+warning; it never fails the run.
+
+Set `notify_url` in `pods.yaml` to have the run POST its summary line — the same
+`Run finished: N warnings, M errors` that goes to stdout — as `text/plain` when it
+finishes. That is exactly what [ntfy.sh](https://ntfy.sh) expects, and other services can
+adapt. There is no auth and no retry: the run has already finished by then, so a failed
+notification is a warning and nothing more.
 
 ### Error log
 

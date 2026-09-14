@@ -49,6 +49,8 @@ class PodcastPipeline(
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
 
+    internal val report = RunReport()
+
     /** What the run's exit code is made of. See [decodingWorked]. */
     private var decodesAttempted = 0
     private var decodesSucceeded = 0
@@ -72,6 +74,7 @@ class PodcastPipeline(
     fun run(): Boolean {
         val dataDir = config.dataDirectory
         orphansRecovered = 0
+        report.start()
         resetDecodeTally()
 
         if (!Files.isWritable(Path.of(dataDir))) {
@@ -87,6 +90,7 @@ class PodcastPipeline(
         for (podcast in config.podcasts) {
             processPodcast(podcast, dataDir)
         }
+        report.write(dataDir, jsonMapper)
         return decodingWorked()
     }
 
@@ -278,6 +282,7 @@ class PodcastPipeline(
                 val skip = skipReason(entry, podcast, minDuration)
                 if (skip != null) {
                     logSkip(skip, entry, minDuration)
+                    report.countSkip(podcast.name, skip)
                     continue
                 }
 
@@ -343,6 +348,7 @@ class PodcastPipeline(
     ) {
         val prefetcher = Executors.newSingleThreadExecutor { Thread(it, "prefetch").apply { isDaemon = true } }
         var next: Future<Boolean>? = null
+        val counts = report.forPodcast(podcast.name)
 
         try {
             for ((index, episode) in pending.withIndex()) {
@@ -353,6 +359,7 @@ class PodcastPipeline(
                 try {
                     if (!current.get()) {
                         logger.warn("Could not download audio for ${entry.title}. Skipping")
+                        counts.failed++
                         continue
                     }
                     if (Files.exists(episode.episodeDirPath.resolve(TRANSCRIPT_FILENAME))) {
@@ -367,11 +374,13 @@ class PodcastPipeline(
                             entry.title ?: episode.episodeDirPath.fileName.toString(),
                         )
                     writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)
+                    counts.transcribed++
                 } catch (e: Exception) {
                     // An Error on the prefetch thread arrives wrapped, and must still end the run.
                     val cause = (e as? ExecutionException)?.cause ?: e
                     if (cause is Error) throw cause
                     logger.error("Couldn't process episode entry: ${entry.title}", cause)
+                    counts.failed++
                 }
             }
         } finally {
@@ -559,9 +568,13 @@ class PodcastPipeline(
                         if (recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)) {
                             recovered++
                             orphansRecovered++
+                            report.forPodcast(podcast.name).recovered++
+                        } else {
+                            report.forPodcast(podcast.name).failed++
                         }
                     } catch (e: Exception) {
                         logger.error("Couldn't recover ${parsed.dirName}", e)
+                        report.forPodcast(podcast.name).failed++
                     }
                 }
             }

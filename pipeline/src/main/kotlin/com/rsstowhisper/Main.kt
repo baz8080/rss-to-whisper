@@ -52,7 +52,9 @@ fun main(argv: Array<String>) {
             pipeline.run()
         }
 
-    println(tally.summary(logPath))
+    val summary = tally.summary(logPath)
+    println(summary)
+    config.notifyUrl?.takeIf { it.isNotBlank() }?.let { Notifier().notify(it, summary) }
     if (!ok) {
         exitProcess(1)
     }

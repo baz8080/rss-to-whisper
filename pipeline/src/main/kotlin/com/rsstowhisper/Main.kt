@@ -2,6 +2,8 @@ package com.rsstowhisper
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
+import com.rsstowhisper.feed.FeedService
+import com.rsstowhisper.feed.feedMarkupReport
 import com.rsstowhisper.pipeline.PodcastPipeline
 import com.rsstowhisper.pipeline.RetranscribeRequest
 import org.slf4j.LoggerFactory
@@ -18,6 +20,16 @@ fun main(argv: Array<String>) {
 
     if (args.help) {
         println(USAGE)
+        return
+    }
+
+    args.dumpFeedMarkup?.let { url ->
+        val feed = FeedService().fetchFeed(url)
+        if (feed == null) {
+            System.err.println("Could not fetch $url")
+            exitProcess(1)
+        }
+        print(feedMarkupReport(feed, args.dumpLimit))
         return
     }
 

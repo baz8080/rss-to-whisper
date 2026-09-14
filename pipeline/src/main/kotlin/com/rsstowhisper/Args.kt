@@ -100,6 +100,12 @@ internal fun parseArgs(argv: Array<String>): Args {
     if (args.retranscribeForce && args.retranscribeFlagged) {
         error("--retranscribe-force cannot be used with --retranscribe-flagged")
     }
+    // Otherwise it is ignored by isRetranscribe and the run quietly follows the
+    // feeds instead -- which is what a script whose target list came out empty
+    // would do, having asked for the opposite.
+    if (args.retranscribeForce && args.retranscribePaths.isEmpty() && args.retranscribeIds.isEmpty()) {
+        error("--retranscribe-force needs a target: --retranscribe or --retranscribe-id")
+    }
     return args
 }
 

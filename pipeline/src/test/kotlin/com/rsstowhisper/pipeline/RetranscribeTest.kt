@@ -454,7 +454,6 @@ class RetranscribeTest {
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
-    /** Unscored is not the same as passing: there is nothing to lose the decode to. */
     @Test
     fun `--retranscribe-force keeps a decode that scored worse`(
         @TempDir tempDir: Path,
@@ -491,6 +490,32 @@ class RetranscribeTest {
     }
 
     /**
+     * Segments carrying timestamps and no text render a non-blank VTT, so the
+     * isEmpty check ahead of the comparison does not catch them. Force covers
+     * the score, and a decode with no words is not a worse redo but no redo.
+     */
+    @Test
+    fun `--retranscribe-force does not let a speechless decode replace a real one`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra = mapOf("episode_quality" to qualityMap(flags = emptyList(), punctuation = 0.16)),
+            )
+        val before = readTranscript(dir)["episode_transcript"]
+        val speechless =
+            """{"task":"transcribe","segments":[""" +
+                """{"id":0,"start":0.0,"end":3.0,"text":"   ","words":[]}""" +
+                "]}"
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(speechless))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), force = true))
+
+        assertEquals(before, readTranscript(dir)["episode_transcript"])
+    }
+
+    /**
      * Force means "I know better than the score", not "ignore a server that
      * stopped sending token_timestamps" -- that would silently drop the
      * words.jsonl.gz the episode already has.
@@ -516,6 +541,7 @@ class RetranscribeTest {
         assertEquals(before, readTranscript(dir)["episode_transcript"])
     }
 
+    /** Unscored is not the same as passing: there is nothing to lose the decode to. */
     @Test
     fun `a transcript written before the quality gate is replaced without comparison`(
         @TempDir tempDir: Path,

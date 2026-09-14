@@ -787,6 +787,14 @@ that found no speech, and one that came back without word timestamps are all sti
 refused — force means "I know better than the score", not "ignore a server that stopped
 sending `token_timestamps`".
 
+The no-speech refusal is a check in its own right rather than a consequence of the
+comparison, because a blank transcript is not caught by the emptiness test ahead of it:
+segments carrying timestamps and no text render a VTT that is not blank.
+
+It needs a target. `--retranscribe-force` on its own is refused rather than ignored,
+since the run would otherwise fall through to an ordinary feed run — which is what a
+script whose target list came out empty would get, having asked for the opposite.
+
 A re-decode is kept only if it scores at least as well as the transcript it would
 replace, by the same measure the quality gate's retry uses — fewer flags, then better
 punctuation. Whisper is not deterministic, so a redo can come back worse than what it

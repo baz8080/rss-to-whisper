@@ -264,6 +264,14 @@ class PodcastPipeline(
             return false
         }
 
+        // Outside the force branch: a decode with no words is not a worse redo,
+        // it is no redo at all, and transcription.isEmpty does not catch it --
+        // segments carrying timestamps and no text render a non-blank VTT.
+        if (previous != null && previous.hasSpeech && !scored.quality.hasSpeech) {
+            logger.warn("Re-transcription of $label found no speech; keeping the existing transcript")
+            return false
+        }
+
         // Whisper is not deterministic, so a re-decode can come back worse than
         // the transcript it would overwrite, and this write is the only copy of
         // it. Judged the way transcribeEpisode judges its retry, so redoing an

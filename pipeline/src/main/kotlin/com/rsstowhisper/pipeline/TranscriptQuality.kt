@@ -215,7 +215,7 @@ data class QualityReport(
      * is the condition that raises the flag, so for a report this code scored
      * the two always agree.
      */
-    private val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
+    internal val hasSpeech: Boolean get() = wordCount > 0 && TranscriptQuality.FLAG_NO_SPEECH !in flags
 
     val summary: String
         get() = "${if (flags.isEmpty()) "no flags" else flags.joinToString(", ")}, punctuation ${round(punctuationPerWord)}"

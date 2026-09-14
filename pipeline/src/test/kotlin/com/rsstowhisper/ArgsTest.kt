@@ -161,4 +161,11 @@ class ArgsTest {
             parseArgs(arrayOf("--retranscribe", "Show/ep", "--retranscribe-flagged", "--retranscribe-force"))
         }
     }
+
+    /** isRetranscribe ignores it, so the run would quietly follow the feeds instead. */
+    @Test
+    fun `force on its own is refused rather than falling through to a feed run`() {
+        val ex = assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--retranscribe-force")) }
+        assertTrue(ex.message!!.contains("--retranscribe-force"), ex.message!!)
+    }
 }

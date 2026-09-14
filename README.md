@@ -536,6 +536,7 @@ below supply the three required values.
 | `--quality-retry` / `--no-quality-retry` | `quality_retry` in `pods.yaml` |
 | `--dry-run` | No equivalent; see [Dry run](#dry-run) |
 | `--dump-feed-markup <url>`, `--dump-limit <n>` | No equivalent; see [What else a feed carries](#what-else-a-feed-carries) |
+| `--dump-audio-chapters <dir>` | No equivalent; see [Chapters inside the audio](#chapters-inside-the-audio) |
 | `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
@@ -893,6 +894,41 @@ The closing tally is the point: a tag that only some episodes carry is easy to m
 entry at a time. Elements a module *did* claim — anything `itunes:`, `dc:`, `media:` —
 are absent from the markup and named in the `modules` line instead, so the report
 separates what is already reachable through ROME from what would need new parsing.
+
+### Chapters inside the audio
+
+`--dump-audio-chapters <dir>` reads the ID3v2 tag of every `audio.mp3` under a data
+directory and reports which episodes carry `CHAP` chapter frames. It never touches the
+audio itself -- only the tag at the head of each file -- so a pass over a large library
+costs little, and it needs no network:
+
+```bash
+./transcribe --dump-audio-chapters /path/to/data --dump-limit 10
+```
+
+```
+scanned audio.mp3 in 1284 episodes
+with ID3 chapters: 37 (2.9%)
+
+showing 10 of 37
+
+Some Podcast/2026-01-02-a1b2c3d4-an-episode
+  0:00:00-0:01:32  Advertisement
+  0:01:32-0:24:10  Part One
+
+chapter titles by episodes carrying them:
+  37 episodes, 94 uses  Advertisement
+  37 episodes, 37 uses  Intro
+  1 episodes, 1 uses  The Chemical Barons
+```
+
+The ordering is the point. A title carried by many episodes is a structural segment --
+an intro, a break, a sponsor read -- while a title carried once is that episode's own
+content, so ranking by episode count puts the recurring furniture at the top.
+
+Chapters read here describe the file on disk, which is the same file the transcript was
+decoded from. That matters because a feed's own chapter timestamps describe the unstitched
+master: where a host inserts ads at download time, the two disagree.
 
 ### When whisper is not there
 

@@ -2,11 +2,15 @@ package com.rsstowhisper
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
+import com.rsstowhisper.audio.audioChapterReport
+import com.rsstowhisper.audio.surveyAudioChapters
 import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.feed.feedMarkupReport
 import com.rsstowhisper.pipeline.PodcastPipeline
 import com.rsstowhisper.pipeline.RetranscribeRequest
 import org.slf4j.LoggerFactory
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.system.exitProcess
 
 fun main(argv: Array<String>) {
@@ -30,6 +34,16 @@ fun main(argv: Array<String>) {
             exitProcess(1)
         }
         print(feedMarkupReport(feed, args.dumpLimit))
+        return
+    }
+
+    args.dumpAudioChapters?.let { directory ->
+        val path = Path.of(directory)
+        if (!Files.isDirectory(path)) {
+            System.err.println("Not a directory: $directory")
+            exitProcess(1)
+        }
+        print(audioChapterReport(surveyAudioChapters(path), args.dumpLimit))
         return
     }
 

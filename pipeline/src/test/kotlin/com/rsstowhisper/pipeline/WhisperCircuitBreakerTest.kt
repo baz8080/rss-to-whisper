@@ -193,6 +193,37 @@ class WhisperCircuitBreakerTest {
         )
     }
 
+    /**
+     * The same mis-blame one level down: the breaker can trip during recovery
+     * itself, and the summary there reports what it did not reach as the
+     * orphan limit -- a limit that may not even be set.
+     */
+    @Test
+    fun `orphan recovery names the breaker, not the orphan limit, for what it left`(
+        @TempDir tempDir: Path,
+    ) {
+        for (day in 1..4) {
+            val orphan = tempDir.resolve("Show").resolve("2019-01-0$day-deadbee$day-aged-out")
+            Files.createDirectories(orphan)
+            Files.writeString(orphan.resolve("audio.mp3"), "fake-mp3-bytes")
+        }
+
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                entries(1),
+                maxConsecutiveTranscriberErrors = 2,
+                transcriberFails = { throw TranscriberUnavailable("nothing listening") },
+            )
+
+        val messages = logged { pipeline.run() }
+
+        val left = messages.single { it.contains("left for a later run") }
+        assertTrue(left.contains("whisper server stopped answering"), left)
+        assertFalse(left.contains("orphan-limit"), left)
+    }
+
     @Test
     fun `the reason the run gave up reaches the log`(
         @TempDir tempDir: Path,

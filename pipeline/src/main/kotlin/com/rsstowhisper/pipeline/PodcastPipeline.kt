@@ -574,7 +574,10 @@ class PodcastPipeline(
             logger.warn("${podcast.name}: $withoutAudio directories have neither audio nor a transcript")
         }
         if (pending > 0) {
-            logger.info("${podcast.name}: $pending left for a later run; --orphan-limit reached")
+            // Two things stop this loop, and naming the wrong one sends whoever
+            // reads the log to a limit that may not even be set.
+            val why = if (transcriberIsDown()) "the whisper server stopped answering" else "--orphan-limit reached"
+            logger.info("${podcast.name}: $pending left for a later run; $why")
         }
         logger.info(
             "${podcast.name}: ${candidates.size} directories absent from the feed " +

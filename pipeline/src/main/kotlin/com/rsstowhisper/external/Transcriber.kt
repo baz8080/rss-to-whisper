@@ -196,7 +196,16 @@ open class Transcriber(
             }
         return response.use {
             if (!it.isSuccessful) {
-                throw TranscriberUnavailable("Whisper server returned ${it.code}: ${it.body?.string()}")
+                val detail = "Whisper server returned ${it.code}: ${it.body?.string()}"
+                // A status the server chose is the server talking, and what it
+                // is talking about is almost always THIS request. whisper.cpp
+                // answers 400 "failed to read audio data" for an mp3 it cannot
+                // decode and 500 for one it cannot process; counting those
+                // against the breaker would let three bad audio files abandon
+                // the run -- and abandon it again on every later run, because
+                // the episodes ahead of them are already transcribed and so
+                // never decode to clear the count.
+                throw if (it.code in UPSTREAM_GONE_CODES) TranscriberUnavailable(detail) else RuntimeException(detail)
             }
             // A decode that found no speech still answers with a segment list.
             // Nothing at all is the server being broken, not the audio being
@@ -207,11 +216,14 @@ open class Transcriber(
     }
 
     /**
-     * Whether the server answers at all, asked once before a run commits to it.
+     * Whether anything is listening, asked once before a run commits to it.
      *
-     * Any 2xx will do. whisper.cpp's server answers `/` with a page, and which
-     * routes a given build exposes is not worth depending on -- this only has
-     * to tell a server that is up from one that is not.
+     * Any answer at all counts, including a 404: this has to tell a server that
+     * is there from one that is not, and which routes a given build exposes is
+     * not something to depend on. whisper.cpp serves `/` with a page, but
+     * `--request-path` moves that, and a proxy may route only `/inference` --
+     * none of which is a reason to refuse to run. The exception is a gateway
+     * saying its upstream is gone, which is exactly what this is looking for.
      */
     open fun ping(): Boolean {
         val request =
@@ -231,7 +243,7 @@ open class Transcriber(
                 .readTimeout(PING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .build()
         return try {
-            client.newCall(request).execute().use { it.isSuccessful }
+            client.newCall(request).execute().use { it.code !in UPSTREAM_GONE_CODES }
         } catch (e: IOException) {
             logger.debug("Whisper server at {} did not answer: {}", serverUrl, e.message)
             false
@@ -242,6 +254,13 @@ open class Transcriber(
         const val DEFAULT_MAX_LEN = 200
 
         private const val PING_TIMEOUT_SECONDS = 15L
+
+        /**
+         * Statuses that mean the decoder is not there, rather than that it
+         * disliked one request: a gateway with nothing behind it, and
+         * whisper.cpp's own 503 while it is still loading its model.
+         */
+        private val UPSTREAM_GONE_CODES = setOf(502, 503, 504)
 
         /**
          * Whisper takes an ISO 639-1 code, or "auto" to detect from the audio.

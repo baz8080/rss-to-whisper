@@ -60,15 +60,22 @@ Done so far from this list:
   not be in a payload.
 - **P2, whisper preflight and circuit breaker.** `Transcriber.ping()` is asked once in
   `run()` and `retranscribe()` before anything else happens, on its own short timeouts
-  rather than the ninety minutes the decode client allows. `TranscriberUnavailable`
-  covers an unreachable server, a non-2xx, and an empty body -- everything that says
-  nothing was decoded at all, as against a decode that produced nothing. It is counted
-  in `decodeAndScore`, the single choke point every decode path reaches, and cleared by
-  any decode that gets an answer; `max_consecutive_transcriber_errors` (default 3) in a
-  row makes `transcriberIsDown()` true, which the feed loop, `recoverAll`, the
-  re-transcribe loop and the podcast loop all check before their next decode. The state
-  is checked rather than thrown because those loops deliberately swallow a failure per
-  episode, which is exactly what hid a down server.
+  rather than the ninety minutes the decode client allows. `TranscriberUnavailable` is
+  counted in `decodeAndScore`, the single choke point every decode path reaches, and
+  cleared by any decode that gets an answer; `max_consecutive_transcriber_errors`
+  (default 3) in a row makes `transcriberIsDown()` true, which the feed loop,
+  `recoverAll`, the re-transcribe loop and the podcast loop all check before their next
+  decode. The state is checked rather than thrown because those loops deliberately
+  swallow a failure per episode, which is exactly what hid a down server.
+  The line both halves draw is **reachability, not correctness**, and it is the one
+  thing here worth not relitigating. A status the server chose is the server talking,
+  and what it is talking about is that request: whisper.cpp answers 400 "failed to read
+  audio data" for an mp3 it cannot decode and 500 for one it cannot process. Counting
+  those would let three bad audio files abandon the run -- and abandon every later run,
+  because the episodes ahead of them are already transcribed and so never decode to
+  clear the count. So only a connection that goes nowhere, a gateway `502`/`503`/`504`,
+  or an empty body count, and by the same rule the preflight accepts any answer
+  including a 404 (`--request-path` moves whisper.cpp's page off `/`).
 
 Explicitly declined:
 

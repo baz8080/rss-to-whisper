@@ -50,8 +50,10 @@ quality_retry: true
 # Give up after this many decodes in a row that could not reach the whisper
 # server. Every episode is downloaded before it is decoded, so a server that is
 # down otherwise costs a run of audio fetched at length to fail on one episode
-# at a time. The count resets on any decode that gets an answer. 0 never gives
-# up. The server is also asked once before the first feed is fetched.
+# at a time. Only failures that say nothing is there count -- an mp3 whisper
+# cannot decode is that episode's problem and does not. The count resets on any
+# decode that gets an answer. 0 never gives up. The server is also asked once
+# before the first feed is fetched.
 max_consecutive_transcriber_errors: 3
 
 # Skip episodes shorter than this. Below ~150s a feed is almost entirely

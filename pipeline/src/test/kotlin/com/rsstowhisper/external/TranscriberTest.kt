@@ -302,11 +302,46 @@ class TranscriberTest {
         @TempDir tmp: Path,
     ) {
         val ex =
-            assertFailsWith<TranscriberUnavailable> {
+            assertFailsWith<RuntimeException> {
                 Transcriber("http://whisper-server", clientReturning(responseCode = 500))
                     .transcribe(mp3File(tmp))
             }
         assertTrue(ex.message!!.contains("500"))
+    }
+
+    /**
+     * whisper.cpp answers 400 "failed to read audio data" for an mp3 it cannot
+     * decode, and 500 for one it cannot process. Both are the server talking
+     * about THIS request, so neither is evidence about the next episode -- and
+     * counting them would let three bad audio files abandon the run, then
+     * abandon every later run too, since the episodes ahead of them are already
+     * transcribed and never decode to clear the count.
+     */
+    @Test
+    fun `a status the server chose about this request is not the server being gone`(
+        @TempDir tmp: Path,
+    ) {
+        for (code in listOf(400, 404, 413, 500)) {
+            val ex =
+                assertFailsWith<RuntimeException> {
+                    Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                        .transcribe(mp3File(tmp))
+                }
+            assertFalse(ex is TranscriberUnavailable, "$code was treated as an unreachable server")
+        }
+    }
+
+    /** A gateway with nothing behind it, and whisper.cpp's own 503 while its model loads. */
+    @Test
+    fun `a gateway saying its upstream is gone is the server being gone`(
+        @TempDir tmp: Path,
+    ) {
+        for (code in listOf(502, 503, 504)) {
+            assertFailsWith<TranscriberUnavailable>("$code was not treated as an unreachable server") {
+                Transcriber("http://whisper-server", clientReturning(responseCode = code))
+                    .transcribe(mp3File(tmp))
+            }
+        }
     }
 
     /**
@@ -344,7 +379,7 @@ class TranscriberTest {
     }
 
     @Test
-    fun `ping gets the base url and is true for any 2xx`() {
+    fun `ping gets the base url`() {
         val requests = mutableListOf<okhttp3.Request>()
         assertTrue(Transcriber("http://whisper-server", clientReturning(captureRequests = requests)).ping())
 
@@ -356,9 +391,23 @@ class TranscriberTest {
     }
 
     @Test
-    fun `ping is false when the server answers with an error, or not at all`() {
-        assertFalse(Transcriber("http://whisper-server", clientReturning(responseCode = 500)).ping())
+    fun `ping is false only when nothing is there`() {
         assertFalse(Transcriber("http://whisper-server", clientThrowing()).ping())
+        for (code in listOf(502, 503, 504)) {
+            assertFalse(Transcriber("http://whisper-server", clientReturning(responseCode = code)).ping(), "$code")
+        }
+    }
+
+    /**
+     * `--request-path` moves whisper.cpp's page off `/`, and a proxy may route
+     * only `/inference`. Neither is a reason to refuse to run: something
+     * answered, which is all the preflight is asking.
+     */
+    @Test
+    fun `ping is true for a server that answers the base url with an error`() {
+        for (code in listOf(401, 404, 500)) {
+            assertTrue(Transcriber("http://whisper-server", clientReturning(responseCode = code)).ping(), "$code")
+        }
     }
 
     /**

@@ -775,12 +775,20 @@ per-episode error handling that stops one bad episode ending a run is exactly wh
 hides it.
 
 Two things prevent that. The server is asked for its base URL once, before the first
-feed is fetched; no answer, and the run exits `1` having downloaded nothing. During the
-run, decodes that could not reach the server are counted, and
-`max_consecutive_transcriber_errors` in a row ends the run. Anything that reaches the
-server resets the count, so an episode that fails on its own merits is not the same
-thing — only an unreachable server, an HTTP error from it, or an empty response body
-counts. Set the key to `0` to never give up.
+feed is fetched; nothing listening, and the run exits `1` having downloaded nothing. Any
+answer counts, a 404 included — `--request-path` moves whisper.cpp's page off `/`, and a
+proxy may route only `/inference`, neither of which is a reason to refuse to run.
+
+During the run, decodes that could not reach the server are counted, and
+`max_consecutive_transcriber_errors` in a row ends the run. Only failures that say
+nothing is there count: a connection that goes nowhere, a gateway answering `502`, `503`
+or `504`, or an empty response body. A status the server chose is the server talking, and
+what it is talking about is this request — whisper.cpp answers `400` for an mp3 it cannot
+decode and `500` for one it cannot process, and those episodes fail on their own merits
+as they always did. Counting them would let three bad audio files abandon the run, and
+abandon every later run too, since the episodes ahead of them are already transcribed and
+so never decode to clear the count. Anything that reaches the server resets it. Set the
+key to `0` to never give up.
 
 Giving up this way exits non-zero, so a wrapper script sees a failed run rather than a
 quiet one. Episodes already transcribed are untouched, and the next run picks up where

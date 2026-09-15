@@ -258,6 +258,30 @@ open class Transcriber(
         /** Whisper detects the language from the audio. Never takes a prompt. */
         const val AUTO_LANGUAGE = "auto"
 
+        /**
+         * whisper.cpp's `g_lang` codes, hardcoded because the alternatives are
+         * worse: a shape check would reject `haw` and `yue`, which are three
+         * letters, and asking the server would put a network call in config
+         * loading.
+         *
+         * It tracks a version rather than being fixed -- `yue` was added at one
+         * point -- so a language a newer whisper gained has to be added here
+         * before it can be used. Whisper's full names (`english`) are
+         * deliberately absent: it accepts them, but the initial prompt is
+         * matched on the code, so a name would silently drop the prompt.
+         */
+        val SUPPORTED_LANGUAGES: Set<String> =
+            setOf(
+                "af", "am", "ar", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "ca", "cs",
+                "cy", "da", "de", "el", "en", "es", "et", "eu", "fa", "fi", "fo", "fr", "gl", "gu",
+                "ha", "haw", "he", "hi", "hr", "ht", "hu", "hy", "id", "is", "it", "ja", "jw", "ka",
+                "kk", "km", "kn", "ko", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml",
+                "mn", "mr", "ms", "mt", "my", "ne", "nl", "nn", "no", "oc", "pa", "pl", "ps", "pt",
+                "ro", "ru", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq", "sr", "su", "sv", "sw",
+                "ta", "te", "tg", "th", "tk", "tl", "tr", "tt", "uk", "ur", "uz", "vi", "yi", "yo",
+                "yue", "zh",
+            )
+
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5
 

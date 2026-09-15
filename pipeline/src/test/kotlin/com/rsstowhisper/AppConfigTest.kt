@@ -481,4 +481,65 @@ class AppConfigTest {
             }
         assertTrue(e.message!!.contains("Mixed Show"), e.message!!)
     }
+
+    @Test
+    fun `every code whisper recognises is accepted`(
+        @TempDir tmp: Path,
+    ) {
+        for (code in listOf("en", "fr", "de", "yue", "haw", "auto", "EN", "Auto")) {
+            assertEquals(code, configWith(tmp, "language: $code").language, "rejected $code")
+        }
+    }
+
+    /**
+     * whisper answers -1 for an unmatched code and its caller adds that to the
+     * language token's base index, so the decode runs in the wrong language and
+     * nothing says so. The quality gate cannot catch it: a wrong-language decode
+     * can be fluent, punctuated and loop-free.
+     */
+    @Test
+    fun `a code whisper does not recognise is refused at load`(
+        @TempDir tmp: Path,
+    ) {
+        for (bad in listOf("en-US", "pt-BR", "eng", "deu", "eb", "fr ")) {
+            val e =
+                assertFailsWith<IllegalStateException>("accepted $bad") {
+                    configWith(tmp, "language: \"$bad\"")
+                }
+            assertTrue(e.message!!.contains(bad), e.message!!)
+        }
+    }
+
+    /**
+     * whisper does accept a full name -- whisper_lang_id falls back to matching
+     * g_lang's values -- so this one decodes correctly and is refused anyway:
+     * the initial prompt is matched on the code, so a name would silently drop
+     * the lever that fixes unpunctuated decodes.
+     */
+    @Test
+    fun `a language name is refused even though whisper would accept it`(
+        @TempDir tmp: Path,
+    ) {
+        val e = assertFailsWith<IllegalStateException> { configWith(tmp, "language: english") }
+        assertTrue(e.message!!.contains("english"), e.message!!)
+    }
+
+    @Test
+    fun `a podcast's own language is validated too`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(
+                    tmp,
+                    """
+                    podcasts:
+                    - name: Une Emission
+                      url: https://example.com/fr.rss
+                      language: francais
+                    """.trimIndent(),
+                )
+            }
+        assertTrue(e.message!!.contains("Une Emission"), e.message!!)
+    }
 }

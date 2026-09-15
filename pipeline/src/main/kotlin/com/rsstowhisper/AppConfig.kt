@@ -42,6 +42,10 @@ data class AppConfig(
      * a feed thinking it has the punctuation lever when it does not.
      */
     internal fun validate() {
+        checkLanguage(language, "The top-level language")
+        for (podcast in podcasts) {
+            podcast.language?.let { checkLanguage(it, "${podcast.name}'s language") }
+        }
         if (!initialPrompt.isNullOrBlank() && language.lowercase() == Transcriber.AUTO_LANGUAGE) {
             error("initial_prompt is set but language is \"auto\", so there is no language it is written in")
         }
@@ -55,6 +59,27 @@ data class AppConfig(
                 error("${podcast.name} sets initial_prompt but its language is \"auto\", which never takes a prompt")
             }
         }
+    }
+
+    /**
+     * whisper.cpp looks the code up in a map and its caller never checks the
+     * result: an unmatched one returns -1, which is added to the language
+     * token's base index, so the decode proceeds with the wrong token and
+     * nothing reports it. The quality gate cannot catch it either -- a
+     * wrong-language decode can be fluent, punctuated and loop-free.
+     */
+    private fun checkLanguage(
+        value: String,
+        what: String,
+    ) {
+        val code = value.lowercase()
+        if (code == Transcriber.AUTO_LANGUAGE || code in Transcriber.SUPPORTED_LANGUAGES) return
+        error(
+            "$what is \"$value\". Use an ISO 639-1 code (\"en\", \"fr\", \"de\") or \"auto\". A region " +
+                "tag like \"en-US\" or a 639-2 code like \"eng\" would decode in the wrong language; a " +
+                "name like \"english\" decodes correctly but is refused, since the initial prompt is " +
+                "matched on the code.",
+        )
     }
 
     /** The prompt sent when no podcast overrides it. */

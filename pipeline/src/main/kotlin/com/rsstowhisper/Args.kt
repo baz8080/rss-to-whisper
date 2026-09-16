@@ -18,6 +18,18 @@ internal val USAGE =
       --dry-run              Report what the run would do and change nothing.
                              Creates no directories, downloads nothing, and
                              never contacts the whisper server
+      --dump-feed-markup <url>
+                             Print what a feed carries per episode that the
+                             pipeline does not map -- chapters, transcripts and
+                             anything else no ROME module claimed. Fetches the
+                             feed and exits; needs no config and no data dir
+      --dump-audio-chapters <dir>
+                             Scan every audio.mp3 under <dir> for ID3 chapter
+                             frames and report which episodes carry them, with
+                             a tally of chapter titles. Reads tags only, never
+                             audio; needs no config and no network
+      --dump-limit <n>       How many entries --dump-feed-markup or
+                             --dump-audio-chapters shows (default 10, 0 for all)
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -47,6 +59,9 @@ internal data class Args(
     val orphanRecoveryLimit: Int? = null,
     val qualityRetry: Boolean? = null,
     val dryRun: Boolean = false,
+    val dumpFeedMarkup: String? = null,
+    val dumpAudioChapters: String? = null,
+    val dumpLimit: Int = 10,
     val retranscribePaths: List<String> = emptyList(),
     val retranscribeIds: List<String> = emptyList(),
     val retranscribeFlagged: Boolean = false,
@@ -76,6 +91,9 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--quality-retry" -> args.copy(qualityRetry = true)
                 "--no-quality-retry" -> args.copy(qualityRetry = false)
                 "--dry-run" -> args.copy(dryRun = true)
+                "--dump-feed-markup" -> args.copy(dumpFeedMarkup = valueFor(flag, argv, ++i))
+                "--dump-audio-chapters" -> args.copy(dumpAudioChapters = valueFor(flag, argv, ++i))
+                "--dump-limit" -> args.copy(dumpLimit = intValueFor(flag, argv, ++i))
                 "--retranscribe" ->
                     args.copy(retranscribePaths = args.retranscribePaths + valueFor(flag, argv, ++i))
                 "--retranscribe-id" ->

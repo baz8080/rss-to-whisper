@@ -96,6 +96,28 @@ class ArgsTest {
     }
 
     @Test
+    fun `dump flags are absent unless given, and dump limit defaults to 10`() {
+        assertNull(parseArgs(arrayOf()).dumpFeedMarkup)
+        assertNull(parseArgs(arrayOf()).dumpAudioChapters)
+        assertEquals(10, parseArgs(arrayOf()).dumpLimit)
+        assertEquals("https://example.com/feed", parseArgs(arrayOf("--dump-feed-markup", "https://example.com/feed")).dumpFeedMarkup)
+        assertEquals("/data", parseArgs(arrayOf("--dump-audio-chapters", "/data")).dumpAudioChapters)
+    }
+
+    @Test
+    fun `dump limit reads a non-negative number, 0 included`() {
+        assertEquals(25, parseArgs(arrayOf("--dump-limit", "25")).dumpLimit)
+        assertEquals(0, parseArgs(arrayOf("--dump-limit", "0")).dumpLimit)
+    }
+
+    @Test
+    fun `dump limit rejects a missing or non-numeric value`() {
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--dump-limit")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--dump-limit", "lots")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--dump-limit", "-1")) }
+    }
+
+    @Test
     fun `re-transcription targets are repeatable and switch the run mode`() {
         val args =
             parseArgs(

@@ -108,6 +108,28 @@ Done so far from this list:
   none. The web side of the original entry -- W4 showing `latest-run.json` -- was not
   built; the file is there if it is ever wanted.
 
+- **Feed markup survey.** `--dump-feed-markup <url>` prints what a feed carries per
+  entry that the pipeline does not map, plus a tally across the sample. Built to test
+  whether feeds expose segment boundaries an ad classifier could use. ROME 2.1.0's
+  `rome-modules` registers nothing for the Podcasting 2.0 namespace, so `podcast:chapters`,
+  `podcast:soundbite` and any host-specific segment tags arrive in `SyndEntry.foreignMarkup`
+  and are currently dropped on the floor -- `episodeFields` in `PodcastPipeline` never
+  looks at it. Nothing is mapped off the back of this yet: the survey comes first, because
+  `podcast:chapters` is a *link* to a JSON file, not inline data, and whether it marks ads
+  varies by host. Reading that file would be a second fetch per episode and belongs in its
+  own change.
+
+- **Audio chapter survey.** `--dump-audio-chapters <dir>` reads ID3v2 `CHAP` frames out of
+  the stored `audio.mp3` files. `Id3Chapter.kt` hand-rolls the parse rather than taking a
+  dependency: it needs the tag only, so it reads the header, then the declared tag length,
+  and stops -- never the audio. Handles v2.3 and v2.4, unsynchronisation, extended headers,
+  all four text encodings, and the v2.4 frames some taggers size as plain rather than
+  syncsafe integers (`frameSize` picks whichever lands on a real frame boundary).
+  Unreadable files report no chapters rather than failing: a corpus survey must not die on
+  one odd tag. The tally ranks titles by episodes carrying them, which is what separates a
+  recurring structural segment from one episode's content. Nothing is mapped into
+  `transcript.json` off the back of it yet -- the survey comes first.
+
 Explicitly declined:
 
 - Replacing that parser with a per-request in-memory FTS5 table so highlighting has the

@@ -28,6 +28,10 @@ internal val USAGE =
                              frames and report which episodes carry them, with
                              a tally of chapter titles. Reads tags only, never
                              audio; needs no config and no network
+      --dump-audio-chapters-json <dir>
+                             Same scan as --dump-audio-chapters, machine-readable:
+                             the full ChapterSurvey as JSON on stdout, ignoring
+                             --dump-limit -- for a downstream consumer, not eyes
       --dump-limit <n>       How many entries --dump-feed-markup or
                              --dump-audio-chapters shows (default 10, 0 for all)
       -h, --help             Show this message
@@ -61,6 +65,7 @@ internal data class Args(
     val dryRun: Boolean = false,
     val dumpFeedMarkup: String? = null,
     val dumpAudioChapters: String? = null,
+    val dumpAudioChaptersJson: String? = null,
     val dumpLimit: Int = 10,
     val retranscribePaths: List<String> = emptyList(),
     val retranscribeIds: List<String> = emptyList(),
@@ -93,6 +98,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--dry-run" -> args.copy(dryRun = true)
                 "--dump-feed-markup" -> args.copy(dumpFeedMarkup = valueFor(flag, argv, ++i))
                 "--dump-audio-chapters" -> args.copy(dumpAudioChapters = valueFor(flag, argv, ++i))
+                "--dump-audio-chapters-json" -> args.copy(dumpAudioChaptersJson = valueFor(flag, argv, ++i))
                 "--dump-limit" -> args.copy(dumpLimit = intValueFor(flag, argv, ++i))
                 "--retranscribe" ->
                     args.copy(retranscribePaths = args.retranscribePaths + valueFor(flag, argv, ++i))

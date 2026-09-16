@@ -99,9 +99,11 @@ class ArgsTest {
     fun `dump flags are absent unless given, and dump limit defaults to 10`() {
         assertNull(parseArgs(arrayOf()).dumpFeedMarkup)
         assertNull(parseArgs(arrayOf()).dumpAudioChapters)
+        assertNull(parseArgs(arrayOf()).dumpAudioChaptersJson)
         assertEquals(10, parseArgs(arrayOf()).dumpLimit)
         assertEquals("https://example.com/feed", parseArgs(arrayOf("--dump-feed-markup", "https://example.com/feed")).dumpFeedMarkup)
         assertEquals("/data", parseArgs(arrayOf("--dump-audio-chapters", "/data")).dumpAudioChapters)
+        assertEquals("/data", parseArgs(arrayOf("--dump-audio-chapters-json", "/data")).dumpAudioChaptersJson)
     }
 
     @Test

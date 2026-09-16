@@ -2,6 +2,7 @@ package com.rsstowhisper
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
+import com.rsstowhisper.audio.audioChapterJson
 import com.rsstowhisper.audio.audioChapterReport
 import com.rsstowhisper.audio.surveyAudioChapters
 import com.rsstowhisper.feed.FeedService
@@ -44,6 +45,16 @@ fun main(argv: Array<String>) {
             exitProcess(1)
         }
         print(audioChapterReport(surveyAudioChapters(path), args.dumpLimit))
+        return
+    }
+
+    args.dumpAudioChaptersJson?.let { directory ->
+        val path = Path.of(directory)
+        if (!Files.isDirectory(path)) {
+            System.err.println("Not a directory: $directory")
+            exitProcess(1)
+        }
+        print(audioChapterJson(surveyAudioChapters(path)))
         return
     }
 

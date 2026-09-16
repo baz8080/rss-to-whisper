@@ -75,16 +75,17 @@ private fun deUnsynchronise(body: ByteArray): ByteArray {
     return out.copyOf(w)
 }
 
+/** Null whenever the frame area can't be located, rather than guessing an offset. */
 private fun skipExtendedHeader(
     body: ByteArray,
     major: Int,
 ): ByteArray? {
-    if (body.size < 4) return body
+    if (body.size < 4) return null
     // v2.4 counts the four length bytes in the length; v2.3 does not.
     val declared = if (major >= 4) syncSafe(body, 0) else plainInt(body, 0)
     if (declared < 0) return null
     val skip = if (major >= 4) declared else declared + 4
-    return if (skip in 1..body.size) body.copyOfRange(skip, body.size) else body
+    return if (skip in 1..body.size) body.copyOfRange(skip, body.size) else null
 }
 
 private fun parseFrames(
@@ -101,7 +102,9 @@ private fun parseFrames(
 
         val size = frameSize(body, i + 4, major)
         val start = i + HEADER_SIZE
-        if (size < 0 || start + size > body.size) break
+        // start <= body.size is guaranteed by the loop condition, so this cannot overflow
+        // the way `start + size > body.size` would for a huge garbage size.
+        if (size < 0 || size > body.size - start) break
 
         frames += Frame(id, body.copyOfRange(start, start + size))
         i = start + size
@@ -111,7 +114,7 @@ private fun parseFrames(
 
 /**
  * v2.4 frame sizes are syncsafe, but some taggers write plain ones. An unreadable syncsafe
- * value falls back to plain; an ambiguous one defaults to syncsafe, as most taggers agree.
+ * value falls back to plain; otherwise syncsafe wins unless only plain lands on the next frame.
  */
 private fun frameSize(
     body: ByteArray,
@@ -126,7 +129,6 @@ private fun frameSize(
     return if (landsOnFrame(body, at + 6 + safe) || !landsOnFrame(body, at + 6 + plain)) safe else plain
 }
 
-/** True at the end of the tag, at padding, or at a plausible frame id -- [looksLikeFrameId]. */
 private fun landsOnFrame(
     body: ByteArray,
     at: Int,
@@ -137,15 +139,15 @@ private fun landsOnFrame(
     return looksLikeFrameId(body, at)
 }
 
+/** A real frame id is always four ASCII A-Z/0-9 bytes -- unsigned, not Unicode-classified. */
 private fun looksLikeFrameId(
     body: ByteArray,
     at: Int,
 ): Boolean =
-    at + 4 <= body.size &&
-        (0..3).all {
-            val c = body[at + it].toInt().toChar()
-            c.isUpperCase() || c.isDigit()
-        }
+    (0..3).all {
+        val b = body[at + it].toInt() and 0xFF
+        b in 'A'.code..'Z'.code || b in '0'.code..'9'.code
+    }
 
 private fun parseChap(
     body: ByteArray,

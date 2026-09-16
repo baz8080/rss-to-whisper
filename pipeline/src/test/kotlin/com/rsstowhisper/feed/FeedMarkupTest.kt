@@ -138,8 +138,8 @@ class FeedMarkupTest {
 
         assertTrue(report.contains("1 of 2 entries"))
         assertFalse(report.contains("Episode Two"))
-        // Episode Two's own podcast:chapters would be invisible at limit=1 if the tally
-        // were computed only over the shown entries, as it once was.
+        // Episode Two's own podcast:chapters would be invisible here if the tally were
+        // computed only over the shown entries.
         assertTrue(report.contains("2 x podcast:chapters"))
     }
 

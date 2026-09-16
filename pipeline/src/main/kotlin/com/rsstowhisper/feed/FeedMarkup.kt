@@ -43,7 +43,7 @@ fun feedMarkupReport(
     return out.toString()
 }
 
-/** Nested elements count too, so a tag that appears on one episode in ten is still visible. */
+/** Counts nested elements too, not just top-level ones. */
 internal fun tallyElements(entries: List<SyndEntry>): Map<String, Int> {
     val counts = mutableMapOf<String, Int>()
 

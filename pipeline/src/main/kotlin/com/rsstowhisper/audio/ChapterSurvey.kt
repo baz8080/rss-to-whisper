@@ -2,15 +2,18 @@ package com.rsstowhisper.audio
 
 import com.rsstowhisper.pipeline.PodcastPipeline
 import org.slf4j.LoggerFactory
-import java.io.UncheckedIOException
+import java.io.IOException
 import java.nio.file.FileVisitOption
+import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
 import kotlin.io.path.name
 
 private val AUDIO_FILENAME = PodcastPipeline.AUDIO_FILENAME
-private val logger = LoggerFactory.getLogger("ChapterSurvey")
+private val logger = LoggerFactory.getLogger(ChapterSurvey::class.java)
 
 data class ChapteredEpisode(
     val relativePath: String,
@@ -19,6 +22,7 @@ data class ChapteredEpisode(
 
 data class ChapterSurvey(
     val scanned: Int,
+    val unreadable: Int,
     val chaptered: List<ChapteredEpisode>,
 ) {
     val withChapters: Int get() = chaptered.size
@@ -27,26 +31,42 @@ data class ChapterSurvey(
 /** Reads the ID3 tag of every `audio.mp3` under [dataDirectory]. */
 fun surveyAudioChapters(dataDirectory: Path): ChapterSurvey {
     var scanned = 0
+    var unreadable = 0
     val chaptered = mutableListOf<ChapteredEpisode>()
 
-    try {
-        Files.walk(dataDirectory, FileVisitOption.FOLLOW_LINKS).use { paths ->
-            paths
-                .filter { Files.isRegularFile(it) && it.name == AUDIO_FILENAME }
-                .forEach { path ->
+    // A visitor, not Files.walk, so one unreadable path skips just that path -- walk's
+    // stream is terminal on the first I/O error and would abandon everything after it.
+    Files.walkFileTree(
+        dataDirectory,
+        setOf(FileVisitOption.FOLLOW_LINKS),
+        Int.MAX_VALUE,
+        object : SimpleFileVisitor<Path>() {
+            override fun visitFile(
+                file: Path,
+                attrs: BasicFileAttributes,
+            ): FileVisitResult {
+                if (file.name == AUDIO_FILENAME) {
                     scanned++
-                    val chapters = readId3Chapters(path)
+                    val chapters = readId3Chapters(file)
                     if (chapters.isNotEmpty()) {
-                        val relative = dataDirectory.relativize(path.parent ?: path).toString()
+                        val relative = dataDirectory.relativize(file.parent ?: file).toString()
                         chaptered += ChapteredEpisode(relative, chapters)
                     }
                 }
-        }
-    } catch (e: UncheckedIOException) {
-        // One unreadable subdirectory must not lose everything already scanned.
-        logger.warn("Stopped walking $dataDirectory early", e)
-    }
-    return ChapterSurvey(scanned, chaptered.sortedBy { it.relativePath })
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun visitFileFailed(
+                file: Path,
+                exc: IOException,
+            ): FileVisitResult {
+                unreadable++
+                logger.warn("Could not read $file", exc)
+                return FileVisitResult.CONTINUE
+            }
+        },
+    )
+    return ChapterSurvey(scanned, unreadable, chaptered.sortedBy { it.relativePath })
 }
 
 /**
@@ -76,6 +96,10 @@ fun audioChapterReport(
 ): String {
     val out = StringBuilder()
     out.appendLine("scanned $AUDIO_FILENAME in ${survey.scanned} episodes")
+    if (survey.unreadable > 0) {
+        val path = if (survey.unreadable == 1) "path" else "paths"
+        out.appendLine("could not read ${survey.unreadable} $path -- counts below may be incomplete")
+    }
 
     if (survey.scanned == 0) {
         out.appendLine("nothing found -- is this the data directory?")
@@ -105,7 +129,7 @@ fun audioChapterReport(
     }
 
     out.appendLine()
-    out.appendLine("chapter titles by episodes carrying them:")
+    out.appendLine("chapter titles across all ${survey.withChapters} chaptered episodes:")
     titleTally(survey.chaptered).forEach { (title, episodes, occurrences) ->
         out.appendLine("  $episodes episodes, $occurrences uses  $title")
     }

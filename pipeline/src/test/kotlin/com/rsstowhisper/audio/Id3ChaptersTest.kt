@@ -1,5 +1,6 @@
 package com.rsstowhisper.audio
 
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
@@ -57,6 +58,18 @@ private object Id3Builder {
         out.write(plainBytes(body.size))
         out.write(byteArrayOf(0, 0))
         out.write(body)
+        return out.toByteArray()
+    }
+
+    /** A frame header whose declared size bears no relation to what (if anything) follows. */
+    fun frameHeaderWithSize(
+        id: ByteArray,
+        sizeBytes: ByteArray,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(id)
+        out.write(sizeBytes)
+        out.write(byteArrayOf(0, 0))
         return out.toByteArray()
     }
 
@@ -229,6 +242,61 @@ class Id3ChaptersTest {
     }
 
     @Test
+    fun `a frame with a garbage huge size does not lose chapters already found`(
+        @TempDir dir: Path,
+    ) {
+        val goodChap = Id3Builder.chap("ch1", 0, 1_000, "Intro", 3)
+        // 0x7FFFFFFF: start + size would overflow Int and wrap negative if the bounds
+        // check added them instead of subtracting.
+        val corruptHeader =
+            Id3Builder.frameHeaderWithSize(
+                "TXXX".toByteArray(Charsets.ISO_8859_1),
+                byteArrayOf(0x7F, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+            )
+        val tag = Id3Builder.tagFromBody(3, flags = 0, body = goodChap + corruptHeader)
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(1, chapters.size)
+        assertEquals("Intro", chapters[0].title)
+    }
+
+    @Test
+    fun `an extended header shorter than its own length field rejects the tag`(
+        @TempDir dir: Path,
+    ) {
+        val tag = Id3Builder.tagFromBody(3, flags = 0x40, body = byteArrayOf(0, 0))
+
+        assertTrue(readId3Chapters(writeMp3(dir, tag)).isEmpty())
+    }
+
+    @Test
+    fun `an extended header whose declared length exceeds the body rejects the tag`(
+        @TempDir dir: Path,
+    ) {
+        // declared = 1000, far past this 14-byte body.
+        val body = byteArrayOf(0, 0, 3, 232.toByte()) + ByteArray(10)
+        val tag = Id3Builder.tagFromBody(3, flags = 0x40, body = body)
+
+        assertTrue(readId3Chapters(writeMp3(dir, tag)).isEmpty())
+    }
+
+    @Test
+    fun `a frame id byte in the Latin-1 uppercase range is not mistaken for ASCII`(
+        @TempDir dir: Path,
+    ) {
+        val goodChap = Id3Builder.chap("ch1", 0, 1_000, "Intro", 3)
+        // 0xC1 is 'A-grave' in Latin-1 (and upper-case under Unicode), but no real ID3
+        // frame id is non-ASCII.
+        val invalidId = byteArrayOf(0xC1.toByte(), 'A'.code.toByte(), 'A'.code.toByte(), 'A'.code.toByte())
+        val tag = Id3Builder.tagFromBody(3, flags = 0, body = goodChap + invalidId + ByteArray(6))
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(1, chapters.size)
+    }
+
+    @Test
     fun `survey counts every episode and reports only the chaptered ones`(
         @TempDir dir: Path,
     ) {
@@ -260,15 +328,22 @@ class Id3ChaptersTest {
     }
 
     @Test
-    fun `an unreadable subdirectory does not crash the whole scan`(
+    fun `an unreadable subdirectory is skipped, not losing the rest of the scan`(
         @TempDir dir: Path,
     ) {
+        assumeTrue(System.getProperty("user.name") != "root", "chmod 000 does not block root")
+
+        val readable = Files.createDirectories(dir.resolve("Show/ep"))
+        writeMp3(readable, Id3Builder.tag(3, listOf(Id3Builder.chap("ch1", 0, 1_000, "Ad", 3))))
         val blocked = Files.createDirectories(dir.resolve("Blocked"))
         val permissions = Files.getPosixFilePermissions(blocked)
         Files.setPosixFilePermissions(blocked, emptySet())
 
         try {
-            surveyAudioChapters(dir) // must not throw -- a failure here fails the test
+            val survey = surveyAudioChapters(dir)
+
+            assertEquals(1, survey.withChapters)
+            assertEquals(1, survey.unreadable)
         } finally {
             Files.setPosixFilePermissions(blocked, permissions)
         }
@@ -308,6 +383,25 @@ class Id3ChaptersTest {
 
         assertTrue(report.contains("with ID3 chapters: 0 (0.0%)"))
         assertTrue(report.contains("No episode in this corpus carries embedded chapters."))
+    }
+
+    @Test
+    fun `report says when some paths could not be read`(
+        @TempDir dir: Path,
+    ) {
+        assumeTrue(System.getProperty("user.name") != "root", "chmod 000 does not block root")
+
+        val blocked = Files.createDirectories(dir.resolve("Blocked"))
+        val permissions = Files.getPosixFilePermissions(blocked)
+        Files.setPosixFilePermissions(blocked, emptySet())
+
+        try {
+            val report = audioChapterReport(surveyAudioChapters(dir), limit = 10)
+
+            assertTrue(report.contains("could not read 1 path -- counts below may be incomplete"))
+        } finally {
+            Files.setPosixFilePermissions(blocked, permissions)
+        }
     }
 
     @Test

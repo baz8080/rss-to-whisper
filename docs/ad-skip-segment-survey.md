@@ -76,11 +76,14 @@ mid-2024 and later switched off, one with gaps inside the window) and are inacti
 now; 2 never carry it at all.
 
 Swept all 44 feeds at increasing depth (10 → 50 → full history, 18,674 episodes) —
-no other feed in the config ever carries `ad-marker`. This is the cleanest ad-only
-signal found, but reliable (100%, currently active) on only 2 of 44 shows, and even
-where present it isn't a permanent show-level property — two shows had it turned on
-and later off within the survey window, so a consumer needs to check per-episode,
-not cache a per-show capability flag.
+no other feed in the config ever carries `ad-marker`. (That escalating-depth sweep
+was needed only because `--dump-feed-markup`'s tally used to cover just the sampled
+entries; it now always tallies the full feed and limits only what's printed, so a
+single run at any `--dump-limit` gets the same answer a full-history sweep would.)
+This is the cleanest ad-only signal found, but reliable (100%, currently active) on
+only 2 of 44 shows, and even where present it isn't a permanent show-level property
+— two shows had it turned on and later off within the survey window, so a consumer
+needs to check per-episode, not cache a per-show capability flag.
 
 ### 3. `psc:chapters` (feed XML — content only, and only one show uses it)
 

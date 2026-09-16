@@ -136,13 +136,21 @@ Done so far from this list:
   count, and a timestamp that a `pre` roll does not carry). Both were surveyed first and
   cross-referenced against the ad-skip project's gold labels, which is where the decision
   to keep them came from -- `docs/ad-skip-segment-survey.md`. Written per episode precisely
-  so the next use of this data needs no corpus-wide re-scan of 1.1TB of audio; the existing
-  17,578 transcripts were backfilled once by the survey tools and are deliberately not
-  rewritten. A recovered orphan still gets its chapters, since those come from the audio,
+  so the next use of this data needs no corpus-wide re-scan of 1.1TB of audio; a downstream
+  project imported the same data into its own database from the survey's JSON dump, but the
+  17,578 `transcript.json` files already on disk were never rewritten and carry neither
+  field. A recovered orphan still gets its chapters, since those come from the audio,
   and gets `episode_ad_markers: null` -- its feed entry is gone, so an empty list would
-  claim the feed said there were no ad breaks. Libsyn timestamps are the publisher's master
-  time, not our file's, so a consumer has to reconcile them with dynamic-insertion drift;
-  the ID3 times need no reconciling, being properties of the file itself.
+  claim the feed said there were no ad breaks. `episode_chapters` is null on the same
+  reasoning when the audio could not be read, and empty only when a readable file carries
+  no chapters.
+
+  **The two carry different clocks, and the field names say so.** `episode_chapters`'
+  `start_s`/`end_s` are the downloaded file's own time. A Libsyn marker's
+  `timestamp_publisher_s` is the publisher's master time, which dynamic insertion can leave
+  far adrift from our file -- the drift is unmeasured, and the analogous case has run to 20
+  minutes -- so a consumer has to reconcile it before using it as a file offset. The name
+  is the reconciliation warning: the two fields no longer look interchangeable in the data.
 
 Explicitly declined:
 

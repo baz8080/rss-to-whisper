@@ -1,5 +1,6 @@
 package com.rsstowhisper.pipeline
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.rometools.modules.itunes.EntryInformationImpl
 import com.rometools.modules.itunes.FeedInformationImpl
 import com.rometools.modules.itunes.types.Duration
@@ -23,6 +24,7 @@ import java.util.Date
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -358,6 +360,19 @@ class PodcastPipelineCompanionTest {
             }
         }
 
+    /** Attribute values exactly as written, for the malformed ones real feeds turn out to carry. */
+    private fun rawAdMarkers(vararg markers: Pair<String, String>): Element =
+        Element("ad-markers", LIBSYN_NS).apply {
+            markers.forEach { (type, timestamp) ->
+                addContent(
+                    Element("ad-marker", LIBSYN_NS).apply {
+                        setAttribute("type", type)
+                        setAttribute("timestamp", timestamp)
+                    },
+                )
+            }
+        }
+
     private fun taggedMp3(
         dir: Path,
         vararg chapters: ByteArray,
@@ -613,9 +628,9 @@ class PodcastPipelineCompanionTest {
 
         assertEquals(
             listOf(
-                mapOf("type" to "pre", "count" to 2, "timestamp_s" to null),
-                mapOf("type" to "mid", "count" to 2, "timestamp_s" to 1244.0),
-                mapOf("type" to "post", "count" to 3, "timestamp_s" to 13926.0),
+                mapOf("type" to "pre", "count" to 2, "timestamp_publisher_s" to null),
+                mapOf("type" to "mid", "count" to 2, "timestamp_publisher_s" to 1244.0),
+                mapOf("type" to "post", "count" to 3, "timestamp_publisher_s" to 13926.0),
             ),
             dict["episode_ad_markers"],
         )
@@ -627,6 +642,62 @@ class PodcastPipelineCompanionTest {
 
         assertTrue(dict.containsKey("episode_ad_markers"))
         assertEquals(emptyList<Map<String, Any?>>(), dict["episode_ad_markers"])
+    }
+
+    @Test
+    fun `buildEpisodeDict drops chapters whose times cannot be published`(
+        @TempDir dir: Path,
+    ) {
+        val audio =
+            taggedMp3(
+                dir,
+                // -1 writes 0xFFFFFFFF, the tag's "value unused" sentinel.
+                Id3Builder.chap("ch1", 0, -1, "Unused end", 3),
+                Id3Builder.chap("ch2", 9_000, 4_000, "Backwards", 3),
+                Id3Builder.chap("ch3", 0, 5_000, "Real", 3),
+            )
+
+        val dict =
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+
+        assertEquals(listOf(mapOf("start_s" to 0.0, "end_s" to 5.0, "title" to "Real")), dict["episode_chapters"])
+    }
+
+    @Test
+    fun `buildEpisodeDict writes null chapters when the audio could not be read at all`(
+        @TempDir dir: Path,
+    ) {
+        val dict =
+            PodcastPipeline.buildEpisodeDict(
+                feedWithItunes(),
+                entryWithItunes(),
+                "t",
+                "p.mp3",
+                audioPath = dir.resolve("never-written.mp3"),
+            )!!
+
+        assertTrue(dict.containsKey("episode_chapters"))
+        assertNull(dict["episode_chapters"], "an empty list would claim the audio carries no chapters")
+    }
+
+    @Test
+    fun `buildEpisodeDict drops an ad marker timestamp that would break the JSON`() {
+        val entry =
+            entryWithItunes(
+                extraForeignMarkup =
+                    listOf(rawAdMarkers("mid" to "NaN", "mid" to "Infinity", "mid" to "00:20:44", "mid" to "")),
+            )
+
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+
+        @Suppress("UNCHECKED_CAST")
+        val markers = dict["episode_ad_markers"] as List<Map<String, Any?>>
+        assertEquals(4, markers.size)
+        assertTrue(markers.all { it["timestamp_publisher_s"] == null })
+        // Jackson writes a NaN as a bare literal its own reader then rejects, which is how a
+        // transcript.json becomes unreadable to re-transcription.
+        val mapper = ObjectMapper()
+        assertNotNull(mapper.readTree(mapper.writeValueAsString(dict)))
     }
 
     @Test

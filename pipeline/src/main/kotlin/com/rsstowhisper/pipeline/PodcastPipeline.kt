@@ -9,7 +9,9 @@ import com.rometools.rome.feed.synd.SyndEntry
 import com.rometools.rome.feed.synd.SyndFeed
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
-import com.rsstowhisper.audio.readId3Chapters
+import com.rsstowhisper.audio.hasUsableTimes
+import com.rsstowhisper.audio.readId3ChaptersOrNull
+import com.rsstowhisper.audio.toSecondsMap
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
@@ -1162,23 +1164,22 @@ class PodcastPipeline(
             }
         }
 
-        /** Seconds, not the tag's milliseconds: every other time in `transcript.json` is seconds. */
-        private fun chapterMaps(audioPath: Path?): List<Map<String, Any?>> =
-            audioPath?.let(::readId3Chapters).orEmpty().map {
-                mapOf(
-                    "start_s" to it.startMs / 1000.0,
-                    "end_s" to it.endMs / 1000.0,
-                    "title" to it.title,
-                )
-            }
+        /** Null, not empty, when the audio could not be read: an empty list claims it carries none. */
+        private fun chapterMaps(audioPath: Path?): List<Map<String, Any?>>? =
+            audioPath?.let(::readId3ChaptersOrNull)
+                ?.filter { it.hasUsableTimes() }
+                ?.map { it.toSecondsMap() }
 
-        /** Only the feed carries these, so only a live entry can supply them. */
+        /**
+         * Only the feed carries these, so only a live entry can supply them. `timestamp_publisher_s`
+         * names its clock: it is the feed master's, not the downloaded file's.
+         */
         private fun adMarkerMaps(entry: SyndEntry): List<Map<String, Any?>> =
             libsynAdMarkers(entry).map {
                 mapOf(
                     "type" to it.type,
                     "count" to it.count,
-                    "timestamp_s" to it.timestampSeconds,
+                    "timestamp_publisher_s" to it.timestampSeconds,
                 )
             }
 

@@ -524,8 +524,8 @@ class PodcastPipelineRunTest {
 
         val markers = json["episode_ad_markers"]
         assertEquals(2, markers.size())
-        assertTrue(markers[0]["timestamp_s"].isNull, "a pre-roll carries no timestamp")
-        assertEquals(1244.0, markers[1]["timestamp_s"].asDouble())
+        assertTrue(markers[0]["timestamp_publisher_s"].isNull, "a pre-roll carries no timestamp")
+        assertEquals(1244.0, markers[1]["timestamp_publisher_s"].asDouble())
     }
 
     @Test

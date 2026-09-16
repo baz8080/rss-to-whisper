@@ -1,8 +1,12 @@
 package com.rsstowhisper.pipeline
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.audio.Id3Builder
 import com.rsstowhisper.escapeFilename
+import org.jdom2.Element
+import org.jdom2.Namespace
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -466,6 +470,62 @@ class PodcastPipelineRunTest {
         assertTrue(json.contains("tech"))
         assertTrue(json.contains("\"episode_relative_audio_path\""))
         assertTrue(json.contains("Show/"))
+    }
+
+    /**
+     * The one test that fails if either signal is not wired into the run: both default to
+     * nothing when unread, so a unit test on the builder alone would still pass.
+     */
+    @Test
+    fun `run captures the audio's chapters and the entry's libsyn ad markers`(
+        @TempDir tempDir: Path,
+    ) {
+        val libsyn = Namespace.getNamespace("libsyn", "https://rss.libsyn.com/ns.xml")
+        val entry =
+            makeEntry("Episode").apply {
+                foreignMarkup =
+                    mutableListOf(
+                        Element("ad-markers", libsyn).apply {
+                            addContent(
+                                Element("ad-marker", libsyn).apply {
+                                    setAttribute("type", "pre")
+                                    setAttribute("count", "2")
+                                },
+                            )
+                            addContent(
+                                Element("ad-marker", libsyn).apply {
+                                    setAttribute("type", "mid")
+                                    setAttribute("count", "1")
+                                    setAttribute("timestamp", "1244")
+                                },
+                            )
+                        },
+                    )
+            }
+        val tag = Id3Builder.tag(3, listOf(Id3Builder.chap("ch1", 0, 92_000, "Advertisement", 3)))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(entry),
+                audioBytes = tag + ByteArray(2048) { 0x55 },
+            )
+
+        pipeline.run()
+
+        val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
+        val json = ObjectMapper().readTree(Files.readString(episodeDir.resolve("transcript.json")))
+
+        val chapters = json["episode_chapters"]
+        assertEquals(1, chapters.size())
+        assertEquals(0.0, chapters[0]["start_s"].asDouble())
+        assertEquals(92.0, chapters[0]["end_s"].asDouble())
+        assertEquals("Advertisement", chapters[0]["title"].asText())
+
+        val markers = json["episode_ad_markers"]
+        assertEquals(2, markers.size())
+        assertTrue(markers[0]["timestamp_s"].isNull, "a pre-roll carries no timestamp")
+        assertEquals(1244.0, markers[1]["timestamp_s"].asDouble())
     }
 
     @Test

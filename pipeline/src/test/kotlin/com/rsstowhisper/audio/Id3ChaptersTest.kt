@@ -11,7 +11,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Builds the tag bytes a tagger would write, so the parser is tested against real layout. */
-private object Id3Builder {
+internal object Id3Builder {
     fun tag(
         major: Int,
         frames: List<ByteArray>,

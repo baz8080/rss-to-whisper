@@ -12,8 +12,10 @@ import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rometools.rome.feed.synd.SyndImageImpl
 import com.rometools.rome.feed.synd.SyndLinkImpl
 import com.rometools.rome.feed.synd.SyndPersonImpl
+import com.rsstowhisper.audio.Id3Builder
 import org.jdom2.Attribute
 import org.jdom2.Element
+import org.jdom2.Namespace
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
@@ -23,6 +25,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+
+private val LIBSYN_NS = Namespace.getNamespace("libsyn", "https://rss.libsyn.com/ns.xml")
 
 class PodcastPipelineCompanionTest {
     /** Parse a yyyy-MM-dd string as midnight UTC, matching how formatDate works. */
@@ -301,6 +305,7 @@ class PodcastPipelineCompanionTest {
         authors: List<String> = emptyList(),
         itunes: EntryInformationImpl? = null,
         foreignImageHref: String? = null,
+        extraForeignMarkup: List<Element> = emptyList(),
         guid: String? = "https://example.com/guid/default",
     ): SyndEntry =
         SyndEntryImpl().apply {
@@ -329,14 +334,39 @@ class PodcastPipelineCompanionTest {
             if (itunes != null) {
                 this.modules.add(itunes)
             }
+            val markup = mutableListOf<Element>()
             if (foreignImageHref != null) {
-                val el =
-                    Element("image").apply {
-                        setAttribute(Attribute("href", foreignImageHref))
-                    }
-                this.foreignMarkup = mutableListOf(el)
+                markup += Element("image").apply { setAttribute(Attribute("href", foreignImageHref)) }
+            }
+            markup += extraForeignMarkup
+            if (markup.isNotEmpty()) {
+                this.foreignMarkup = markup
             }
         }
+
+    /** The shape Libsyn publishes: a container, and a `pre` with no timestamp attribute at all. */
+    private fun adMarkers(vararg markers: Triple<String, Int, Int?>): Element =
+        Element("ad-markers", LIBSYN_NS).apply {
+            markers.forEach { (type, count, timestamp) ->
+                addContent(
+                    Element("ad-marker", LIBSYN_NS).apply {
+                        setAttribute("type", type)
+                        setAttribute("count", count.toString())
+                        if (timestamp != null) setAttribute("timestamp", timestamp.toString())
+                    },
+                )
+            }
+        }
+
+    private fun taggedMp3(
+        dir: Path,
+        vararg chapters: ByteArray,
+    ): Path {
+        val path = dir.resolve("audio.mp3")
+        // Trailing bytes stand in for the audio, as a real file has after its tag.
+        Files.write(path, Id3Builder.tag(3, chapters.toList()) + ByteArray(2048) { 0x55 })
+        return path
+    }
 
     @Test
     fun `buildEpisodeDict returns null when transcript is empty`() {
@@ -534,7 +564,110 @@ class PodcastPipelineCompanionTest {
         assertNull(dict["episode_published_on"])
     }
 
+    @Test
+    fun `buildEpisodeDict reads the audio's ID3 chapters, in seconds`(
+        @TempDir dir: Path,
+    ) {
+        val audio =
+            taggedMp3(
+                dir,
+                Id3Builder.chap("ch1", 0, 12_340, "Intro", 3),
+                Id3Builder.chap("ch2", 12_340, 1_800_000, "Space Bites", 3),
+            )
+
+        val dict =
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+
+        assertEquals(
+            listOf(
+                mapOf("start_s" to 0.0, "end_s" to 12.34, "title" to "Intro"),
+                mapOf("start_s" to 12.34, "end_s" to 1800.0, "title" to "Space Bites"),
+            ),
+            dict["episode_chapters"],
+        )
+    }
+
+    @Test
+    fun `buildEpisodeDict writes an empty chapter list for audio carrying none`(
+        @TempDir dir: Path,
+    ) {
+        val audio = dir.resolve("audio.mp3")
+        Files.write(audio, ByteArray(2048) { 0x55 })
+
+        val dict =
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+
+        assertTrue(dict.containsKey("episode_chapters"))
+        assertEquals(emptyList<Map<String, Any?>>(), dict["episode_chapters"])
+    }
+
+    @Test
+    fun `buildEpisodeDict captures libsyn ad markers, a pre-roll's timestamp staying null`() {
+        val entry =
+            entryWithItunes(
+                extraForeignMarkup =
+                    listOf(adMarkers(Triple("pre", 2, null), Triple("mid", 2, 1244), Triple("post", 3, 13926))),
+            )
+
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+
+        assertEquals(
+            listOf(
+                mapOf("type" to "pre", "count" to 2, "timestamp_s" to null),
+                mapOf("type" to "mid", "count" to 2, "timestamp_s" to 1244.0),
+                mapOf("type" to "post", "count" to 3, "timestamp_s" to 13926.0),
+            ),
+            dict["episode_ad_markers"],
+        )
+    }
+
+    @Test
+    fun `buildEpisodeDict writes an empty ad marker list for an entry carrying none`() {
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3")!!
+
+        assertTrue(dict.containsKey("episode_ad_markers"))
+        assertEquals(emptyList<Map<String, Any?>>(), dict["episode_ad_markers"])
+    }
+
+    @Test
+    fun `buildEpisodeDict ignores an ad-marker element outside libsyn's namespace`() {
+        val other = Namespace.getNamespace("ads", "https://example.com/ads")
+        val entry =
+            entryWithItunes(
+                extraForeignMarkup =
+                    listOf(
+                        Element("ad-markers", other).apply {
+                            addContent(Element("ad-marker", other).apply { setAttribute("type", "mid") })
+                        },
+                    ),
+            )
+
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+
+        assertEquals(emptyList<Map<String, Any?>>(), dict["episode_ad_markers"])
+    }
+
     private fun recoveredDir(dirName: String = "2019-01-01-deadbeef-An-Old-Episode") = EpisodeDirName.parse(dirName)!!
+
+    @Test
+    fun `buildRecoveredEpisodeDict keeps the audio's chapters, the feed's ad markers being gone`(
+        @TempDir dir: Path,
+    ) {
+        val audio = taggedMp3(dir, Id3Builder.chap("ch1", 0, 5_000, "Advertisement", 3))
+
+        val dict =
+            PodcastPipeline.buildRecoveredEpisodeDict(
+                feedWithItunes(),
+                recoveredDir(),
+                "t",
+                "p.mp3",
+                null,
+                audioPath = audio,
+            )!!
+
+        assertEquals(listOf(mapOf("start_s" to 0.0, "end_s" to 5.0, "title" to "Advertisement")), dict["episode_chapters"])
+        assertNull(dict["episode_ad_markers"])
+    }
 
     @Test
     fun `buildRecoveredEpisodeDict has the same keys as buildEpisodeDict plus the marker`() {
@@ -543,7 +676,7 @@ class PodcastPipelineCompanionTest {
         val recovered = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", "p.mp3", null)!!
 
         assertEquals(fromFeed.keys + "episode_metadata_recovered", recovered.keys)
-        assertEquals(26, recovered.size)
+        assertEquals(28, recovered.size)
     }
 
     @Test
@@ -585,6 +718,7 @@ class PodcastPipelineCompanionTest {
         listOf(
             "episode_audio_link", "episode_web_link", "episode_image", "episode_summary",
             "episode_subtitle", "episode_authors", "episode_number", "episode_season", "episode_type",
+            "episode_ad_markers",
         ).forEach { key ->
             assertTrue(dict.containsKey(key), "$key is missing")
             // Not emptyList() either: index.py turns that into "", which passes a null guard.

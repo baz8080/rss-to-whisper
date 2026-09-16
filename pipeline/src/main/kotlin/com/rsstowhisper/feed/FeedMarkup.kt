@@ -6,6 +6,31 @@ import org.jdom2.Element
 
 private const val TEXT_LIMIT = 300
 
+private const val LIBSYN_NAMESPACE = "https://rss.libsyn.com/ns.xml"
+
+/** One `<libsyn:ad-marker>`: an ad break the host declares. A `pre` carries no timestamp. */
+data class LibsynAdMarker(
+    val type: String?,
+    val count: Int?,
+    val timestampSeconds: Double?,
+)
+
+/**
+ * Libsyn's ad-insertion metadata, which no ROME module claims. Timestamps are seconds into the
+ * feed's master audio, which dynamic insertion can leave adrift from the file we download.
+ */
+fun libsynAdMarkers(entry: SyndEntry): List<LibsynAdMarker> =
+    entry.foreignMarkup.orEmpty()
+        .flatMap { listOf(it) + it.children }
+        .filter { it.name == "ad-marker" && it.namespaceURI == LIBSYN_NAMESPACE }
+        .map { marker ->
+            LibsynAdMarker(
+                type = marker.getAttributeValue("type")?.takeIf { it.isNotBlank() },
+                count = marker.getAttributeValue("count")?.toIntOrNull(),
+                timestampSeconds = marker.getAttributeValue("timestamp")?.toDoubleOrNull(),
+            )
+        }
+
 /**
  * Everything a feed carries that the pipeline does not map: elements no ROME module
  * claims -- e.g. Podcasting 2.0's tags, but not psc: (Podlove) chapters, which ROME does.

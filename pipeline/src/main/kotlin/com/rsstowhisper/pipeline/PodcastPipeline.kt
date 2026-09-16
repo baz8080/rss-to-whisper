@@ -9,12 +9,14 @@ import com.rometools.rome.feed.synd.SyndEntry
 import com.rometools.rome.feed.synd.SyndFeed
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.audio.readId3Chapters
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.feed.FeedService
+import com.rsstowhisper.feed.libsynAdMarkers
 import com.rsstowhisper.resolvePath
 import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
@@ -783,6 +785,7 @@ class PodcastPipeline(
                 durationSeconds = transcription.durationSeconds,
                 collections = podcast.collections,
                 quality = scored.quality,
+                audioPath = audioPath,
             ) ?: return false
 
         // Counting an orphan recovered when nothing was written both misreports
@@ -824,8 +827,15 @@ class PodcastPipeline(
         }
 
         val episodeDict =
-            buildEpisodeDict(feed, entry, transcription.vtt, mp3Info.localFilePath, collections, scored.quality)
-                ?: return
+            buildEpisodeDict(
+                feed,
+                entry,
+                transcription.vtt,
+                mp3Info.localFilePath,
+                collections,
+                scored.quality,
+                mp3Info.filePath,
+            ) ?: return
 
         writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
     }
@@ -1102,6 +1112,7 @@ class PodcastPipeline(
             relativeAudioPath: String,
             collections: List<String>? = null,
             quality: QualityReport? = null,
+            audioPath: Path? = null,
         ): Map<String, Any?>? {
             if (transcript.isEmpty()) return null
 
@@ -1141,6 +1152,8 @@ class PodcastPipeline(
                         "episode_duration" to parseDuration(entryItunes),
                         "episode_transcript" to transcript,
                         "episode_relative_audio_path" to relativeAudioPath,
+                        "episode_chapters" to chapterMaps(audioPath),
+                        "episode_ad_markers" to adMarkerMaps(entry),
                         "episode_quality" to quality?.toMap(),
                     )
             } catch (e: Exception) {
@@ -1148,6 +1161,26 @@ class PodcastPipeline(
                 null
             }
         }
+
+        /** Seconds, not the tag's milliseconds: every other time in `transcript.json` is seconds. */
+        private fun chapterMaps(audioPath: Path?): List<Map<String, Any?>> =
+            audioPath?.let(::readId3Chapters).orEmpty().map {
+                mapOf(
+                    "start_s" to it.startMs / 1000.0,
+                    "end_s" to it.endMs / 1000.0,
+                    "title" to it.title,
+                )
+            }
+
+        /** Only the feed carries these, so only a live entry can supply them. */
+        private fun adMarkerMaps(entry: SyndEntry): List<Map<String, Any?>> =
+            libsynAdMarkers(entry).map {
+                mapOf(
+                    "type" to it.type,
+                    "count" to it.count,
+                    "timestamp_s" to it.timestampSeconds,
+                )
+            }
 
         /** The eight fields that are the same for every episode of one feed. */
         internal fun podcastFields(
@@ -1171,9 +1204,10 @@ class PodcastPipeline(
          * The same shape as [buildEpisodeDict], for an episode whose feed entry is gone.
          *
          * The directory name carries the date, the id and a lossy title; the feed still
-         * supplies everything about the podcast. Nothing else is recoverable, and every
-         * unrecoverable field is explicitly null -- an empty string would reach the web
-         * module's `!= null` guards and render a dead link.
+         * supplies everything about the podcast, and the audio file its own chapters.
+         * Nothing else is recoverable, and every unrecoverable field is explicitly null --
+         * an empty string would reach the web module's `!= null` guards and render a dead
+         * link, and an empty list would claim the feed said there were no ad breaks.
          */
         internal fun buildRecoveredEpisodeDict(
             feed: SyndFeed,
@@ -1183,6 +1217,7 @@ class PodcastPipeline(
             durationSeconds: Int?,
             collections: List<String>? = null,
             quality: QualityReport? = null,
+            audioPath: Path? = null,
         ): Map<String, Any?>? {
             if (transcript.isEmpty()) return null
 
@@ -1205,6 +1240,8 @@ class PodcastPipeline(
                         "episode_duration" to durationSeconds,
                         "episode_transcript" to transcript,
                         "episode_relative_audio_path" to relativeAudioPath,
+                        "episode_chapters" to chapterMaps(audioPath),
+                        "episode_ad_markers" to null,
                         "episode_metadata_recovered" to true,
                         "episode_quality" to quality?.toMap(),
                     )

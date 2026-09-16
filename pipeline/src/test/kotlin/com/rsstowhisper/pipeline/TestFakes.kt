@@ -87,9 +87,13 @@ internal val WORDLESS_JSON =
         """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
         "]}"
 
+internal val FAKE_MP3_BYTES = "fake-mp3-bytes".toByteArray()
+
 internal open class FakeFeedService(
     private val feeds: Map<String, SyndFeed?>,
     private val downloadFails: (String) -> Boolean = { false },
+    /** What the download leaves on disk, for a test that needs the audio's own ID3 tag. */
+    private val audioBytes: ByteArray = FAKE_MP3_BYTES,
 ) : FeedService() {
     val requestedUrls = mutableListOf<String>()
 
@@ -111,7 +115,7 @@ internal open class FakeFeedService(
         Files.createDirectories(targetPath.parent)
         if (downloadFails(url)) return false
         downloads.add(url to targetPath)
-        Files.writeString(targetPath, "fake-mp3-bytes")
+        Files.write(targetPath, audioBytes)
         return true
     }
 }
@@ -221,6 +225,7 @@ internal fun buildPipeline(
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
     transcriberAnswersPing: Boolean = true,
+    audioBytes: ByteArray = FAKE_MP3_BYTES,
     /** Supply one when the test needs a reference to it before the pipeline exists. */
     feedService: FakeFeedService? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
@@ -237,7 +242,7 @@ internal fun buildPipeline(
             dryRun = dryRun,
             podcasts = podcasts,
         )
-    val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed))
+    val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed), audioBytes = audioBytes)
     val txSvc =
         FakeTranscriber(
             FAKE_SERVER_URL,

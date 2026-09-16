@@ -1,10 +1,16 @@
 package com.rsstowhisper.audio
 
+import com.rsstowhisper.pipeline.PodcastPipeline
+import org.slf4j.LoggerFactory
+import java.io.UncheckedIOException
+import java.nio.file.FileVisitOption
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Locale
 import kotlin.io.path.name
 
-private const val AUDIO_FILENAME = "audio.mp3"
+private val AUDIO_FILENAME = PodcastPipeline.AUDIO_FILENAME
+private val logger = LoggerFactory.getLogger("ChapterSurvey")
 
 data class ChapteredEpisode(
     val relativePath: String,
@@ -18,30 +24,34 @@ data class ChapterSurvey(
     val withChapters: Int get() = chaptered.size
 }
 
-/** Reads the ID3 tag of every `audio.mp3` under [dataDirectory]. Never decodes audio. */
+/** Reads the ID3 tag of every `audio.mp3` under [dataDirectory]. */
 fun surveyAudioChapters(dataDirectory: Path): ChapterSurvey {
     var scanned = 0
     val chaptered = mutableListOf<ChapteredEpisode>()
 
-    Files.walk(dataDirectory).use { paths ->
-        paths
-            .filter { Files.isRegularFile(it) && it.name == AUDIO_FILENAME }
-            .forEach { path ->
-                scanned++
-                val chapters = readId3Chapters(path)
-                if (chapters.isNotEmpty()) {
-                    val relative = dataDirectory.relativize(path.parent ?: path).toString()
-                    chaptered += ChapteredEpisode(relative, chapters)
+    try {
+        Files.walk(dataDirectory, FileVisitOption.FOLLOW_LINKS).use { paths ->
+            paths
+                .filter { Files.isRegularFile(it) && it.name == AUDIO_FILENAME }
+                .forEach { path ->
+                    scanned++
+                    val chapters = readId3Chapters(path)
+                    if (chapters.isNotEmpty()) {
+                        val relative = dataDirectory.relativize(path.parent ?: path).toString()
+                        chaptered += ChapteredEpisode(relative, chapters)
+                    }
                 }
-            }
+        }
+    } catch (e: UncheckedIOException) {
+        // One unreadable subdirectory must not lose everything already scanned.
+        logger.warn("Stopped walking $dataDirectory early", e)
     }
     return ChapterSurvey(scanned, chaptered.sortedBy { it.relativePath })
 }
 
 /**
- * A title carried by many episodes is a structural segment -- an intro, a break, a sponsor
- * read. A title carried once is that episode's content. Sorting by episode count is what
- * separates them, so it is the ordering the tally uses.
+ * Episode count, not raw uses, orders the tally: a title reused across episodes is
+ * structural (intro, break, sponsor read); a title used once is that episode's content.
  */
 internal fun titleTally(chaptered: List<ChapteredEpisode>): List<Triple<String, Int, Int>> {
     val occurrences = mutableMapOf<String, Int>()
@@ -73,7 +83,7 @@ fun audioChapterReport(
     }
 
     val percent = survey.withChapters * 100.0 / survey.scanned
-    out.appendLine("with ID3 chapters: ${survey.withChapters} (${"%.1f".format(percent)}%)")
+    out.appendLine("with ID3 chapters: ${survey.withChapters} (${"%.1f".format(Locale.ROOT, percent)}%)")
 
     if (survey.withChapters == 0) {
         out.appendLine()
@@ -81,7 +91,7 @@ fun audioChapterReport(
         return out.toString()
     }
 
-    val shown = survey.chaptered.take(limit)
+    val shown = if (limit > 0) survey.chaptered.take(limit) else survey.chaptered
     out.appendLine()
     out.appendLine("showing ${shown.size} of ${survey.withChapters}")
 
@@ -107,5 +117,5 @@ internal fun stamp(ms: Long): String {
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
     val seconds = totalSeconds % 60
-    return "%d:%02d:%02d".format(hours, minutes, seconds)
+    return "%d:%02d:%02d".format(Locale.ROOT, hours, minutes, seconds)
 }

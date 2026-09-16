@@ -53,6 +53,47 @@ private val PLAIN_RSS =
     </rss>
     """.trimIndent()
 
+private val PSC_RSS =
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"
+         xmlns:podcast="https://podcastindex.org/namespace/1.0"
+         xmlns:psc="http://podlove.org/simple-chapters">
+      <channel>
+        <title>Podlove Feed</title>
+        <link>https://example.com</link>
+        <description>A test feed</description>
+        <item>
+          <title>Episode One</title>
+          <guid>ep1</guid>
+          <podcast:chapters url="https://example.com/ep1/chapters.json" type="application/json+chapters"/>
+          <psc:chapters version="1.1">
+            <psc:chapter start="00:00:00" title="Intro"/>
+          </psc:chapters>
+        </item>
+      </channel>
+    </rss>
+    """.trimIndent()
+
+private val LONG_FUNDING_URL = "https://example.com/" + "x".repeat(310)
+
+private val TRUNCATION_RSS =
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+      <channel>
+        <title>Truncation Feed</title>
+        <link>https://example.com</link>
+        <description>A test feed</description>
+        <item>
+          <title>Episode One</title>
+          <guid>ep1</guid>
+          <podcast:funding url="$LONG_FUNDING_URL">Support the show</podcast:funding>
+        </item>
+      </channel>
+    </rss>
+    """.trimIndent()
+
 class FeedMarkupTest {
     private fun parse(xml: String) = SyndFeedInput().build(InputSource(StringReader(xml)))
 
@@ -92,11 +133,22 @@ class FeedMarkupTest {
     }
 
     @Test
-    fun `limit caps the entries sampled`() {
+    fun `limit caps the entries shown but not the entries tallied`() {
         val report = feedMarkupReport(parse(SEGMENTED_RSS), limit = 1)
 
         assertTrue(report.contains("1 of 2 entries"))
         assertFalse(report.contains("Episode Two"))
+        // Episode Two's own podcast:chapters would be invisible at limit=1 if the tally
+        // were computed only over the shown entries, as it once was.
+        assertTrue(report.contains("2 x podcast:chapters"))
+    }
+
+    @Test
+    fun `a limit of 0 shows every entry, matching the other limit flags in this CLI`() {
+        val report = feedMarkupReport(parse(SEGMENTED_RSS), limit = 0)
+
+        assertTrue(report.contains("2 of 2 entries"))
+        assertTrue(report.contains("Episode Two"))
     }
 
     @Test
@@ -104,6 +156,30 @@ class FeedMarkupTest {
         val report = feedMarkupReport(parse(PLAIN_RSS), limit = 10)
 
         assertTrue(report.contains("foreign markup: (none)"))
-        assertTrue(report.contains("distinct foreign elements across the sample:\n  (none)"))
+        assertTrue(report.contains("distinct foreign elements across all 1 entries:\n  (none)"))
+    }
+
+    @Test
+    fun `psc chapters are claimed by rome-modules and stay invisible, unlike podcast chapters`() {
+        val report = feedMarkupReport(parse(PSC_RSS), limit = 10)
+
+        assertTrue(report.contains("podcast:chapters"))
+        assertFalse(report.contains("psc:chapters"))
+        assertFalse(report.contains("psc:chapter"))
+    }
+
+    @Test
+    fun `channel-level foreign markup is rendered under its own heading`() {
+        val report = feedMarkupReport(parse(SEGMENTED_RSS), limit = 10)
+
+        assertTrue(report.contains("channel foreign markup:\n    <podcast:medium>podcast</podcast:medium>"))
+    }
+
+    @Test
+    fun `long attribute values are truncated with an ellipsis`() {
+        val report = feedMarkupReport(parse(TRUNCATION_RSS), limit = 10)
+
+        assertTrue(report.contains(LONG_FUNDING_URL.take(300) + "..."))
+        assertFalse(report.contains(LONG_FUNDING_URL))
     }
 }

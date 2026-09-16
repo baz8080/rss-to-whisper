@@ -7,10 +7,8 @@ import org.jdom2.Element
 private const val TEXT_LIMIT = 300
 
 /**
- * Everything a feed carries that the pipeline does not map. ROME hands back as foreign
- * markup any element no registered module claimed, and rome-modules 2.1.0 registers
- * nothing for the Podcasting 2.0 namespace, so chapters, transcripts and soundbites all
- * land there intact.
+ * Everything a feed carries that the pipeline does not map: elements no ROME module
+ * claims -- e.g. Podcasting 2.0's tags, but not psc: (Podlove) chapters, which ROME does.
  */
 fun feedMarkupReport(
     feed: SyndFeed,
@@ -21,11 +19,12 @@ fun feedMarkupReport(
     out.appendLine("modules: ${moduleUris(feed.modules.orEmpty().map { it.uri })}")
     appendMarkup(out, "channel foreign markup", feed.foreignMarkup.orEmpty())
 
-    val entries = feed.entries.orEmpty().take(limit)
+    val allEntries = feed.entries.orEmpty()
+    val shown = if (limit > 0) allEntries.take(limit) else allEntries
     out.appendLine()
-    out.appendLine("${entries.size} of ${feed.entries.orEmpty().size} entries")
+    out.appendLine("${shown.size} of ${allEntries.size} entries")
 
-    entries.forEachIndexed { index, entry ->
+    shown.forEachIndexed { index, entry ->
         out.appendLine()
         out.appendLine("[${index + 1}] ${entry.title ?: "(untitled)"}")
         out.appendLine("  published: ${entry.publishedDate ?: "(none)"}")
@@ -34,8 +33,8 @@ fun feedMarkupReport(
     }
 
     out.appendLine()
-    out.appendLine("distinct foreign elements across the sample:")
-    val tally = tallyElements(entries)
+    out.appendLine("distinct foreign elements across all ${allEntries.size} entries:")
+    val tally = tallyElements(allEntries)
     if (tally.isEmpty()) {
         out.appendLine("  (none)")
     } else {
@@ -44,10 +43,7 @@ fun feedMarkupReport(
     return out.toString()
 }
 
-/**
- * Counts every foreign element in the sample by qualified name, nested ones included, so
- * a tag that appears on one episode in ten is still visible.
- */
+/** Nested elements count too, so a tag that appears on one episode in ten is still visible. */
 internal fun tallyElements(entries: List<SyndEntry>): Map<String, Int> {
     val counts = mutableMapOf<String, Int>()
 

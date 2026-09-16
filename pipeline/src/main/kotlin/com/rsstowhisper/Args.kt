@@ -29,7 +29,7 @@ internal val USAGE =
                              a tally of chapter titles. Reads tags only, never
                              audio; needs no config and no network
       --dump-limit <n>       How many entries --dump-feed-markup or
-                             --dump-audio-chapters covers (default 10)
+                             --dump-audio-chapters shows (default 10, 0 for all)
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes

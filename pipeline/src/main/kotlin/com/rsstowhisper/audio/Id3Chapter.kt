@@ -18,10 +18,8 @@ private class Frame(val id: String, val body: ByteArray)
 private class Tag(val major: Int, val body: ByteArray)
 
 /**
- * Chapters embedded in [path]'s ID3v2 tag. Empty when the file has no tag, no chapters,
- * or a tag this cannot read -- a survey must not fail a whole corpus scan on one odd file.
- *
- * Only the tag is read, never the audio frames, so this stays cheap over a large library.
+ * Chapters in [path]'s ID3v2 tag; reads only the tag, never the audio. Empty for no tag,
+ * no chapters, or a tag this can't read -- one odd file must not fail a whole corpus scan.
  */
 fun readId3Chapters(path: Path): List<Id3Chapter> =
     try {
@@ -59,7 +57,7 @@ private fun readTag(path: Path): Tag? {
         if (read < size) body = body.copyOf(read)
 
         if (flags and 0x80 != 0) body = deUnsynchronise(body)
-        if (flags and 0x40 != 0) body = skipExtendedHeader(body, major)
+        if (flags and 0x40 != 0) body = skipExtendedHeader(body, major) ?: return null
         return Tag(major, body)
     }
 }
@@ -80,10 +78,11 @@ private fun deUnsynchronise(body: ByteArray): ByteArray {
 private fun skipExtendedHeader(
     body: ByteArray,
     major: Int,
-): ByteArray {
+): ByteArray? {
     if (body.size < 4) return body
     // v2.4 counts the four length bytes in the length; v2.3 does not.
     val declared = if (major >= 4) syncSafe(body, 0) else plainInt(body, 0)
+    if (declared < 0) return null
     val skip = if (major >= 4) declared else declared + 4
     return if (skip in 1..body.size) body.copyOfRange(skip, body.size) else body
 }
@@ -98,11 +97,11 @@ private fun parseFrames(
         if (body[i] == 0.toByte()) break // padding
 
         val id = String(body, i, 4, Charsets.ISO_8859_1)
-        if (!id.all { it.isUpperCase() || it.isDigit() }) break
+        if (!looksLikeFrameId(body, i)) break
 
         val size = frameSize(body, i + 4, major)
         val start = i + HEADER_SIZE
-        if (size <= 0 || start + size > body.size) break
+        if (size < 0 || start + size > body.size) break
 
         frames += Frame(id, body.copyOfRange(start, start + size))
         i = start + size
@@ -111,9 +110,8 @@ private fun parseFrames(
 }
 
 /**
- * v2.4 declares frame sizes as syncsafe integers, but taggers in the wild write plain
- * ones -- a long-standing bug in several encoders. Trust syncsafe only when it lands on
- * something that looks like the next frame; otherwise fall back.
+ * v2.4 frame sizes are syncsafe, but some taggers write plain ones. An unreadable syncsafe
+ * value falls back to plain; an ambiguous one defaults to syncsafe, as most taggers agree.
  */
 private fun frameSize(
     body: ByteArray,
@@ -124,12 +122,11 @@ private fun frameSize(
     if (major < 4) return plain
 
     val safe = syncSafe(body, at)
-    if (safe == plain) return safe
-    if (landsOnFrame(body, at + 6 + safe) || !landsOnFrame(body, at + 6 + plain)) return safe
-    return plain
+    if (safe < 0) return plain
+    return if (landsOnFrame(body, at + 6 + safe) || !landsOnFrame(body, at + 6 + plain)) safe else plain
 }
 
-/** True when [at] is the end of the tag, padding, or a plausible frame id. */
+/** True at the end of the tag, at padding, or at a plausible frame id -- [looksLikeFrameId]. */
 private fun landsOnFrame(
     body: ByteArray,
     at: Int,
@@ -137,11 +134,18 @@ private fun landsOnFrame(
     if (at == body.size) return true
     if (at < 0 || at + 4 > body.size) return false
     if (body[at] == 0.toByte()) return true
-    return (0..3).all {
-        val c = body[at + it].toInt().toChar()
-        c.isUpperCase() || c.isDigit()
-    }
+    return looksLikeFrameId(body, at)
 }
+
+private fun looksLikeFrameId(
+    body: ByteArray,
+    at: Int,
+): Boolean =
+    at + 4 <= body.size &&
+        (0..3).all {
+            val c = body[at + it].toInt().toChar()
+            c.isUpperCase() || c.isDigit()
+        }
 
 private fun parseChap(
     body: ByteArray,

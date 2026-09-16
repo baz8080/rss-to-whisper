@@ -3,8 +3,56 @@ package com.rsstowhisper.feed
 import com.rometools.rome.feed.synd.SyndEntry
 import com.rometools.rome.feed.synd.SyndFeed
 import org.jdom2.Element
+import org.slf4j.LoggerFactory
 
 private const val TEXT_LIMIT = 300
+
+private const val LIBSYN_NAMESPACE = "https://rss.libsyn.com/ns.xml"
+
+private val logger = LoggerFactory.getLogger(LibsynAdMarker::class.java)
+
+/** One `<libsyn:ad-marker>`: an ad break the host declares. A `pre` carries no timestamp. */
+data class LibsynAdMarker(
+    val type: String?,
+    val count: Int?,
+    /**
+     * Seconds into the publisher's master audio -- NOT the same clock as `episode_chapters`'
+     * `start_s`/`end_s`, which are the downloaded file's own, and which dynamic insertion can
+     * leave far adrift from this. Published as `timestamp_publisher_s` to say so in the data.
+     */
+    val timestampSeconds: Double?,
+)
+
+/**
+ * Libsyn's ad-insertion metadata, which no ROME module claims. Timestamps are seconds into the
+ * feed's master audio, which dynamic insertion can leave adrift from the file we download.
+ */
+fun libsynAdMarkers(entry: SyndEntry): List<LibsynAdMarker> =
+    entry.foreignMarkup.orEmpty()
+        .flatMap { listOf(it) + it.children }
+        .filter { it.name == "ad-marker" && it.namespaceURI == LIBSYN_NAMESPACE }
+        .map { marker ->
+            LibsynAdMarker(
+                type = marker.getAttributeValue("type")?.takeIf { it.isNotBlank() },
+                count = marker.parsedAttribute("count") { it.toIntOrNull() },
+                timestampSeconds = marker.parsedAttribute("timestamp") { it.toDoubleOrNull()?.takeIf(Double::isFinite) },
+            )
+        }
+
+/**
+ * Null for an absent attribute and for one that will not parse, logging only the second: a
+ * malformed timestamp must not read as a pre-roll's deliberately absent one. Non-finite doubles
+ * count as unparseable -- Jackson writes them as bare `NaN`, which its own reader then rejects.
+ */
+private fun <T> Element.parsedAttribute(
+    name: String,
+    parse: (String) -> T?,
+): T? {
+    val raw = getAttributeValue(name) ?: return null
+    val value = parse(raw)
+    if (value == null) logger.warn("Ignoring an unusable libsyn ad-marker $name=\"$raw\"")
+    return value
+}
 
 /**
  * Everything a feed carries that the pipeline does not map: elements no ROME module

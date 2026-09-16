@@ -1,17 +1,20 @@
 package com.rsstowhisper.audio
 
+import com.sun.management.ThreadMXBean
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
+import java.lang.management.ManagementFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Builds the tag bytes a tagger would write, so the parser is tested against real layout. */
-private object Id3Builder {
+internal object Id3Builder {
     fun tag(
         major: Int,
         frames: List<ByteArray>,
@@ -58,6 +61,42 @@ private object Id3Builder {
         out.write(plainBytes(body.size))
         out.write(byteArrayOf(0, 0))
         out.write(body)
+        return out.toByteArray()
+    }
+
+    /** A v2.4 frame whose format flags are set, with the extra data each of them prefixes it with. */
+    fun frameWithFormatFlags(
+        id: String,
+        body: ByteArray,
+        formatFlags: Int,
+    ): ByteArray {
+        val prefixed = ByteArrayOutputStream()
+        if (formatFlags and 0x40 != 0) prefixed.write(0xAA) // group identity
+        if (formatFlags and 0x04 != 0) prefixed.write(0x01) // encryption method
+        if (formatFlags and 0x01 != 0) prefixed.write(syncSafeBytes(body.size))
+        prefixed.write(body)
+        val content = prefixed.toByteArray()
+
+        val out = ByteArrayOutputStream()
+        out.write(id.toByteArray(Charsets.ISO_8859_1))
+        out.write(syncSafeBytes(content.size))
+        out.write(byteArrayOf(0, formatFlags.toByte()))
+        out.write(content)
+        return out.toByteArray()
+    }
+
+    /** Only the ten header bytes, declaring [declaredSize] whatever actually follows. */
+    fun tagHeader(
+        major: Int,
+        declaredSize: Int,
+        flags: Int = 0,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write("ID3".toByteArray(Charsets.ISO_8859_1))
+        out.write(major)
+        out.write(0)
+        out.write(flags)
+        out.write(syncSafeBytes(declaredSize))
         return out.toByteArray()
     }
 
@@ -148,6 +187,16 @@ private fun unsynchronise(body: ByteArray): ByteArray {
         if (b == 0xFF.toByte()) out.write(0)
     }
     return out.toByteArray()
+}
+
+/** HotSpot counts thread allocation exactly, which is what makes "never copied" assertable. */
+private fun allocatedBytes(block: () -> Unit): Long {
+    val bean = ManagementFactory.getThreadMXBean() as? ThreadMXBean
+    assumeTrue(bean?.isThreadAllocatedMemorySupported == true, "needs the HotSpot allocation counter")
+    val thread = Thread.currentThread().threadId()
+    val before = bean!!.getThreadAllocatedBytes(thread)
+    block()
+    return bean.getThreadAllocatedBytes(thread) - before
 }
 
 class Id3ChaptersTest {
@@ -519,6 +568,130 @@ class Id3ChaptersTest {
         val tag = Id3Builder.tagFromBody(4, flags = 0x40, body = body)
 
         assertTrue(readId3Chapters(writeMp3(dir, tag)).isEmpty())
+    }
+
+    @Test
+    fun `a tag declaring far more than the file holds allocates only what the file holds`(
+        @TempDir dir: Path,
+    ) {
+        // 0x0FFFFFFF is the largest a syncsafe tag size can declare: 256MB, allocated before a
+        // byte is read. OutOfMemoryError is an Error, so no caller in the pipeline catches it.
+        val chap = Id3Builder.chap("ch1", 0, 1_000, "Intro", 3)
+        val path = dir.resolve("audio.mp3")
+        Files.write(path, Id3Builder.tagHeader(3, declaredSize = 0x0FFFFFFF) + chap)
+
+        var chapters = emptyList<Id3Chapter>()
+        val allocated = allocatedBytes { chapters = readId3Chapters(path) }
+
+        assertEquals(listOf("Intro"), chapters.map { it.title })
+        assertTrue(allocated < 16_000_000, "allocated $allocated bytes for a ${Files.size(path)}-byte file")
+    }
+
+    @Test
+    fun `an unwanted frame's body is never copied, cover art running to megabytes`(
+        @TempDir dir: Path,
+    ) {
+        val art = Id3Builder.frame("APIC", ByteArray(4 shl 20) { 0x41 }, 3)
+        val path = writeMp3(dir, Id3Builder.tag(3, listOf(art, Id3Builder.chap("ch1", 0, 1_000, "Intro", 3))))
+
+        var chapters = emptyList<Id3Chapter>()
+        val allocated = allocatedBytes { chapters = readId3Chapters(path) }
+
+        assertEquals(1, chapters.size)
+        // Reading the tag is one 4MB array; copying the art body out of it would double that.
+        assertTrue(allocated < 6L shl 20, "allocated $allocated bytes")
+    }
+
+    @Test
+    fun `a v2_4 frame's data length indicator is not read as content`(
+        @TempDir dir: Path,
+    ) {
+        val first = Id3Builder.frameWithFormatFlags("CHAP", Id3Builder.chapContent("ch1", 0, 1_000, "Ad", 4), 0x01)
+        val tag = Id3Builder.tag(4, listOf(first, Id3Builder.chap("ch2", 1_000, 2_000, "Show", 4)))
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(listOf("Ad", "Show"), chapters.map { it.title }, "the second frame shifts if the prefix is read")
+    }
+
+    @Test
+    fun `a v2_4 frame's group identity byte is not read as content`(
+        @TempDir dir: Path,
+    ) {
+        val grouped = Id3Builder.frameWithFormatFlags("CHAP", Id3Builder.chapContent("ch1", 0, 1_000, "Ad", 4), 0x40)
+        val tag = Id3Builder.tag(4, listOf(grouped, Id3Builder.chap("ch2", 1_000, 2_000, "Show", 4)))
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(listOf("Ad", "Show"), chapters.map { it.title })
+        assertEquals("ch1", chapters[0].elementId, "the group byte lands in the element id when it is read as content")
+    }
+
+    @Test
+    fun `an encrypted frame is skipped rather than parsed as plain bytes`(
+        @TempDir dir: Path,
+    ) {
+        val encrypted = Id3Builder.frameWithFormatFlags("CHAP", Id3Builder.chapContent("ch1", 0, 1_000, "Ad", 4), 0x05)
+        val tag = Id3Builder.tag(4, listOf(encrypted, Id3Builder.chap("ch2", 1_000, 2_000, "Show", 4)))
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(listOf("Show"), chapters.map { it.title })
+    }
+
+    @Test
+    fun `a v2_4 frame unsynchronised on its own is restored before it is parsed`(
+        @TempDir dir: Path,
+    ) {
+        val content = Id3Builder.chapContent("ch1", 0, 1_000, "AÿB", 4, encoding = 0)
+        val tag = Id3Builder.tag(4, listOf(Id3Builder.frameWithFormatFlags("CHAP", unsynchronise(content), 0x02)))
+
+        val chapters = readId3Chapters(writeMp3(dir, tag))
+
+        assertEquals(listOf("AÿB"), chapters.map { it.title })
+    }
+
+    @Test
+    fun `a readable file carrying no chapters is not reported as unread`(
+        @TempDir dir: Path,
+    ) {
+        val path = dir.resolve("audio.mp3")
+        Files.write(path, ByteArray(4096) { 0x55 })
+
+        assertEquals(emptyList(), readId3ChaptersOrNull(path))
+    }
+
+    @Test
+    fun `a file that could not be read at all is null, not empty`(
+        @TempDir dir: Path,
+    ) {
+        assertNull(readId3ChaptersOrNull(dir.resolve("never-written.mp3")))
+    }
+
+    @Test
+    fun `a tag whose extended header hides the frames is null, not empty`(
+        @TempDir dir: Path,
+    ) {
+        val tag = Id3Builder.tagFromBody(3, flags = 0x40, body = byteArrayOf(0, 0))
+
+        assertNull(readId3ChaptersOrNull(writeMp3(dir, tag)))
+    }
+
+    @Test
+    fun `chapter times are published in seconds`() {
+        assertEquals(
+            mapOf("start_s" to 0.0, "end_s" to 12.34, "title" to "Intro"),
+            Id3Chapter("ch1", 0, 12_340, "Intro").toSecondsMap(),
+        )
+    }
+
+    @Test
+    fun `the unused-time sentinel and a reversed span are not usable times`() {
+        assertTrue(Id3Chapter("ch1", 0, 1_000, null).hasUsableTimes())
+        assertTrue(Id3Chapter("ch1", 1_000, 1_000, null).hasUsableTimes(), "a zero-length chapter is still a time")
+        assertFalse(Id3Chapter("ch1", 0, 0xFFFFFFFFL, null).hasUsableTimes())
+        assertFalse(Id3Chapter("ch1", 0xFFFFFFFFL, 0xFFFFFFFFL, null).hasUsableTimes())
+        assertFalse(Id3Chapter("ch1", 2_000, 1_000, null).hasUsableTimes())
     }
 
     @Test

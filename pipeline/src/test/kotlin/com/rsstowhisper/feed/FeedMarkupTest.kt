@@ -6,6 +6,7 @@ import org.xml.sax.InputSource
 import java.io.StringReader
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val SEGMENTED_RSS =
@@ -70,6 +71,55 @@ private val PSC_RSS =
           <psc:chapters version="1.1">
             <psc:chapter start="00:00:00" title="Intro"/>
           </psc:chapters>
+        </item>
+      </channel>
+    </rss>
+    """.trimIndent()
+
+/** Copied from a Libsyn-hosted feed, namespace declaration and all -- not built from the constant. */
+private val LIBSYN_RSS =
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0"
+         xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+         xmlns:libsyn="https://rss.libsyn.com/ns.xml">
+      <channel>
+        <title>A Libsyn Show</title>
+        <link>https://example.com</link>
+        <description>A test feed</description>
+        <item>
+          <title>Episode One</title>
+          <guid isPermaLink="false">abc123</guid>
+          <itunes:duration>13962</itunes:duration>
+          <libsyn:ad-markers>
+            <libsyn:ad-marker type="pre" count="2"/>
+            <libsyn:ad-marker type="mid" count="2" timestamp="1244"/>
+            <libsyn:ad-marker type="post" count="3" timestamp="13926"/>
+          </libsyn:ad-markers>
+          <libsyn:showId>123456</libsyn:showId>
+        </item>
+      </channel>
+    </rss>
+    """.trimIndent()
+
+private val MALFORMED_MARKERS_RSS =
+    """
+    <?xml version="1.0" encoding="UTF-8"?>
+    <rss version="2.0" xmlns:libsyn="https://rss.libsyn.com/ns.xml">
+      <channel>
+        <title>A Libsyn Show</title>
+        <link>https://example.com</link>
+        <description>A test feed</description>
+        <item>
+          <title>Episode One</title>
+          <guid isPermaLink="false">abc123</guid>
+          <libsyn:ad-markers>
+            <libsyn:ad-marker type="mid" count="1" timestamp=""/>
+            <libsyn:ad-marker type="mid" count="1" timestamp="00:20:44"/>
+            <libsyn:ad-marker type="mid" count="1" timestamp="NaN"/>
+            <libsyn:ad-marker type="mid" count="1" timestamp="Infinity"/>
+            <libsyn:ad-marker type="post" count="two" timestamp="13926"/>
+          </libsyn:ad-markers>
         </item>
       </channel>
     </rss>
@@ -173,6 +223,32 @@ class FeedMarkupTest {
         val report = feedMarkupReport(parse(SEGMENTED_RSS), limit = 10)
 
         assertTrue(report.contains("channel foreign markup:\n    <podcast:medium>podcast</podcast:medium>"))
+    }
+
+    @Test
+    fun `ad markers are read out of a real feed's XML, namespace URI and all`() {
+        val markers = libsynAdMarkers(parse(LIBSYN_RSS).entries.single())
+
+        assertEquals(
+            listOf(
+                LibsynAdMarker("pre", 2, null),
+                LibsynAdMarker("mid", 2, 1244.0),
+                LibsynAdMarker("post", 3, 13926.0),
+            ),
+            markers,
+        )
+    }
+
+    @Test
+    fun `values that will not parse read as absent rather than as broken numbers`() {
+        val markers = libsynAdMarkers(parse(MALFORMED_MARKERS_RSS).entries.single())
+
+        assertEquals(5, markers.size)
+        // A NaN or an Infinity would parse, and then Jackson would write it as a bare literal
+        // that its own reader rejects, making the transcript unreadable.
+        assertTrue(markers.take(4).all { it.timestampSeconds == null })
+        assertNull(markers[4].count)
+        assertEquals(13926.0, markers[4].timestampSeconds)
     }
 
     @Test

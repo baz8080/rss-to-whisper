@@ -1,5 +1,6 @@
 package com.rsstowhisper.audio
 
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -13,28 +14,55 @@ data class Id3Chapter(
 
 private const val HEADER_SIZE = 10
 
+/** The ID3 spec's "value unused" sentinel, not a 49-day offset. */
+private const val TIME_UNUSED = 0xFFFFFFFFL
+
+private val logger = LoggerFactory.getLogger(Id3Chapter::class.java)
+
+/** Seconds, not the tag's milliseconds: every other time in `transcript.json` is seconds. */
+fun Id3Chapter.toSecondsMap(): Map<String, Any?> =
+    mapOf(
+        "start_s" to startMs / 1000.0,
+        "end_s" to endMs / 1000.0,
+        "title" to title,
+    )
+
+/** False for times no consumer can use, so publishing them cannot pass off a sentinel as a span. */
+fun Id3Chapter.hasUsableTimes(): Boolean {
+    val usable = startMs != TIME_UNUSED && endMs != TIME_UNUSED && endMs >= startMs
+    if (!usable) logger.warn("Dropping chapter $elementId: unusable times ${startMs}ms-${endMs}ms")
+    return usable
+}
+
 private class Frame(val id: String, val body: ByteArray)
 
 private class Tag(val major: Int, val body: ByteArray)
 
+/** A tag that is present and cannot be parsed, which is not the same as a file carrying none. */
+private class Id3Unreadable(reason: String) : Exception(reason)
+
 /**
- * Chapters in [path]'s ID3v2 tag; reads only the tag, never the audio. Empty for no tag,
- * no chapters, or a tag this can't read -- one odd file must not fail a whole corpus scan.
+ * Chapters in [path]'s ID3v2 tag; reads only the tag, never the audio. Empty for no tag or no
+ * chapters, null for a file this could not read -- which anything publishing the result has to
+ * tell apart from an episode that genuinely carries none.
  */
-fun readId3Chapters(path: Path): List<Id3Chapter> =
+fun readId3ChaptersOrNull(path: Path): List<Id3Chapter>? =
     try {
         val tag = readTag(path)
         if (tag == null) {
             emptyList()
         } else {
-            parseFrames(tag.body, tag.major)
-                .filter { it.id == "CHAP" }
+            parseFrames(tag.body, tag.major) { it == "CHAP" }
                 .mapNotNull { parseChap(it.body, tag.major) }
                 .sortedBy { it.startMs }
         }
     } catch (e: Exception) {
-        emptyList()
+        logger.warn("Could not read the ID3 tag of $path: ${e.message}")
+        null
     }
+
+/** Empty for an unreadable file too: one odd tag must not fail a whole corpus scan. */
+fun readId3Chapters(path: Path): List<Id3Chapter> = readId3ChaptersOrNull(path).orEmpty()
 
 private fun readTag(path: Path): Tag? {
     Files.newInputStream(path).use { input ->
@@ -49,7 +77,12 @@ private fun readTag(path: Path): Tag? {
         if (major < 3) return null
 
         val flags = header[5].toInt() and 0xFF
-        val size = syncSafe(header, 6)
+        val declared = syncSafe(header, 6)
+        if (declared <= 0) return null
+
+        // A tag may declare 256MB. Allocating that on a corrupt header raises OutOfMemoryError,
+        // which is an Error: not caught below, and fatal to the whole run.
+        val size = minOf(declared.toLong(), Files.size(path) - HEADER_SIZE).toInt()
         if (size <= 0) return null
 
         var body = ByteArray(size)
@@ -57,7 +90,9 @@ private fun readTag(path: Path): Tag? {
         if (read < size) body = body.copyOf(read)
 
         if (flags and 0x80 != 0) body = deUnsynchronise(body)
-        if (flags and 0x40 != 0) body = skipExtendedHeader(body, major) ?: return null
+        if (flags and 0x40 != 0) {
+            body = skipExtendedHeader(body, major) ?: throw Id3Unreadable("its extended header hides where the frames start")
+        }
         return Tag(major, body)
     }
 }
@@ -88,9 +123,11 @@ private fun skipExtendedHeader(
     return if (skip in 1..body.size) body.copyOfRange(skip, body.size) else null
 }
 
+/** [keep] is applied before the body is copied: cover art is megabytes, and never wanted here. */
 private fun parseFrames(
     body: ByteArray,
     major: Int,
+    keep: (String) -> Boolean,
 ): List<Frame> {
     val frames = mutableListOf<Frame>()
     var i = 0
@@ -106,11 +143,44 @@ private fun parseFrames(
         // the way `start + size > body.size` would for a huge garbage size.
         if (size < 0 || size > body.size - start) break
 
-        frames += Frame(id, body.copyOfRange(start, start + size))
+        val format = frameFormat(body[i + 9].toInt() and 0xFF, major)
+        if (keep(id) && format.readable && format.prefix <= size) {
+            val content = body.copyOfRange(start + format.prefix, start + size)
+            frames += Frame(id, if (format.unsynchronised) deUnsynchronise(content) else content)
+        }
         i = start + size
     }
     return frames
 }
+
+/** What a frame's format flags put in front of its content, and whether the content is readable. */
+private class FrameFormat(
+    val prefix: Int,
+    val readable: Boolean,
+    val unsynchronised: Boolean,
+)
+
+/**
+ * Each flag that carries extra data prefixes the frame content with it, so a flag read as content
+ * shifts every byte after it. Compressed and encrypted frames are given up on rather than decoded.
+ */
+private fun frameFormat(
+    flags: Int,
+    major: Int,
+): FrameFormat =
+    if (major >= 4) {
+        FrameFormat(
+            prefix = (if (flags and 0x40 != 0) 1 else 0) + (if (flags and 0x04 != 0) 1 else 0) + (if (flags and 0x01 != 0) 4 else 0),
+            readable = flags and 0x0C == 0,
+            unsynchronised = flags and 0x02 != 0,
+        )
+    } else {
+        FrameFormat(
+            prefix = (if (flags and 0x80 != 0) 4 else 0) + (if (flags and 0x40 != 0) 1 else 0) + (if (flags and 0x20 != 0) 1 else 0),
+            readable = flags and 0xC0 == 0,
+            unsynchronised = false,
+        )
+    }
 
 /**
  * v2.4 frame sizes are syncsafe, but some taggers write plain ones. An unreadable syncsafe
@@ -164,8 +234,8 @@ private fun parseChap(
     val endMs = plainInt(body, timesAt + 4).toLong() and 0xFFFFFFFFL
 
     val title =
-        parseFrames(body.copyOfRange(timesAt + 16, body.size), major)
-            .firstOrNull { it.id == "TIT2" }
+        parseFrames(body.copyOfRange(timesAt + 16, body.size), major) { it == "TIT2" }
+            .firstOrNull()
             ?.let { decodeText(it.body) }
 
     return Id3Chapter(elementId, startMs, endMs, title)

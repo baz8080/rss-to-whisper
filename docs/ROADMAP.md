@@ -114,10 +114,10 @@ Done so far from this list:
   `rome-modules` registers nothing for the Podcasting 2.0 namespace, so `podcast:chapters`,
   `podcast:soundbite` and any host-specific segment tags arrive in `SyndEntry.foreignMarkup`
   and are currently dropped on the floor -- `episodeFields` in `PodcastPipeline` never
-  looks at it. Nothing is mapped off the back of this yet: the survey comes first, because
-  `podcast:chapters` is a *link* to a JSON file, not inline data, and whether it marks ads
-  varies by host. Reading that file would be a second fetch per episode and belongs in its
-  own change.
+  looks at it. Only Libsyn's `ad-markers` are mapped off the back of it (see the per-run
+  capture below); `podcast:chapters` is a *link* to a JSON file, not inline data, and whether
+  it marks ads varies by host. Reading that file would be a second fetch per episode and
+  belongs in its own change.
 
 - **Audio chapter survey.** `--dump-audio-chapters <dir>` reads ID3v2 `CHAP` frames out of
   the stored `audio.mp3` files. `Id3Chapter.kt` hand-rolls the parse rather than taking a
@@ -127,8 +127,30 @@ Done so far from this list:
   syncsafe integers (`frameSize` picks whichever lands on a real frame boundary).
   Unreadable files report no chapters rather than failing: a corpus survey must not die on
   one odd tag. The tally ranks titles by episodes carrying them, which is what separates a
-  recurring structural segment from one episode's content. Nothing is mapped into
-  `transcript.json` off the back of it yet -- the survey comes first.
+  recurring structural segment from one episode's content. The per-run capture below maps
+  the frames into `transcript.json`; the survey came first.
+
+- **Segment signals captured per run.** `buildEpisodeDict` writes `episode_chapters` (the
+  ID3 `CHAP` frames of the `audio.mp3` it just downloaded, start/end in seconds) and
+  `episode_ad_markers` (`<libsyn:ad-marker>` from the feed entry's foreign markup: type,
+  count, and a timestamp that a `pre` roll does not carry). Both were surveyed first and
+  cross-referenced against the ad-skip project's gold labels, which is where the decision
+  to keep them came from -- `docs/ad-skip-segment-survey.md`. Written per episode precisely
+  so the next use of this data needs no corpus-wide re-scan of 1.1TB of audio; a downstream
+  project imported the same data into its own database from the survey's JSON dump, but the
+  17,578 `transcript.json` files already on disk were never rewritten and carry neither
+  field. A recovered orphan still gets its chapters, since those come from the audio,
+  and gets `episode_ad_markers: null` -- its feed entry is gone, so an empty list would
+  claim the feed said there were no ad breaks. `episode_chapters` is null on the same
+  reasoning when the audio could not be read, and empty only when a readable file carries
+  no chapters.
+
+  **The two carry different clocks, and the field names say so.** `episode_chapters`'
+  `start_s`/`end_s` are the downloaded file's own time. A Libsyn marker's
+  `timestamp_publisher_s` is the publisher's master time, which dynamic insertion can leave
+  far adrift from our file -- the drift is unmeasured, and the analogous case has run to 20
+  minutes -- so a consumer has to reconcile it before using it as a file offset. The name
+  is the reconciliation warning: the two fields no longer look interchangeable in the data.
 
 Explicitly declined:
 

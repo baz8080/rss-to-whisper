@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.rometools.rome.feed.synd.SyndEntryImpl
 import com.rometools.rome.feed.synd.SyndFeed
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.audio.Id3Builder
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.io.TempDir
@@ -106,6 +107,25 @@ class OrphanRecoveryTest {
         assertTrue(json["episode_relative_audio_path"].asText().isNotBlank())
     }
 
+    /** The audio is all a recovery has, and it is enough for chapters -- the feed entry is not. */
+    @Test
+    fun `a recovered orphan keeps the chapters in its own audio`(
+        @TempDir dataDir: Path,
+    ) {
+        val orphan = orphanDir(dataDir, "2019-01-01-deadbeef-An-Old-Episode")
+        val tag = Id3Builder.tag(3, listOf(Id3Builder.chap("ch1", 0, 92_000, "Advertisement", 3)))
+        Files.write(orphan.resolve("audio.mp3"), tag + ByteArray(2048) { 0x55 })
+        val (pipeline, _, _) = buildPipeline(dataDir, listOf(podcast), makeFeed(liveEntry()))
+
+        pipeline.run()
+
+        val json = readJson(orphan.resolve("transcript.json"))
+        assertEquals(1, json["episode_chapters"].size())
+        assertEquals(92.0, json["episode_chapters"][0]["end_s"].asDouble())
+        assertEquals("Advertisement", json["episode_chapters"][0]["title"].asText())
+        assertTrue(json["episode_ad_markers"].isNull)
+    }
+
     /** Blocked by putting a directory where the sidecar has to go. */
     @Test
     fun `an orphan whose sidecar cannot be written is not counted as recovered`(
@@ -140,6 +160,7 @@ class OrphanRecoveryTest {
         listOf(
             "episode_audio_link", "episode_web_link", "episode_image", "episode_summary",
             "episode_subtitle", "episode_authors", "episode_number", "episode_season", "episode_type",
+            "episode_ad_markers",
         ).forEach { key ->
             assertTrue(json.has(key), "$key is missing entirely")
             // An empty string would slip past the web module's `!= null` guards and render a dead link.

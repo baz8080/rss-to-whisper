@@ -22,6 +22,9 @@ out/
 web/.env
 pipeline/.env
 
+# Local-only working notes (personal corpus/feed specifics, not for the repo)
+notes/
+
 # OS
 .DS_Store
 

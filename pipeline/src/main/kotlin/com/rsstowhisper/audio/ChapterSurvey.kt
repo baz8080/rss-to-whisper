@@ -1,5 +1,9 @@
 package com.rsstowhisper.audio
 
+import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import com.rsstowhisper.pipeline.PodcastPipeline
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -25,6 +29,8 @@ data class ChapterSurvey(
     val unreadable: Int,
     val chaptered: List<ChapteredEpisode>,
 ) {
+    // Derived, not data -- excluded so audioChapterJson's output round-trips.
+    @get:JsonIgnore
     val withChapters: Int get() = chaptered.size
 }
 
@@ -135,6 +141,15 @@ fun audioChapterReport(
     }
     return out.toString()
 }
+
+private val jsonMapper = ObjectMapper().registerKotlinModule().apply { enable(SerializationFeature.INDENT_OUTPUT) }
+
+/**
+ * The survey as JSON, for a downstream consumer rather than a person: every
+ * chaptered episode, `relativePath` matching `surveyAudioChapters`'s report,
+ * `--dump-limit` ignored since nothing here is meant to be skimmed.
+ */
+fun audioChapterJson(survey: ChapterSurvey): String = jsonMapper.writeValueAsString(survey)
 
 internal fun stamp(ms: Long): String {
     val totalSeconds = ms / 1000

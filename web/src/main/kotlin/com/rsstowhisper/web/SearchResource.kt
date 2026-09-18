@@ -30,6 +30,7 @@ import jakarta.ws.rs.core.EntityTag
 import jakarta.ws.rs.core.MediaType
 import jakarta.ws.rs.core.Request
 import jakarta.ws.rs.core.Response
+import jakarta.ws.rs.ext.RuntimeDelegate
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
@@ -159,19 +160,28 @@ class SearchResource {
     @Path("/episode/{id}/words")
     fun episodeWords(
         @PathParam("id") id: String,
+        @HeaderParam("If-None-Match") ifNoneMatch: String?,
         @jakarta.ws.rs.core.Context request: Request,
     ): Response {
         val uri = wordsUri(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
         // Only a 404 from the data host means "no sidecar"; the page retries anything else on the next play.
-        val upstream = fetch(uri) ?: return Response.status(Response.Status.BAD_GATEWAY).build()
+        val conditional = ifNoneMatch?.takeIf { it.isNotBlank() }
+        val upstream = fetch(uri, conditional) ?: return Response.status(Response.Status.BAD_GATEWAY).build()
+        val upstreamTag = upstream.headers().firstValue("ETag").map(::parseEntityTag).orElse(null)
         when (upstream.statusCode()) {
             200 -> Unit
+            304 ->
+                return if (conditional == null) {
+                    Response.status(Response.Status.BAD_GATEWAY).build()
+                } else {
+                    Response.notModified().cacheControl(REVALIDATE).apply { upstreamTag?.let { tag(it) } }.build()
+                }
             404 -> return Response.status(Response.Status.NOT_FOUND).build()
             else -> return Response.status(Response.Status.BAD_GATEWAY).build()
         }
         val bytes = upstream.body()
 
-        val tag = entityTagFor(bytes)
+        val tag = upstreamTag ?: entityTagFor(bytes)
         request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
 
         return Response.ok(bytes)
@@ -207,9 +217,15 @@ class SearchResource {
     }
 
     /** Null when the data host could not be reached at all. */
-    private fun fetch(uri: URI): HttpResponse<ByteArray>? =
+    private fun fetch(
+        uri: URI,
+        ifNoneMatch: String?,
+    ): HttpResponse<ByteArray>? =
         try {
-            val request = HttpRequest.newBuilder(uri).timeout(FETCH_TIMEOUT).GET().build()
+            val request =
+                HttpRequest.newBuilder(uri).timeout(FETCH_TIMEOUT).GET()
+                    .apply { ifNoneMatch?.let { header("If-None-Match", it) } }
+                    .build()
             HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray())
         } catch (e: IOException) {
             null
@@ -357,8 +373,12 @@ class SearchResource {
                 .build()
         }
 
+        private fun parseEntityTag(header: String): EntityTag =
+            RuntimeDelegate.getInstance().createHeaderDelegate(EntityTag::class.java).fromString(header)
+
         /**
-         * Strong, and taken over the bytes themselves so it cannot outrun them.
+         * Used when the data host sends no ETag. Strong, and taken over the bytes
+         * themselves so it cannot outrun them.
          * The sidecar is tens of kilobytes; digesting it costs nothing worth
          * trading correctness for.
          */

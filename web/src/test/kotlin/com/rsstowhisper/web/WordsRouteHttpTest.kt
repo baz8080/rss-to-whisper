@@ -5,7 +5,9 @@ import io.quarkus.test.junit.QuarkusTest
 import io.quarkus.test.junit.QuarkusTestProfile
 import io.quarkus.test.junit.TestProfile
 import io.restassured.RestAssured.given
+import org.eclipse.microprofile.config.ConfigProvider
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
 import java.net.InetAddress
@@ -13,7 +15,10 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.zip.GZIPOutputStream
+
+private class Sidecar(val body: ByteArray, val etag: String? = null)
 
 /**
  * The route over HTTP rather than as a method call.
@@ -39,7 +44,13 @@ class WordsRouteHttpTest {
                 val root = Files.createTempDirectory("words-http")
                 Runtime.getRuntime().addShutdownHook(Thread { deleteTree(root) })
 
-                val dataHost = startDataHost("/Show/ep/words.jsonl.gz", gzip(NDJSON))
+                val dataHost =
+                    startDataHost(
+                        mapOf(
+                            "/Show/ep/words.jsonl.gz" to Sidecar(gzip(NDJSON)),
+                            "/Show/tagged/words.jsonl.gz" to Sidecar(gzip(NDJSON), UPSTREAM_TAG),
+                        ),
+                    )
 
                 val db = root.resolve("podcasts.db")
                 // Asked for by name: the profile runs before the app's
@@ -70,7 +81,8 @@ class WordsRouteHttpTest {
                         )
                         it.execute(
                             "INSERT INTO episodes (id, episode_title, episode_relative_audio_path, " +
-                                "episode_transcript) VALUES ('ep1', 'One', 'Show/ep/audio.mp3', '')",
+                                "episode_transcript) VALUES ('ep1', 'One', 'Show/ep/audio.mp3', ''), " +
+                                "('ep2', 'Two', 'Show/tagged/audio.mp3', '')",
                         )
                     }
                 }
@@ -80,17 +92,27 @@ class WordsRouteHttpTest {
                 )
             }
 
-            private fun startDataHost(
-                path: String,
-                body: ByteArray,
-            ): HttpServer {
+            private fun startDataHost(sidecars: Map<String, Sidecar>): HttpServer {
+                val requests = CopyOnWriteArrayList<String>()
                 val server = HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0)
                 server.createContext("/") { exchange ->
-                    if (exchange.requestURI.rawPath == path) {
-                        exchange.sendResponseHeaders(200, body.size.toLong())
-                        exchange.responseBody.use { it.write(body) }
-                    } else {
-                        exchange.sendResponseHeaders(404, -1)
+                    val path = exchange.requestURI.rawPath
+                    val ifNoneMatch = exchange.requestHeaders.getFirst("If-None-Match")
+                    val sidecar = sidecars[path]
+                    if (path != REQUESTS_PATH) requests += "$path|$ifNoneMatch"
+                    sidecar?.etag?.let { exchange.responseHeaders.add("ETag", it) }
+                    when {
+                        path == REQUESTS_PATH -> {
+                            val log = requests.joinToString("\n").toByteArray()
+                            exchange.sendResponseHeaders(200, log.size.toLong())
+                            exchange.responseBody.use { it.write(log) }
+                        }
+                        sidecar == null -> exchange.sendResponseHeaders(404, -1)
+                        sidecar.etag != null && ifNoneMatch == sidecar.etag -> exchange.sendResponseHeaders(304, -1)
+                        else -> {
+                            exchange.sendResponseHeaders(200, sidecar.body.size.toLong())
+                            exchange.responseBody.use { it.write(sidecar.body) }
+                        }
                     }
                     exchange.close()
                 }
@@ -144,11 +166,46 @@ class WordsRouteHttpTest {
     }
 
     @Test
+    fun `uses the data host's ETag as its own`() {
+        given().get("/episode/ep2/words")
+            .then().statusCode(200)
+            .header("ETag", UPSTREAM_TAG)
+    }
+
+    @Test
+    fun `forwards If-None-Match and answers the data host's 304 with no body`() {
+        val response =
+            given().header("If-None-Match", UPSTREAM_TAG).get("/episode/ep2/words")
+                .then().statusCode(304)
+                .header("ETag", UPSTREAM_TAG)
+                .extract().asString()
+
+        assertEquals("", response)
+        assertTrue(dataHostRequests().contains("$TAGGED_PATH|$UPSTREAM_TAG"), "the data host never saw the condition")
+    }
+
+    @Test
+    fun `sends the body when the browser's tag is not the data host's`() {
+        given().header("If-None-Match", "\"stale\"").get("/episode/ep2/words")
+            .then().statusCode(200)
+            .header("ETag", UPSTREAM_TAG)
+    }
+
+    @Test
     fun `is 404 for an episode that is not there`() {
         assertEquals(404, given().get("/episode/nope/words").then().extract().statusCode())
     }
 
+    private fun dataHostRequests(): List<String> {
+        val dataUrl = ConfigProvider.getConfig().getValue("app.data.url", String::class.java)
+        return given().get(dataUrl + REQUESTS_PATH).then().statusCode(200).extract().asString().lines()
+    }
+
     companion object {
+        private const val UPSTREAM_TAG = "\"v1\""
+        private const val TAGGED_PATH = "/Show/tagged/words.jsonl.gz"
+        private const val REQUESTS_PATH = "/__requests"
+
         private const val NDJSON =
             """{"w":" one","s":0.0,"e":0.4,"p":0.9,"seg":0}
 {"w":" two","s":0.5,"e":0.9,"p":0.2,"seg":0}

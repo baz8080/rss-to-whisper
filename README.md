@@ -456,10 +456,15 @@ treats as transient: it says nothing and tries again on the next play.
 
 The response revalidates rather than being held: re-transcribing an episode rewrites
 the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar
-against a fresh transcript mis-times every word. The `ETag` is taken over the bytes
-that are actually sent — a validator derived from a `stat` can name a version the body
-is not, and `no-cache` would then pin that mismatch in the browser until the file next
-changed. The usual answer is a 304.
+against a fresh transcript mis-times every word. The browser's `If-None-Match` is passed
+on to the data host, so an unchanged file is a 304 on both legs and no body crosses either.
+
+The tag is the data host's own `ETag` when it sends one. A host that sends none (Python's
+`http.server`) gets a SHA-256 of the bytes just fetched, which is always right but can
+only save the browser leg. The trade-off: a host whose `ETag` is derived from a `stat`
+can name a version the body is not, so a same-size file put back with its old mtime
+would keep the old tag, and `no-cache` would pin the stale timings in the browser until
+the file next changed.
 
 On a line the search query matched, the `<mark>` highlighting wins and the line is
 not split into words — word timing is the lesser feature there.

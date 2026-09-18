@@ -377,7 +377,8 @@ class SearchResource {
             RuntimeDelegate.getInstance().createHeaderDelegate(EntityTag::class.java).fromString(header)
 
         /**
-         * Strong, and taken over the bytes themselves so it cannot outrun them.
+         * Used when the data host sends no ETag. Strong, and taken over the bytes
+         * themselves so it cannot outrun them.
          * The sidecar is tens of kilobytes; digesting it costs nothing worth
          * trading correctness for.
          */

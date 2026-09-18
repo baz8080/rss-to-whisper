@@ -370,7 +370,7 @@ cp .env.example .env
 
 ```ini
 APP_DB_PATH=/path/to/podcasts.db
-# The pipeline's data directory, served over HTTP. Audio and word timings are read from under it.
+# Required. The pipeline's data directory, served over HTTP. Audio and word timings are read from under it.
 APP_DATA_URL=http://your-nas:9280
 ```
 

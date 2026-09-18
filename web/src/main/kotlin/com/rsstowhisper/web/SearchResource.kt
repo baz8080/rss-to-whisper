@@ -55,7 +55,7 @@ class SearchResource {
     @Inject
     lateinit var templateEngine: TemplateEngine
 
-    @ConfigProperty(name = "app.data.url", defaultValue = "/audio")
+    @ConfigProperty(name = "app.data.url")
     lateinit var dataUrl: String
 
     @GET

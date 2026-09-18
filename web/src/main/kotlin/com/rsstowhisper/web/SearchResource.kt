@@ -14,6 +14,7 @@ import com.rsstowhisper.web.models.linkify
 import com.rsstowhisper.web.models.parseTranscript
 import com.rsstowhisper.web.models.sanitizeHtml
 import com.rsstowhisper.web.models.searchTerms
+import com.rsstowhisper.web.models.urlEncode
 import io.smallrye.common.annotation.Blocking
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -34,11 +35,9 @@ import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
 import java.io.IOException
 import java.net.URI
-import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
-import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.ZoneId
@@ -203,9 +202,7 @@ class SearchResource {
         if (segments.any { it.isEmpty() || it == "." || it == ".." }) return null
 
         val directory =
-            segments.dropLast(1).joinToString("") {
-                "/" + URLEncoder.encode(it, StandardCharsets.UTF_8).replace("+", "%20")
-            }
+            segments.dropLast(1).joinToString("") { "/" + urlEncode(it) }
         return runCatching { URI("$base$directory/$WORDS_FILENAME") }.getOrNull()
     }
 

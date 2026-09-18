@@ -43,14 +43,10 @@ Done so far from this list:
   media fragment produces.
 - **W4, podcasts page.** `/podcasts` over `EpisodeRepository.getPodcastSummaries()`,
   cached like the filter options. First use of `podcast_image`.
-- **W6, word timings.** Optional `app.data.directory` enables `/episode/{id}/words`,
-  which serves `words.jsonl.gz` with `Content-Encoding: gzip`. `TranscriptLine.cueIndex`
+- **W6, word timings.** `/episode/{id}/words` fetches `words.jsonl.gz` from `app.data.url`
+  (absolute only) and serves it with `Content-Encoding: gzip`. `TranscriptLine.cueIndex`
   counts every cue, blank ones included, which is what joins a word's `seg` to its line.
-  Two rules in there took five review rounds to settle and are worth not relitigating:
-  the containment check is on the *sidecar* path, since the audio path sits a level below
-  it and a value resolving to the root itself would escape; and directory symlinks under
-  the root are followed (a library spread across disks) while the sidecar leaf is not,
-  opened `NOFOLLOW` as well as checked so the two syscalls cannot be raced. The page
+  A `..` in the database's audio path is refused rather than sent. The page
   never lets the sidecar rewrite the transcript: a line is split only when its words
   rebuild it exactly, because the pipeline drops a word whose timings whisper omitted.
 - **I1, incremental indexing.** `index.py` stats every `transcript.json` and opens only
@@ -256,7 +252,7 @@ json.dump({"_id":"abcd1234","podcast_title":"Show","episode_title":"Hello There"
 EOF
 python3 index.py $S/data --db $S/podcasts.db
 ./gradlew :web:build -x test
-APP_DB_PATH=$S/podcasts.db APP_AUDIO_BASE_URL=http://audio.test \
+APP_DB_PATH=$S/podcasts.db APP_DATA_URL=http://audio.test \
   java -Dquarkus.http.port=18080 -jar web/build/quarkus-app/quarkus-run.jar &
 curl -s 'http://localhost:18080/search?q=hello' | grep -o 'href="/episode/[^"]*"'
 curl -s 'http://localhost:18080/episode/abcd1234?q=hello' | grep -c '<mark>'

@@ -93,7 +93,7 @@ java -jar web/build/quarkus-app/quarkus-run.jar
 The web module reads `web/.env`:
 ```
 APP_DB_PATH=/path/to/podcasts.db
-APP_AUDIO_BASE_URL=http://your-audio-server:port
+APP_DATA_URL=http://your-data-server:port
 ```
 
 ## Code style

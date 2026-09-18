@@ -370,10 +370,8 @@ cp .env.example .env
 
 ```ini
 APP_DB_PATH=/path/to/podcasts.db
-APP_AUDIO_BASE_URL=http://your-nas:9280
-# Optional. The pipeline's data directory, which enables word-level highlighting
-# on the episode page; see Word timings below. Omit it and the feature stays hidden.
-APP_DATA_DIRECTORY=/path/to/data_directory
+# The pipeline's data directory, served over HTTP. Audio and word timings are read from under it.
+APP_DATA_URL=http://your-nas:9280
 ```
 
 Quarkus picks up `.env` automatically. Alternatively, override properties inline:
@@ -395,7 +393,7 @@ Configuration properties can also be overridden at launch without editing the fi
 
 ```bash
 java -Dapp.db.path=/data/podcasts.db \
-     -Dapp.audio.base-url=http://nas:9280 \
+     -Dapp.data.url=http://nas:9280 \
      -jar web/build/quarkus-app/quarkus-run.jar
 ```
 
@@ -410,8 +408,9 @@ java -Dapp.db.path=/data/podcasts.db \
 ### Word timings
 
 The pipeline writes `words.jsonl.gz` beside every episode's audio: one line per word
-with its start, end and the decoder's own confidence. Set `APP_DATA_DIRECTORY` to that
-tree and the episode page can use it.
+with its start, end and the decoder's own confidence. The web module fetches it from
+`APP_DATA_URL`, so that must be an absolute `http(s)` URL; with a relative one the
+feature stays hidden.
 
 With it set, the transcript gains a **Mark low confidence** toggle, and playback
 highlights the current word rather than only the current cue. Words whisper scored
@@ -438,22 +437,18 @@ something more useful than that:
 A line is only ever split when its words rebuild it exactly, so the transcript itself is
 never rewritten by the sidecar.
 
-The file is served by the web module from `/episode/{id}/words`, rather than fetched
-from the audio host: the path is derived from a column already in hand, it needs no
-CORS grant on a server that only has to serve audio, and `Content-Encoding: gzip` lets
+The file is fetched by the web module from `APP_DATA_URL` and served from
+`/episode/{id}/words`, rather than fetched by the page from the data host: it needs no
+CORS grant on a server that only has to serve files, and `Content-Encoding: gzip` lets
 the browser inflate it instead of the page carrying a decompressor. It is sent gzipped
-whatever the request's `Accept-Encoding` says, since the file is only gzip on disk —
-`curl` it with `--compressed`.
+whatever the request's `Accept-Encoding` says, since the file is only gzip on the data
+host — `curl` it with `--compressed`.
 
-The data directory itself is resolved with `toRealPath`, so a tree that is a symlink
-still matches the paths built from it. The sidecar path is then normalised and must sit
-under that root — which is what refuses a `..` walking out of the tree, and a value that
-resolves to the root itself, whose parent would be outside it. *Directory* symlinks
-below the root are followed, so a library spread across disks can link its show
-directories onto another volume; the sidecar file itself is not followed, since that
-symlink buys the layout nothing and is the one someone with a foothold in the tree would
-leave behind. If the configured directory is not there at all, the feature stays hidden
-instead of being offered on every episode and then failing on each one.
+The URL is `APP_DATA_URL`, the episode's directory (the database's relative audio path
+minus `audio.mp3`, each segment percent-encoded) and `words.jsonl.gz`. A path segment of
+`..` or `.`, or an empty one, is refused rather than sent, so a bad database value
+cannot walk up out of the data URL. Anything but a `200` from the data host — a `404`, a
+timeout, a refused connection — is a `404` here, and the toggle says **No word timings**.
 
 The response revalidates rather than being held: re-transcribing an episode rewrites
 the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar

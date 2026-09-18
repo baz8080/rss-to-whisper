@@ -278,7 +278,7 @@
                 <!-- Audio player -->
                 <div class="audio-player" th:if="${episode.audioPath != null}">
                     <audio controls="controls" preload="none"
-                           th:src="${audioBaseUrl + '/' + episode.audioPath}">
+                           th:src="${dataUrl + '/' + episode.audioPath}">
                         Your browser does not support audio.
                     </audio>
                 </div>

@@ -447,8 +447,12 @@ host — `curl` it with `--compressed`.
 The URL is `APP_DATA_URL`, the episode's directory (the database's relative audio path
 minus `audio.mp3`, each segment percent-encoded) and `words.jsonl.gz`. A path segment of
 `..` or `.`, or an empty one, is refused rather than sent, so a bad database value
-cannot walk up out of the data URL. Anything but a `200` from the data host — a `404`, a
-timeout, a refused connection — is a `404` here, and the toggle says **No word timings**.
+cannot walk up out of the data URL. `APP_DATA_URL` needs a host and no query string or
+fragment, or the feature stays hidden.
+
+A `404` from the data host is a `404` here, and the toggle says **No word timings**. Any
+other outcome — a timeout, a refused connection, a `5xx` — is a `502`, which the page
+treats as transient: it says nothing and tries again on the next play.
 
 The response revalidates rather than being held: re-transcribing an episode rewrites
 the sidecar and the cue ordinals it is keyed to together, and an hour-old sidecar

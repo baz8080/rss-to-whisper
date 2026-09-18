@@ -40,6 +40,7 @@ class SearchResourceTest {
 
     private val hosted = ConcurrentHashMap<String, ByteArray>()
     private val requested = CopyOnWriteArrayList<String>()
+    private val statuses = ConcurrentHashMap<String, Int>()
     private var dataHost: HttpServer? = null
 
     // TemplateEngine is a concrete class; MockK can subclass it.
@@ -674,13 +675,45 @@ class SearchResourceTest {
     }
 
     @Test
-    fun `words route is 404 when the data host is unreachable`() {
+    fun `words route is 502 when the data host is unreachable`() {
         resource.dataUrl = hostData()
         stopHost()
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        assertEquals(404, resource.episodeWords("ep1", request).status)
+        assertEquals(502, resource.episodeWords("ep1", request).status)
+    }
+
+    @Test
+    fun `words route is 502 when the data host answers with an error`() {
+        resource.dataUrl = hostData()
+        statuses["/Show/ep/words.jsonl.gz"] = 500
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(502, resource.episodeWords("ep1", request).status)
+    }
+
+    @Test
+    fun `words are off for a data URL the server cannot fetch from`() {
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        val ctxSlot = slot<IContext>()
+        every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
+
+        for (url in listOf(
+            "http://my_nas:9280",
+            "http:///x",
+            "http:/nas",
+            "http://nas:9280/d?token=abc",
+            "http://nas:9280/d#frag",
+            "ftp://nas",
+        )) {
+            resource.dataUrl = url
+            assertEquals(404, resource.episodeWords("ep1", request).status, url)
+            resource.episode("ep1", "")
+            assertNull(ctxSlot.captured.getVariable("wordsUrl"), url)
+        }
     }
 
     @Test
@@ -745,7 +778,10 @@ class SearchResourceTest {
                     val path = exchange.requestURI.rawPath
                     requested += path
                     val body = hosted[path]
-                    if (body == null) {
+                    val status = statuses[path]
+                    if (status != null) {
+                        exchange.sendResponseHeaders(status, -1)
+                    } else if (body == null) {
                         exchange.sendResponseHeaders(404, -1)
                     } else {
                         exchange.sendResponseHeaders(200, body.size.toLong())

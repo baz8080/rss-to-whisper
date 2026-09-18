@@ -163,8 +163,14 @@ class SearchResource {
         @jakarta.ws.rs.core.Context request: Request,
     ): Response {
         val uri = wordsUri(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
-        // A re-transcribe swap briefly removes the file, so a miss is the ordinary case, not a fault.
-        val bytes = fetch(uri) ?: return Response.status(Response.Status.NOT_FOUND).build()
+        // Only a 404 from the data host means "no sidecar"; the page retries anything else on the next play.
+        val upstream = fetch(uri) ?: return Response.status(Response.Status.BAD_GATEWAY).build()
+        when (upstream.statusCode()) {
+            200 -> Unit
+            404 -> return Response.status(Response.Status.NOT_FOUND).build()
+            else -> return Response.status(Response.Status.BAD_GATEWAY).build()
+        }
+        val bytes = upstream.body()
 
         val tag = entityTagFor(bytes)
         request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
@@ -177,11 +183,15 @@ class SearchResource {
             .build()
     }
 
-    /** Null unless [dataUrl] is absolute: the server cannot fetch from a path relative to the browser. */
+    /**
+     * Null unless [dataUrl] is an absolute http(s) URL with a host and no query or fragment,
+     * since the server cannot fetch a browser-relative path and the file path is appended to it.
+     */
     private fun dataBase(): String? {
         val base = dataUrl.trimEnd('/')
         val uri = runCatching { URI(base) }.getOrNull() ?: return null
-        return base.takeIf { uri.scheme.equals("http", true) || uri.scheme.equals("https", true) }
+        val http = uri.scheme.equals("http", true) || uri.scheme.equals("https", true)
+        return base.takeIf { http && uri.host != null && uri.rawQuery == null && uri.rawFragment == null }
     }
 
     private fun wordsUri(id: String): URI? {
@@ -199,12 +209,14 @@ class SearchResource {
         return runCatching { URI("$base$directory/$WORDS_FILENAME") }.getOrNull()
     }
 
-    private fun fetch(uri: URI): ByteArray? =
+    /** Null when the data host could not be reached at all. */
+    private fun fetch(uri: URI): HttpResponse<ByteArray>? =
         try {
             val request = HttpRequest.newBuilder(uri).timeout(FETCH_TIMEOUT).GET().build()
-            val response = HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray())
-            response.body().takeIf { response.statusCode() == 200 }
+            HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray())
         } catch (e: IOException) {
+            null
+        } catch (e: IllegalArgumentException) {
             null
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()

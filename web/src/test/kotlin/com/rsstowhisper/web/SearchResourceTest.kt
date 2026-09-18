@@ -41,6 +41,8 @@ class SearchResourceTest {
     private val hosted = ConcurrentHashMap<String, ByteArray>()
     private val requested = CopyOnWriteArrayList<String>()
     private val statuses = ConcurrentHashMap<String, Int>()
+    private val etags = ConcurrentHashMap<String, String>()
+    private val conditionals = CopyOnWriteArrayList<String?>()
     private var dataHost: HttpServer? = null
 
     // TemplateEngine is a concrete class; MockK can subclass it.
@@ -626,7 +628,7 @@ class SearchResourceTest {
     fun `words route is 404 when the data URL is not absolute`() {
         resource.dataUrl = "/audio"
 
-        assertEquals(404, resource.episodeWords("ep1", request).status)
+        assertEquals(404, resource.episodeWords("ep1", null, request).status)
         verify(exactly = 0) { repository.getEpisodeById(any()) }
     }
 
@@ -636,7 +638,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        assertEquals(404, resource.episodeWords("ep1", request).status)
+        assertEquals(404, resource.episodeWords("ep1", null, request).status)
     }
 
     @Test
@@ -646,7 +648,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        val response = resource.episodeWords("ep1", request)
+        val response = resource.episodeWords("ep1", null, request)
 
         assertEquals(200, response.status)
         assertEquals("gzip", response.getHeaderString("Content-Encoding"))
@@ -659,7 +661,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show Name/ep #1/audio.mp3")
 
-        assertEquals(200, resource.episodeWords("ep1", request).status)
+        assertEquals(200, resource.episodeWords("ep1", null, request).status)
         assertEquals(listOf("/Show%20Name/ep%20%231/words.jsonl.gz"), requested)
     }
 
@@ -669,7 +671,7 @@ class SearchResourceTest {
 
         for (relative in listOf("../outside/audio.mp3", "Show/../../audio.mp3", "", ".", "./", "/Show/audio.mp3", "Show//audio.mp3")) {
             every { repository.getEpisodeById("ep1") } returns minimalEpisode(relativeAudioPath = relative)
-            assertEquals(404, resource.episodeWords("ep1", request).status, "relative=<$relative>")
+            assertEquals(404, resource.episodeWords("ep1", null, request).status, "relative=<$relative>")
         }
         assertEquals(emptyList<String>(), requested)
     }
@@ -681,7 +683,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        assertEquals(502, resource.episodeWords("ep1", request).status)
+        assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }
 
     @Test
@@ -691,7 +693,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        assertEquals(502, resource.episodeWords("ep1", request).status)
+        assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }
 
     @Test
@@ -710,7 +712,7 @@ class SearchResourceTest {
             "ftp://nas",
         )) {
             resource.dataUrl = url
-            assertEquals(404, resource.episodeWords("ep1", request).status, url)
+            assertEquals(404, resource.episodeWords("ep1", null, request).status, url)
             resource.episode("ep1", "")
             assertNull(ctxSlot.captured.getVariable("wordsUrl"), url)
         }
@@ -722,7 +724,7 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        val response = resource.episodeWords("ep1", request)
+        val response = resource.episodeWords("ep1", null, request)
 
         assertEquals("no-cache, no-transform", response.getHeaderString("Cache-Control"))
         assertNotNull(response.entityTag)
@@ -734,9 +736,9 @@ class SearchResourceTest {
         every { repository.getEpisodeById("ep1") } returns
             minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
 
-        val first = resource.episodeWords("ep1", request).entityTag
+        val first = resource.episodeWords("ep1", null, request).entityTag
         hosted["/Show/ep/words.jsonl.gz"] = byteArrayOf(4, 5, 6)
-        val second = resource.episodeWords("ep1", request).entityTag
+        val second = resource.episodeWords("ep1", null, request).entityTag
 
         assertNotEquals(first, second)
     }
@@ -752,7 +754,90 @@ class SearchResourceTest {
                     Response.notModified()
             }
 
-        assertEquals(304, resource.episodeWords("ep1", unchanged).status)
+        assertEquals(304, resource.episodeWords("ep1", null, unchanged).status)
+    }
+
+    @Test
+    fun `words route uses the data host's ETag as its own`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
+        etags["/Show/ep/words.jsonl.gz"] = "\"v1\""
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", null, request)
+
+        assertEquals(200, response.status)
+        assertEquals(EntityTag("v1"), response.entityTag)
+    }
+
+    @Test
+    fun `words route forwards If-None-Match and turns an upstream 304 into its own`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
+        etags["/Show/ep/words.jsonl.gz"] = "\"v1\""
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", "\"v1\"", request)
+
+        assertEquals(listOf<String?>("\"v1\""), conditionals)
+        assertEquals(304, response.status)
+        assertNull(response.entity)
+        assertEquals(EntityTag("v1"), response.entityTag)
+        assertEquals("no-cache, no-transform", response.getHeaderString("Cache-Control"))
+    }
+
+    @Test
+    fun `words route sends the new body when the browser's tag is stale`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(4, 5, 6))
+        etags["/Show/ep/words.jsonl.gz"] = "\"v2\""
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        val response = resource.episodeWords("ep1", "\"v1\"", request)
+
+        assertEquals(200, response.status)
+        assertEquals(EntityTag("v2"), response.entityTag)
+        assertArrayEquals(byteArrayOf(4, 5, 6), response.entity as ByteArray)
+    }
+
+    @Test
+    fun `words route sends no conditional header upstream when the browser sent none`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1))
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        resource.episodeWords("ep1", null, request)
+
+        assertEquals(listOf<String?>(null), conditionals)
+    }
+
+    @Test
+    fun `without an upstream ETag the tag is computed and the browser's tag is checked here`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        val tagSlot = slot<EntityTag>()
+        val unchanged: Request =
+            mockk {
+                every { evaluatePreconditions(capture(tagSlot)) } returns Response.notModified()
+            }
+
+        val response = resource.episodeWords("ep1", "\"computed\"", unchanged)
+
+        assertEquals(304, response.status)
+        assertEquals(listOf<String?>("\"computed\""), conditionals)
+        assertEquals(32, tagSlot.captured.value.length)
+        assertEquals(tagSlot.captured, response.entityTag)
+    }
+
+    @Test
+    fun `words route is 502 when the data host answers 304 to an unconditional request`() {
+        resource.dataUrl = hostData()
+        statuses["/Show/ep/words.jsonl.gz"] = 304
+        every { repository.getEpisodeById("ep1") } returns
+            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+
+        assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }
 
     @Test
@@ -779,11 +864,18 @@ class SearchResourceTest {
                     requested += path
                     val body = hosted[path]
                     val status = statuses[path]
+                    val etag = etags[path]
+                    val ifNoneMatch = exchange.requestHeaders.getFirst("If-None-Match")
+                    conditionals += ifNoneMatch
                     if (status != null) {
                         exchange.sendResponseHeaders(status, -1)
                     } else if (body == null) {
                         exchange.sendResponseHeaders(404, -1)
+                    } else if (etag != null && ifNoneMatch == etag) {
+                        exchange.responseHeaders.add("ETag", etag)
+                        exchange.sendResponseHeaders(304, -1)
                     } else {
+                        etag?.let { exchange.responseHeaders.add("ETag", it) }
                         exchange.sendResponseHeaders(200, body.size.toLong())
                         exchange.responseBody.use { it.write(body) }
                     }

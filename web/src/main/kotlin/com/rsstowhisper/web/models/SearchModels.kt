@@ -194,7 +194,7 @@ fun SearchFilters.hasActiveFilters(): Boolean =
 // decoded back to a space in a *query string* is up to the server, so spaces are
 // re-written as %20, which every decoder agrees on. Any '+' left after encoding
 // is an encoded space -- a literal '+' in the input has already become %2B.
-private fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+internal fun urlEncode(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
 
 /** What to append to an episode link so the transcript can jump to the matches: empty without a query. */
 fun episodeQuerySuffix(query: String): String = if (query.isBlank()) "" else "?q=${urlEncode(query.trim())}"

@@ -1,5 +1,6 @@
 package com.rsstowhisper.web
 
+import com.sun.net.httpserver.HttpServer
 import io.quarkus.test.junit.QuarkusTest
 import io.quarkus.test.junit.QuarkusTestProfile
 import io.quarkus.test.junit.TestProfile
@@ -7,6 +8,8 @@ import io.restassured.RestAssured.given
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import java.io.ByteArrayOutputStream
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
@@ -36,9 +39,7 @@ class WordsRouteHttpTest {
                 val root = Files.createTempDirectory("words-http")
                 Runtime.getRuntime().addShutdownHook(Thread { deleteTree(root) })
 
-                val episodeDir = root.resolve("data").resolve("Show").resolve("ep")
-                Files.createDirectories(episodeDir)
-                Files.write(episodeDir.resolve("words.jsonl.gz"), gzip(NDJSON))
+                val dataHost = startDataHost("/Show/ep/words.jsonl.gz", gzip(NDJSON))
 
                 val db = root.resolve("podcasts.db")
                 // Asked for by name: the profile runs before the app's
@@ -74,9 +75,28 @@ class WordsRouteHttpTest {
                     }
                 }
                 return mapOf(
-                    "app.data.directory" to root.resolve("data").toString(),
+                    "app.data.url" to "http://127.0.0.1:${dataHost.address.port}",
                     "app.db.path" to db.toString(),
                 )
+            }
+
+            private fun startDataHost(
+                path: String,
+                body: ByteArray,
+            ): HttpServer {
+                val server = HttpServer.create(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0)
+                server.createContext("/") { exchange ->
+                    if (exchange.requestURI.rawPath == path) {
+                        exchange.sendResponseHeaders(200, body.size.toLong())
+                        exchange.responseBody.use { it.write(body) }
+                    } else {
+                        exchange.sendResponseHeaders(404, -1)
+                    }
+                    exchange.close()
+                }
+                server.start()
+                Runtime.getRuntime().addShutdownHook(Thread { server.stop(0) })
+                return server
             }
 
             private fun deleteTree(root: Path) {
@@ -89,7 +109,7 @@ class WordsRouteHttpTest {
     }
 
     /**
-     * The client inflates it, which is the point: the file is gzip on disk and
+     * The client inflates it, which is the point: the file is gzip on the data host and
      * goes out untouched under a Content-Encoding that says so.
      */
     @Test

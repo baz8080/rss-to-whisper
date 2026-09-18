@@ -14,6 +14,7 @@ import com.rsstowhisper.web.models.linkify
 import com.rsstowhisper.web.models.parseTranscript
 import com.rsstowhisper.web.models.sanitizeHtml
 import com.rsstowhisper.web.models.searchTerms
+import com.rsstowhisper.web.models.urlEncode
 import io.smallrye.common.annotation.Blocking
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -34,17 +35,15 @@ import org.thymeleaf.TemplateEngine
 import org.thymeleaf.context.Context
 import java.io.IOException
 import java.net.URI
-import java.nio.channels.Channels
-import java.nio.file.Files
-import java.nio.file.InvalidPathException
-import java.nio.file.LinkOption
-import java.nio.file.StandardOpenOption
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.security.MessageDigest
+import java.time.Duration
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.HexFormat
 import java.util.Locale
-import java.util.Optional
 
 @Path("/")
 @ApplicationScoped
@@ -56,20 +55,8 @@ class SearchResource {
     @Inject
     lateinit var templateEngine: TemplateEngine
 
-    @ConfigProperty(name = "app.audio.base-url", defaultValue = "/audio")
-    lateinit var audioBaseUrl: String
-
-    /**
-     * The pipeline's data directory, so the word-timing sidecars can be served
-     * from beside the audio.
-     *
-     * Optional, and Optional rather than a defaulted String because SmallRye
-     * reads an empty default as no value at all and refuses to start. Absent
-     * means no access to that tree, and the feature stays hidden rather than
-     * half-working.
-     */
-    @ConfigProperty(name = "app.data.directory")
-    lateinit var dataDirectory: Optional<String>
+    @ConfigProperty(name = "app.data.url")
+    lateinit var dataUrl: String
 
     @GET
     @Produces(MediaType.TEXT_HTML)
@@ -104,14 +91,14 @@ class SearchResource {
             )
         val result = repository.search(filters)
         val filterOptions = repository.getFilterOptions(filters.query)
-        val base = audioBaseUrl.trimEnd('/')
+        val base = dataUrl.trimEnd('/')
 
         val ctx =
             Context().apply {
                 setVariable("result", result)
                 setVariable("filters", filters)
                 setVariable("filterOptions", filterOptions)
-                setVariable("audioBaseUrl", base)
+                setVariable("dataUrl", base)
                 setVariable("hasActiveFilters", filters.hasActiveFilters())
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
@@ -166,10 +153,7 @@ class SearchResource {
     /**
      * The per-word timings written beside the audio, as gzipped NDJSON.
      *
-     * Served here rather than fetched from the audio host: the path derives
-     * from a column already in hand, it needs no CORS grant on a server that
-     * only has to serve audio, and Content-Encoding lets the browser inflate it
-     * instead of the page carrying a decompressor.
+     * Proxied so the data host needs no CORS grant; Content-Encoding lets the browser inflate it.
      */
     @GET
     @Path("/episode/{id}/words")
@@ -177,88 +161,64 @@ class SearchResource {
         @PathParam("id") id: String,
         @jakarta.ws.rs.core.Context request: Request,
     ): Response {
-        val wordsPath = wordsFileFor(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
+        val uri = wordsUri(id) ?: return Response.status(Response.Status.NOT_FOUND).build()
+        // Only a 404 from the data host means "no sidecar"; the page retries anything else on the next play.
+        val upstream = fetch(uri) ?: return Response.status(Response.Status.BAD_GATEWAY).build()
+        when (upstream.statusCode()) {
+            200 -> Unit
+            404 -> return Response.status(Response.Status.NOT_FOUND).build()
+            else -> return Response.status(Response.Status.BAD_GATEWAY).build()
+        }
+        val bytes = upstream.body()
 
-        // The pipeline clears the sidecar for the whole of a re-transcribe swap,
-        // so a read landing in that window has found the ordinary missing case
-        // rather than a fault worth a 500.
-        // Opened NOFOLLOW as well as checked: the check above and this read
-        // are separate syscalls, and a symlink swapped in between them would
-        // otherwise be followed by exactly the read the check exists to stop.
-        val bytes =
-            try {
-                Files.newByteChannel(wordsPath, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS).use {
-                    Channels.newInputStream(it).readAllBytes()
-                }
-            } catch (e: IOException) {
-                return Response.status(Response.Status.NOT_FOUND).build()
-            }
-
-        // Tagged from the bytes rather than from a stat taken before reading
-        // them: those describe different instants, and a tag naming a version
-        // the body is not would be pinned in the browser by the no-cache
-        // revalidation below for as long as the file then sat still.
         val tag = entityTagFor(bytes)
         request.evaluatePreconditions(tag)?.let { return it.cacheControl(REVALIDATE).tag(tag).build() }
 
         return Response.ok(bytes)
             .type("application/x-ndjson")
-            // Gzip on disk, served as-is for the browser to inflate.
             .header("Content-Encoding", "gzip")
-            // Revalidated rather than held: a re-transcribe rewrites this file
-            // and the cue ordinals it is keyed to together, and the page they
-            // must agree with is itself uncached.
             .cacheControl(REVALIDATE)
             .tag(tag)
             .build()
     }
 
     /**
-     * Null unless word timings are configured and the configured tree is really
-     * there -- a path pointing nowhere hides the feature rather than offering
-     * it on every episode and then failing each one.
+     * Null unless [dataUrl] is an absolute http(s) URL with a host and no query or fragment,
+     * since the server cannot fetch a browser-relative path and the file path is appended to it.
      */
-    private fun dataRoot(): java.nio.file.Path? =
-        dataDirectory.orElse("").takeIf { it.isNotBlank() }
-            ?.let { java.nio.file.Path.of(it).toAbsolutePath().normalize() }
-            ?.takeIf { Files.isDirectory(it) }
+    private fun dataBase(): String? {
+        val base = dataUrl.trimEnd('/')
+        val uri = runCatching { URI(base) }.getOrNull() ?: return null
+        val http = uri.scheme.equals("http", true) || uri.scheme.equals("https", true)
+        return base.takeIf { http && uri.host != null && uri.rawQuery == null && uri.rawFragment == null }
+    }
 
-    private fun wordsFileFor(id: String): java.nio.file.Path? {
-        val root = dataRoot() ?: return null
+    private fun wordsUri(id: String): URI? {
+        val base = dataBase() ?: return null
         val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
 
-        // The root is resolved for real, so a data directory that is itself a
-        // symlink still matches what gets built from it. The episode path is
-        // only normalised, which is what stops a database value walking out of
-        // the tree with "..". Directory symlinks below the root are followed:
-        // they are the operator's own layout -- a library spread across disks
-        // links its show directories elsewhere -- and refusing them would cost
-        // those episodes the feature to guard a tree the operator already owns.
-        val realRoot =
-            try {
-                root.toRealPath()
-            } catch (e: IOException) {
-                return null
-            }
+        val segments = relative.split('/')
+        // The value comes from the database; it must not walk up out of the data URL.
+        if (segments.any { it.isEmpty() || it == "." || it == ".." }) return null
 
-        val wordsPath =
-            try {
-                val audioPath = realRoot.resolve(relative).normalize()
-                (audioPath.parent ?: return null).resolve(WORDS_FILENAME)
-            } catch (e: InvalidPathException) {
-                return null
-            }
-        // Checked on the file that gets opened rather than on the audio path a
-        // level below it: an empty or "." value resolves to the root itself,
-        // and its parent is outside the tree.
-        if (!wordsPath.startsWith(realRoot)) return null
-
-        // The leaf is not followed. A directory symlink is the layout this is
-        // meant to allow; a symlink named words.jsonl.gz is the one thing an
-        // attacker with a foothold in the tree would plant, and following it
-        // buys the layout nothing.
-        return wordsPath.takeIf { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+        val directory =
+            segments.dropLast(1).joinToString("") { "/" + urlEncode(it) }
+        return runCatching { URI("$base$directory/$WORDS_FILENAME") }.getOrNull()
     }
+
+    /** Null when the data host could not be reached at all. */
+    private fun fetch(uri: URI): HttpResponse<ByteArray>? =
+        try {
+            val request = HttpRequest.newBuilder(uri).timeout(FETCH_TIMEOUT).GET().build()
+            HTTP.send(request, HttpResponse.BodyHandlers.ofByteArray())
+        } catch (e: IOException) {
+            null
+        } catch (e: IllegalArgumentException) {
+            null
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
 
     /** The same search as `/search`, for use from a shell or a notebook. */
     @GET
@@ -359,7 +319,7 @@ class SearchResource {
                     .type(MediaType.TEXT_HTML)
                     .build()
 
-        val base = audioBaseUrl.trimEnd('/')
+        val base = dataUrl.trimEnd('/')
         val terms = searchTerms(query)
         val transcriptLines =
             episode.transcript?.let { parseTranscript(it) }.orEmpty().map { line ->
@@ -373,14 +333,12 @@ class SearchResource {
         val ctx =
             Context().apply {
                 setVariable("episode", episode)
-                setVariable("audioBaseUrl", base)
+                setVariable("dataUrl", base)
                 setVariable("transcriptLines", transcriptLines)
                 setVariable("linkifiedSummary", linkifiedSummary)
                 setVariable("query", query.trim())
                 setVariable("matchCount", transcriptLines.count { it.matched })
-                // Not stat'ed here: whether this episode has a sidecar is
-                // settled by the fetch, which falls back silently on a 404.
-                setVariable("wordsUrl", if (dataRoot() == null) null else "/episode/$id/words")
+                setVariable("wordsUrl", if (dataBase() == null) null else "/episode/$id/words")
             }
 
         return Response.ok(templateEngine.process("episode", ctx), MediaType.TEXT_HTML).build()
@@ -389,6 +347,15 @@ class SearchResource {
     companion object {
         /** Written by the pipeline beside each episode's audio. */
         internal const val WORDS_FILENAME = "words.jsonl.gz"
+
+        private val FETCH_TIMEOUT: Duration = Duration.ofSeconds(10)
+
+        private val HTTP: HttpClient by lazy {
+            HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build()
+        }
 
         /**
          * Strong, and taken over the bytes themselves so it cannot outrun them.

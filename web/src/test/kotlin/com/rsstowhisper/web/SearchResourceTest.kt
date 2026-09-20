@@ -629,14 +629,22 @@ class SearchResourceTest {
         resource.dataUrl = "/audio"
 
         assertEquals(404, resource.episodeWords("ep1", null, request).status)
-        verify(exactly = 0) { repository.getEpisodeById(any()) }
+        verify(exactly = 0) { repository.getEpisodeRelativeAudioPath(any()) }
+    }
+
+    @Test
+    fun `words route is 404 when the episode has no audio path`() {
+        resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1))
+        every { repository.getEpisodeRelativeAudioPath("gone") } returns null
+
+        assertEquals(404, resource.episodeWords("gone", null, request).status)
+        assertEquals(emptyList<String>(), requested)
     }
 
     @Test
     fun `words route is 404 when the data host has no sidecar`() {
         resource.dataUrl = hostData()
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         assertEquals(404, resource.episodeWords("ep1", null, request).status)
     }
@@ -645,8 +653,7 @@ class SearchResourceTest {
     fun `words route serves the sidecar as gzip from beside the audio`() {
         val payload = byteArrayOf(1, 2, 3)
         resource.dataUrl = hostData("/data/Show/ep/words.jsonl.gz" to payload) + "/data/"
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val response = resource.episodeWords("ep1", null, request)
 
@@ -658,8 +665,7 @@ class SearchResourceTest {
     @Test
     fun `words route percent-encodes the episode directory`() {
         resource.dataUrl = hostData("/Show%20Name/ep%20%231/words.jsonl.gz" to byteArrayOf(7))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show Name/ep #1/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show Name/ep #1/audio.mp3"
 
         assertEquals(200, resource.episodeWords("ep1", null, request).status)
         assertEquals(listOf("/Show%20Name/ep%20%231/words.jsonl.gz"), requested)
@@ -670,7 +676,7 @@ class SearchResourceTest {
         resource.dataUrl = hostData("/words.jsonl.gz" to byteArrayOf(9))
 
         for (relative in listOf("../outside/audio.mp3", "Show/../../audio.mp3", "", ".", "./", "/Show/audio.mp3", "Show//audio.mp3")) {
-            every { repository.getEpisodeById("ep1") } returns minimalEpisode(relativeAudioPath = relative)
+            every { repository.getEpisodeRelativeAudioPath("ep1") } returns relative
             assertEquals(404, resource.episodeWords("ep1", null, request).status, "relative=<$relative>")
         }
         assertEquals(emptyList<String>(), requested)
@@ -680,8 +686,7 @@ class SearchResourceTest {
     fun `words route is 502 when the data host is unreachable`() {
         resource.dataUrl = hostData()
         stopHost()
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }
@@ -690,16 +695,15 @@ class SearchResourceTest {
     fun `words route is 502 when the data host answers with an error`() {
         resource.dataUrl = hostData()
         statuses["/Show/ep/words.jsonl.gz"] = 500
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }
 
     @Test
     fun `words are off for a data URL the server cannot fetch from`() {
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
+        every { repository.getEpisodeById("ep1") } returns minimalEpisode()
         val ctxSlot = slot<IContext>()
         every { templateEngine.process("episode", capture(ctxSlot)) } returns ""
 
@@ -721,8 +725,7 @@ class SearchResourceTest {
     @Test
     fun `words route revalidates rather than caching`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val response = resource.episodeWords("ep1", null, request)
 
@@ -733,8 +736,7 @@ class SearchResourceTest {
     @Test
     fun `the entity tag follows the content`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val first = resource.episodeWords("ep1", null, request).entityTag
         hosted["/Show/ep/words.jsonl.gz"] = byteArrayOf(4, 5, 6)
@@ -746,8 +748,7 @@ class SearchResourceTest {
     @Test
     fun `words route answers a matching entity tag with 304`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
         val unchanged: Request =
             mockk {
                 every { evaluatePreconditions(any<EntityTag>()) } returns
@@ -761,8 +762,7 @@ class SearchResourceTest {
     fun `words route uses the data host's ETag as its own`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
         etags["/Show/ep/words.jsonl.gz"] = "\"v1\""
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val response = resource.episodeWords("ep1", null, request)
 
@@ -774,8 +774,7 @@ class SearchResourceTest {
     fun `words route forwards If-None-Match and turns an upstream 304 into its own`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
         etags["/Show/ep/words.jsonl.gz"] = "\"v1\""
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val response = resource.episodeWords("ep1", "\"v1\"", request)
 
@@ -790,8 +789,7 @@ class SearchResourceTest {
     fun `words route sends the new body when the browser's tag is stale`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(4, 5, 6))
         etags["/Show/ep/words.jsonl.gz"] = "\"v2\""
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         val response = resource.episodeWords("ep1", "\"v1\"", request)
 
@@ -803,8 +801,7 @@ class SearchResourceTest {
     @Test
     fun `words route sends no conditional header upstream when the browser sent none`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         resource.episodeWords("ep1", null, request)
 
@@ -814,8 +811,7 @@ class SearchResourceTest {
     @Test
     fun `without an upstream ETag the tag is computed and the browser's tag is checked here`() {
         resource.dataUrl = hostData("/Show/ep/words.jsonl.gz" to byteArrayOf(1, 2, 3))
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
         val tagSlot = slot<EntityTag>()
         val unchanged: Request =
             mockk {
@@ -834,8 +830,7 @@ class SearchResourceTest {
     fun `words route is 502 when the data host answers 304 to an unconditional request`() {
         resource.dataUrl = hostData()
         statuses["/Show/ep/words.jsonl.gz"] = 304
-        every { repository.getEpisodeById("ep1") } returns
-            minimalEpisode(relativeAudioPath = "Show/ep/audio.mp3")
+        every { repository.getEpisodeRelativeAudioPath("ep1") } returns "Show/ep/audio.mp3"
 
         assertEquals(502, resource.episodeWords("ep1", null, request).status)
     }

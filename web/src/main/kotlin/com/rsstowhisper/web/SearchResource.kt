@@ -205,7 +205,7 @@ class SearchResource {
 
     private fun wordsUri(id: String): URI? {
         val base = dataBase() ?: return null
-        val relative = repository.getEpisodeById(id)?.episodeRelativeAudioPath ?: return null
+        val relative = repository.getEpisodeRelativeAudioPath(id) ?: return null
 
         val segments = relative.split('/')
         // The value comes from the database; it must not walk up out of the data URL.

@@ -150,6 +150,17 @@ class EpisodeRepository {
     }
 
     @Synchronized
+    fun getEpisodeRelativeAudioPath(id: String): String? {
+        val sql = "SELECT episode_relative_audio_path FROM episodes WHERE id = ?"
+        return conn.prepareStatement(sql).use { stmt ->
+            stmt.setString(1, id)
+            stmt.executeQuery().use { rs ->
+                if (rs.next()) rs.getString(1) else null
+            }
+        }
+    }
+
+    @Synchronized
     fun getFilterOptions(query: String): FilterOptions {
         val now = System.currentTimeMillis()
         if (query == cachedFilterQuery && now - cachedFilterAtMillis < FILTER_CACHE_TTL_MILLIS) {

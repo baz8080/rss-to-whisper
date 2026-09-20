@@ -617,6 +617,19 @@ class EpisodeRepositoryTest {
     }
 
     @Nested
+    inner class GetEpisodeRelativeAudioPath {
+        @Test
+        fun `returns the audio path for a known id`() {
+            assertEquals("ep1/audio.mp3", repo.getEpisodeRelativeAudioPath("ep1"))
+        }
+
+        @Test
+        fun `returns null for unknown id`() {
+            assertNull(repo.getEpisodeRelativeAudioPath("nonexistent"))
+        }
+    }
+
+    @Nested
     inner class GetFilterOptions {
         @Test
         fun `returns all distinct podcast titles sorted`() {

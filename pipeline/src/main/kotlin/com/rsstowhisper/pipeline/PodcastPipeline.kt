@@ -379,7 +379,7 @@ class PodcastPipeline(
 
                 // Not created yet: a run killed mid-way should leave one empty directory, not a feed's worth.
                 val episodeDirPath = existingDir ?: podPath.resolve(escapeFilename(getEpisodeDirName(entry)))
-                val mp3Info = getMp3Info(entry, episodeDirPath, dataDir)
+                val mp3Info = getMp3Info(entry, episodeDirPath)
                 if (mp3Info == null) {
                     logger.warn("${entry.title} has no mp3 link. Skipping")
                     report.forPodcast(podcast.name).failed++
@@ -651,7 +651,7 @@ class PodcastPipeline(
                             if (config.dryRun) {
                                 reportWouldRecover(podcast, episodeDirPath, parsed)
                             } else {
-                                recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)
+                                recoverEpisode(feed, podcast, episodeDirPath, parsed)
                             }
                         if (done) {
                             recovered++
@@ -755,7 +755,6 @@ class PodcastPipeline(
         podcast: PodcastConfig,
         episodeDirPath: Path,
         parsed: EpisodeDirName,
-        dataDir: String,
     ): Boolean {
         val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
         if (!hasUsableAudio(episodeDirPath, parsed)) return false
@@ -1099,7 +1098,6 @@ class PodcastPipeline(
         fun getMp3Info(
             entry: SyndEntry,
             episodePath: Path,
-            dataDir: String,
         ): Mp3Info? {
             val source = findAudioSource(entry) ?: return null
             val filePath = episodePath.resolve(AUDIO_FILENAME)
@@ -1108,7 +1106,6 @@ class PodcastPipeline(
                 url = source.url,
                 filePath = filePath,
                 length = source.length,
-                localFilePath = Path.of(dataDir).relativize(filePath).toString(),
             )
         }
 
@@ -1333,5 +1330,4 @@ data class Mp3Info(
     val url: String,
     val filePath: Path,
     val length: Long,
-    val localFilePath: String,
 )

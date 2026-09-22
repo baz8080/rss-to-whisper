@@ -96,6 +96,22 @@ jobs:
           set -euo pipefail
           python3 index.py fixture | tee second-run.txt
           grep -q 'none changed' second-run.txt
+          # A row indexed by an older build holds whatever the pipeline stored,
+          # and its file is never re-read, so only the stub path corrects it.
+          python3 - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("fixture/podcasts.db")
+          with c:
+              c.execute("UPDATE episodes SET episode_relative_audio_path = 'Stale/ep/audio.mp3'")
+          PY
+          touch fixture/Show/ep2/transcript.json
+          python3 index.py fixture
+          python3 - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("fixture/podcasts.db")
+          audio = c.execute("SELECT episode_relative_audio_path FROM episodes").fetchone()[0]
+          assert audio == "Show/ep1/audio.mp3", f"a row that was not re-read kept {audio}"
+          PY
           cat > fixture/Show/ep1/transcript.json <<'JSON'
           {"_id": "ep1", "podcast_title": "Show", "episode_title": "Kotlin episode",
            "episode_transcript": "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nkotlin flows instead.\n"}

@@ -371,8 +371,9 @@ def load_stored(conn):
     cannot be trusted to be up to date either, so the caller rebuilds.
     """
     stored = {}
-    for rowid, source_path, episode_id, source_id, mtime, size in conn.execute(
-        "SELECT rowid, source_path, id, source_id, source_mtime, source_size FROM episodes"
+    for rowid, source_path, episode_id, source_id, mtime, size, audio in conn.execute(
+        "SELECT rowid, source_path, id, source_id, source_mtime, source_size, "
+        "episode_relative_audio_path FROM episodes"
     ):
         if source_path is None:
             return None
@@ -380,6 +381,7 @@ def load_stored(conn):
             "rowid": rowid,
             "id": episode_id,
             "source_id": source_id,
+            "audio": audio,
             "stamp": (mtime, size),
         }
     return stored
@@ -502,13 +504,21 @@ def run_incremental(conn, data_dir, sources, unknown, db_path):
             if not bulk:
                 fts_insert(conn, rowid, [record[c] for c in FTS_COLUMNS])
 
-        # Only the id moved, and episodes_fts does not index it, so these rows
-        # need no more than the column write.
+        # Only the id and the audio path move, and episodes_fts indexes neither,
+        # so these rows need no more than the column writes. The audio path is
+        # written even though the file was not re-read: rows indexed by an older
+        # build hold whatever the pipeline stored, which is the value this
+        # derives away from, and nothing else would ever correct them.
         for stub in stubs:
             row = stored[stub["source_path"]]
             if row["id"] != stub["id"]:
                 conn.execute(
                     "UPDATE episodes SET id = ? WHERE rowid = ?", (stub["id"], row["rowid"])
+                )
+            if row["audio"] != stub["episode_relative_audio_path"]:
+                conn.execute(
+                    "UPDATE episodes SET episode_relative_audio_path = ? WHERE rowid = ?",
+                    (stub["episode_relative_audio_path"], row["rowid"]),
                 )
 
         if bulk:

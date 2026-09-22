@@ -168,18 +168,17 @@ class PodcastPipelineCompanionTest {
                         enclosure("https://cdn/ep1.mp3", "audio/mpeg", length = 12345L),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
 
         assertEquals("https://cdn/ep1.mp3", result?.url)
         assertEquals(12345L, result?.length)
         assertEquals(Path.of("/data/show/ep/audio.mp3"), result?.filePath)
-        assertEquals("show/ep/audio.mp3", result?.localFilePath)
     }
 
     @Test
     fun `getMp3Info accepts audio mp3 type`() {
         val e = entry(enclosures = listOf(enclosure("https://cdn/ep.mp3", "audio/mp3")))
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
     }
 
@@ -193,7 +192,7 @@ class PodcastPipelineCompanionTest {
                         enclosure("https://cdn/video.mp4", "video/mp4"),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertNull(result)
     }
 
@@ -204,7 +203,7 @@ class PodcastPipelineCompanionTest {
                 enclosures = listOf(enclosure("https://cdn/image.jpg", "image/jpeg")),
                 links = listOf(link("https://cdn/ep.mp3", type = "audio/mpeg", length = 999L)),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(999L, result?.length)
     }
@@ -212,7 +211,7 @@ class PodcastPipelineCompanionTest {
     @Test
     fun `getMp3Info returns null when nothing matches`() {
         val e = entry(links = listOf(link("https://page", type = "text/html")))
-        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data"))
+        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep")))
     }
 
     @Test
@@ -220,7 +219,7 @@ class PodcastPipelineCompanionTest {
         // Same fallback buildEpisodeDict uses — the two must agree, or the
         // pipeline downloads an episode it then refuses to write json for.
         val e = entry(links = listOf(link("https://cdn/ep.mp3", rel = "enclosure", length = 42L)))
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(42L, result?.length)
     }
@@ -231,7 +230,7 @@ class PodcastPipelineCompanionTest {
         // audio.mp3 would park an undecodable file on disk, and its presence
         // marks the download as done, so every later run would re-transcribe it.
         val e = entry(links = listOf(link("https://cdn/ep.mp4", type = "video/mp4", rel = "enclosure")))
-        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data"))
+        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep")))
     }
 
     @Test
@@ -244,7 +243,7 @@ class PodcastPipelineCompanionTest {
                         link("https://cdn/ep.mp3", type = "audio/mpeg", length = 99L),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(99L, result?.length)
     }
@@ -256,7 +255,7 @@ class PodcastPipelineCompanionTest {
                 enclosures = listOf(enclosure("https://cdn/from-enclosure.mp3", "audio/mpeg")),
                 links = listOf(link("https://cdn/from-link.mp3", type = "audio/mpeg")),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/from-enclosure.mp3", result?.url)
     }
 

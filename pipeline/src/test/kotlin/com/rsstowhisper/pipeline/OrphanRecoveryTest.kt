@@ -104,7 +104,7 @@ class OrphanRecoveryTest {
         assertEquals(true, json["episode_metadata_recovered"].asBoolean())
         assertEquals("Test Podcast", json["podcast_title"].asText())
         assertEquals("science", json["podcast_collections"][0].asText())
-        assertTrue(json["episode_relative_audio_path"].asText().isNotBlank())
+        assertFalse(json.has("episode_relative_audio_path"))
     }
 
     /** The audio is all a recovery has, and it is enough for chapters -- the feed entry is not. */

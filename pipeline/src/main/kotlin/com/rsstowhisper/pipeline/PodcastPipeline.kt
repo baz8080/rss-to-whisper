@@ -379,7 +379,7 @@ class PodcastPipeline(
 
                 // Not created yet: a run killed mid-way should leave one empty directory, not a feed's worth.
                 val episodeDirPath = existingDir ?: podPath.resolve(escapeFilename(getEpisodeDirName(entry)))
-                val mp3Info = getMp3Info(entry, episodeDirPath, dataDir)
+                val mp3Info = getMp3Info(entry, episodeDirPath)
                 if (mp3Info == null) {
                     logger.warn("${entry.title} has no mp3 link. Skipping")
                     report.forPodcast(podcast.name).failed++
@@ -651,7 +651,7 @@ class PodcastPipeline(
                             if (config.dryRun) {
                                 reportWouldRecover(podcast, episodeDirPath, parsed)
                             } else {
-                                recoverEpisode(feed, podcast, episodeDirPath, parsed, dataDir)
+                                recoverEpisode(feed, podcast, episodeDirPath, parsed)
                             }
                         if (done) {
                             recovered++
@@ -755,7 +755,6 @@ class PodcastPipeline(
         podcast: PodcastConfig,
         episodeDirPath: Path,
         parsed: EpisodeDirName,
-        dataDir: String,
     ): Boolean {
         val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
         if (!hasUsableAudio(episodeDirPath, parsed)) return false
@@ -782,7 +781,6 @@ class PodcastPipeline(
                 feed = feed,
                 parsed = parsed,
                 transcript = transcription.vtt,
-                relativeAudioPath = Path.of(dataDir).relativize(audioPath).toString(),
                 durationSeconds = transcription.durationSeconds,
                 collections = podcast.collections,
                 quality = scored.quality,
@@ -832,7 +830,6 @@ class PodcastPipeline(
                 feed,
                 entry,
                 transcription.vtt,
-                mp3Info.localFilePath,
                 collections,
                 scored.quality,
                 mp3Info.filePath,
@@ -1101,7 +1098,6 @@ class PodcastPipeline(
         fun getMp3Info(
             entry: SyndEntry,
             episodePath: Path,
-            dataDir: String,
         ): Mp3Info? {
             val source = findAudioSource(entry) ?: return null
             val filePath = episodePath.resolve(AUDIO_FILENAME)
@@ -1110,7 +1106,6 @@ class PodcastPipeline(
                 url = source.url,
                 filePath = filePath,
                 length = source.length,
-                localFilePath = Path.of(dataDir).relativize(filePath).toString(),
             )
         }
 
@@ -1118,7 +1113,6 @@ class PodcastPipeline(
             feed: SyndFeed,
             entry: SyndEntry,
             transcript: String,
-            relativeAudioPath: String,
             collections: List<String>? = null,
             quality: QualityReport? = null,
             audioPath: Path? = null,
@@ -1160,7 +1154,6 @@ class PodcastPipeline(
                         "episode_type" to entryItunes?.episodeType,
                         "episode_duration" to parseDuration(entryItunes),
                         "episode_transcript" to transcript,
-                        "episode_relative_audio_path" to relativeAudioPath,
                         "episode_chapters" to chapterMaps(audioPath),
                         "episode_ad_markers" to adMarkerMaps(entry),
                         "episode_quality" to quality?.toMap(),
@@ -1221,7 +1214,6 @@ class PodcastPipeline(
             feed: SyndFeed,
             parsed: EpisodeDirName,
             transcript: String,
-            relativeAudioPath: String,
             durationSeconds: Int?,
             collections: List<String>? = null,
             quality: QualityReport? = null,
@@ -1247,7 +1239,6 @@ class PodcastPipeline(
                         "episode_type" to null,
                         "episode_duration" to durationSeconds,
                         "episode_transcript" to transcript,
-                        "episode_relative_audio_path" to relativeAudioPath,
                         "episode_chapters" to chapterMaps(audioPath),
                         "episode_ad_markers" to null,
                         "episode_metadata_recovered" to true,
@@ -1339,5 +1330,4 @@ data class Mp3Info(
     val url: String,
     val filePath: Path,
     val length: Long,
-    val localFilePath: String,
 )

@@ -241,6 +241,18 @@ def is_unknown(source_path, unknown):
     return any(source_path.startswith(p) for p in unknown if p.endswith(os.sep))
 
 
+# The audio sits beside the transcript, so the path is derived rather than read:
+# the field the pipeline used to store drifted from the file's own location
+# (a missing id segment, a re-cased show slug, an accented directory), and old
+# transcripts still carry whichever value they were written with.
+AUDIO_BASENAME = "audio.mp3"
+
+
+def audio_path(source_path):
+    """Where the episode's audio is, relative to the data directory."""
+    return os.path.join(os.path.dirname(source_path), AUDIO_BASENAME)
+
+
 def read_episode(data_dir, source_path, stamp):
     """The row a transcript.json becomes, paired with how it went.
 
@@ -296,7 +308,7 @@ def read_episode(data_dir, source_path, stamp):
         "episode_duration": episode.get("episode_duration"),
         "episode_transcript": transcript,
         "episode_transcript_plain": strip_vtt(transcript),
-        "episode_relative_audio_path": episode.get("episode_relative_audio_path"),
+        "episode_relative_audio_path": audio_path(source_path),
         "all_tags": join_list(episode.get("all_tags")),
         "source_path": source_path,
         "source_mtime": stamp[0],
@@ -369,8 +381,8 @@ def load_stored(conn):
             "rowid": rowid,
             "id": episode_id,
             "source_id": source_id,
-            "stamp": (mtime, size),
             "audio": audio,
+            "stamp": (mtime, size),
         }
     return stored
 
@@ -448,7 +460,7 @@ def run_incremental(conn, data_dir, sources, unknown, db_path):
         {
             "source_path": p,
             "source_id": stored[p]["source_id"],
-            "episode_relative_audio_path": stored[p]["audio"],
+            "episode_relative_audio_path": audio_path(p),
         }
         for p in stored
         if p not in drop and p not in read
@@ -492,13 +504,21 @@ def run_incremental(conn, data_dir, sources, unknown, db_path):
             if not bulk:
                 fts_insert(conn, rowid, [record[c] for c in FTS_COLUMNS])
 
-        # Only the id moved, and episodes_fts does not index it, so these rows
-        # need no more than the column write.
+        # Only the id and the audio path move, and episodes_fts indexes neither,
+        # so these rows need no more than the column writes. The audio path is
+        # written even though the file was not re-read: rows indexed by an older
+        # build hold whatever the pipeline stored, which is the value this
+        # derives away from, and nothing else would ever correct them.
         for stub in stubs:
             row = stored[stub["source_path"]]
             if row["id"] != stub["id"]:
                 conn.execute(
                     "UPDATE episodes SET id = ? WHERE rowid = ?", (stub["id"], row["rowid"])
+                )
+            if row["audio"] != stub["episode_relative_audio_path"]:
+                conn.execute(
+                    "UPDATE episodes SET episode_relative_audio_path = ? WHERE rowid = ?",
+                    (stub["episode_relative_audio_path"], row["rowid"]),
                 )
 
         if bulk:

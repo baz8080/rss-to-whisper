@@ -23,6 +23,7 @@ import java.nio.file.Path
 import java.util.Date
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -167,18 +168,17 @@ class PodcastPipelineCompanionTest {
                         enclosure("https://cdn/ep1.mp3", "audio/mpeg", length = 12345L),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
 
         assertEquals("https://cdn/ep1.mp3", result?.url)
         assertEquals(12345L, result?.length)
         assertEquals(Path.of("/data/show/ep/audio.mp3"), result?.filePath)
-        assertEquals("show/ep/audio.mp3", result?.localFilePath)
     }
 
     @Test
     fun `getMp3Info accepts audio mp3 type`() {
         val e = entry(enclosures = listOf(enclosure("https://cdn/ep.mp3", "audio/mp3")))
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
     }
 
@@ -192,7 +192,7 @@ class PodcastPipelineCompanionTest {
                         enclosure("https://cdn/video.mp4", "video/mp4"),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertNull(result)
     }
 
@@ -203,7 +203,7 @@ class PodcastPipelineCompanionTest {
                 enclosures = listOf(enclosure("https://cdn/image.jpg", "image/jpeg")),
                 links = listOf(link("https://cdn/ep.mp3", type = "audio/mpeg", length = 999L)),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(999L, result?.length)
     }
@@ -211,7 +211,7 @@ class PodcastPipelineCompanionTest {
     @Test
     fun `getMp3Info returns null when nothing matches`() {
         val e = entry(links = listOf(link("https://page", type = "text/html")))
-        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data"))
+        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep")))
     }
 
     @Test
@@ -219,7 +219,7 @@ class PodcastPipelineCompanionTest {
         // Same fallback buildEpisodeDict uses — the two must agree, or the
         // pipeline downloads an episode it then refuses to write json for.
         val e = entry(links = listOf(link("https://cdn/ep.mp3", rel = "enclosure", length = 42L)))
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(42L, result?.length)
     }
@@ -230,7 +230,7 @@ class PodcastPipelineCompanionTest {
         // audio.mp3 would park an undecodable file on disk, and its presence
         // marks the download as done, so every later run would re-transcribe it.
         val e = entry(links = listOf(link("https://cdn/ep.mp4", type = "video/mp4", rel = "enclosure")))
-        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data"))
+        assertNull(PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep")))
     }
 
     @Test
@@ -243,7 +243,7 @@ class PodcastPipelineCompanionTest {
                         link("https://cdn/ep.mp3", type = "audio/mpeg", length = 99L),
                     ),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/ep.mp3", result?.url)
         assertEquals(99L, result?.length)
     }
@@ -255,7 +255,7 @@ class PodcastPipelineCompanionTest {
                 enclosures = listOf(enclosure("https://cdn/from-enclosure.mp3", "audio/mpeg")),
                 links = listOf(link("https://cdn/from-link.mp3", type = "audio/mpeg")),
             )
-        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"), "/data")
+        val result = PodcastPipeline.getMp3Info(e, Path.of("/data/show/ep"))
         assertEquals("https://cdn/from-enclosure.mp3", result?.url)
     }
 
@@ -387,21 +387,21 @@ class PodcastPipelineCompanionTest {
     fun `buildEpisodeDict returns null when transcript is empty`() {
         val feed = feedWithItunes()
         val e = entryWithItunes()
-        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, "", "rel/path.mp3"))
+        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, ""))
     }
 
     @Test
     fun `buildEpisodeDict returns null when episode has no guid`() {
         val feed = feedWithItunes()
         val e = entryWithItunes(guid = null)
-        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, "some transcript", "rel/path.mp3"))
+        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, "some transcript"))
     }
 
     @Test
     fun `buildEpisodeDict returns null when there is no audio link`() {
         val feed = feedWithItunes()
         val e = entryWithItunes(audioUrl = null)
-        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, "some transcript", "rel/path.mp3"))
+        assertNull(PodcastPipeline.buildEpisodeDict(feed, e, "some transcript"))
     }
 
     @Test
@@ -438,7 +438,7 @@ class PodcastPipelineCompanionTest {
                 guid = guid,
             )
 
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "transcript", "pod/ep/audio.mp3", listOf("col1"))!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "transcript", listOf("col1"))!!
 
         assertEquals(PodcastPipeline.md5Hash8(guid), dict["_id"])
         assertEquals(listOf("col1"), dict["podcast_collections"])
@@ -461,14 +461,14 @@ class PodcastPipelineCompanionTest {
         assertEquals("full", dict["episode_type"])
         assertEquals(90, dict["episode_duration"]) // 90000 / 1000
         assertEquals("transcript", dict["episode_transcript"])
-        assertEquals("pod/ep/audio.mp3", dict["episode_relative_audio_path"])
+        assertFalse(dict.containsKey("episode_relative_audio_path"))
     }
 
     @Test
     fun `buildEpisodeDict defaults collections to empty list`() {
         val feed = feedWithItunes()
         val e = entryWithItunes()
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.wav", collections = null)!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", collections = null)!!
         assertEquals(emptyList<String>(), dict["podcast_collections"])
     }
 
@@ -477,7 +477,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.summary = "from itunes" }
         val feed = feedWithItunes()
         val e = entryWithItunes(description = null, itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertEquals("from itunes", dict["episode_summary"])
     }
 
@@ -486,7 +486,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.imageUri = "https://itunes/img.jpg" }
         val feed = feedWithItunes(imageUrl = null, itunesImageUri = "https://feed-itunes.jpg")
         val e = entryWithItunes(itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertEquals("https://feed-itunes.jpg", dict["podcast_image"])
         assertEquals("https://itunes/img.jpg", dict["episode_image"])
     }
@@ -495,7 +495,7 @@ class PodcastPipelineCompanionTest {
     fun `buildEpisodeDict uses foreign markup image when itunes image absent`() {
         val feed = feedWithItunes()
         val e = entryWithItunes(foreignImageHref = "https://fm/img.jpg")
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertEquals("https://fm/img.jpg", dict["episode_image"])
     }
 
@@ -504,7 +504,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.keywords = arrayOf("Tech", "science") }
         val feed = feedWithItunes(categories = listOf("News", "TECH"))
         val e = entryWithItunes(categories = listOf("science", "History"), itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
 
         @Suppress("UNCHECKED_CAST")
         val tags = dict["all_tags"] as List<String>
@@ -516,7 +516,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.keywords = arrayOf(" science", " technology") }
         val feed = feedWithItunes(categories = listOf("science", "technology"))
         val e = entryWithItunes(itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
 
         @Suppress("UNCHECKED_CAST")
         val tags = dict["all_tags"] as List<String>
@@ -528,7 +528,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.keywords = arrayOf("ok", "good", "a", "ab") }
         val feed = feedWithItunes(categories = listOf("it", "tech"))
         val e = entryWithItunes(itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
 
         @Suppress("UNCHECKED_CAST")
         val tags = dict["all_tags"] as List<String>
@@ -542,7 +542,7 @@ class PodcastPipelineCompanionTest {
         val itunes = EntryInformationImpl().apply { this.duration = Duration("01:30") }
         val feed = feedWithItunes()
         val e = entryWithItunes(itunes = itunes)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         // 01:30 = 90 seconds via timeToSeconds, OR ms>0 path. Either way, must be 90.
         assertEquals(90, (dict["episode_duration"] as Number).toInt())
     }
@@ -551,7 +551,7 @@ class PodcastPipelineCompanionTest {
     fun `buildEpisodeDict episode_duration is null when no itunes module`() {
         val feed = feedWithItunes()
         val e = entryWithItunes(itunes = null)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertNull(dict["episode_duration"])
     }
 
@@ -566,7 +566,7 @@ class PodcastPipelineCompanionTest {
                 enclosures = emptyList()
                 links = listOf(link("https://cdn/ep.mp3", rel = "enclosure"))
             }
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertEquals("https://cdn/ep.mp3", dict["episode_audio_link"])
     }
 
@@ -574,7 +574,7 @@ class PodcastPipelineCompanionTest {
     fun `buildEpisodeDict episode_published_on is null when no date`() {
         val feed = feedWithItunes()
         val e = entryWithItunes(publishedDate = null)
-        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feed, e, "t")!!
         assertTrue(dict.containsKey("episode_published_on"))
         assertNull(dict["episode_published_on"])
     }
@@ -591,7 +591,7 @@ class PodcastPipelineCompanionTest {
             )
 
         val dict =
-            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", audioPath = audio)!!
 
         assertEquals(
             listOf(
@@ -610,7 +610,7 @@ class PodcastPipelineCompanionTest {
         Files.write(audio, ByteArray(2048) { 0x55 })
 
         val dict =
-            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", audioPath = audio)!!
 
         assertTrue(dict.containsKey("episode_chapters"))
         assertEquals(emptyList<Map<String, Any?>>(), dict["episode_chapters"])
@@ -624,7 +624,7 @@ class PodcastPipelineCompanionTest {
                     listOf(adMarkers(Triple("pre", 2, null), Triple("mid", 2, 1244), Triple("post", 3, 13926))),
             )
 
-        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t")!!
 
         assertEquals(
             listOf(
@@ -638,7 +638,7 @@ class PodcastPipelineCompanionTest {
 
     @Test
     fun `buildEpisodeDict writes an empty ad marker list for an entry carrying none`() {
-        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t")!!
 
         assertTrue(dict.containsKey("episode_ad_markers"))
         assertEquals(emptyList<Map<String, Any?>>(), dict["episode_ad_markers"])
@@ -658,7 +658,7 @@ class PodcastPipelineCompanionTest {
             )
 
         val dict =
-            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", "p.mp3", audioPath = audio)!!
+            PodcastPipeline.buildEpisodeDict(feedWithItunes(), entryWithItunes(), "t", audioPath = audio)!!
 
         assertEquals(listOf(mapOf("start_s" to 0.0, "end_s" to 5.0, "title" to "Real")), dict["episode_chapters"])
     }
@@ -672,7 +672,6 @@ class PodcastPipelineCompanionTest {
                 feedWithItunes(),
                 entryWithItunes(),
                 "t",
-                "p.mp3",
                 audioPath = dir.resolve("never-written.mp3"),
             )!!
 
@@ -688,7 +687,7 @@ class PodcastPipelineCompanionTest {
                     listOf(rawAdMarkers("mid" to "NaN", "mid" to "Infinity", "mid" to "00:20:44", "mid" to "")),
             )
 
-        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t")!!
 
         @Suppress("UNCHECKED_CAST")
         val markers = dict["episode_ad_markers"] as List<Map<String, Any?>>
@@ -713,7 +712,7 @@ class PodcastPipelineCompanionTest {
                     ),
             )
 
-        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t", "p.mp3")!!
+        val dict = PodcastPipeline.buildEpisodeDict(feedWithItunes(), entry, "t")!!
 
         assertEquals(emptyList<Map<String, Any?>>(), dict["episode_ad_markers"])
     }
@@ -731,7 +730,6 @@ class PodcastPipelineCompanionTest {
                 feedWithItunes(),
                 recoveredDir(),
                 "t",
-                "p.mp3",
                 null,
                 audioPath = audio,
             )!!
@@ -743,19 +741,19 @@ class PodcastPipelineCompanionTest {
     @Test
     fun `buildRecoveredEpisodeDict has the same keys as buildEpisodeDict plus the marker`() {
         val feed = feedWithItunes()
-        val fromFeed = PodcastPipeline.buildEpisodeDict(feed, entryWithItunes(), "t", "p.mp3")!!
-        val recovered = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", "p.mp3", null)!!
+        val fromFeed = PodcastPipeline.buildEpisodeDict(feed, entryWithItunes(), "t")!!
+        val recovered = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", null)!!
 
         assertEquals(fromFeed.keys + "episode_metadata_recovered", recovered.keys)
-        assertEquals(28, recovered.size)
+        assertEquals(27, recovered.size)
     }
 
     @Test
     fun `buildRecoveredEpisodeDict shares the podcast fields with buildEpisodeDict`() {
         val feed = feedWithItunes(author = "Someone", imageUrl = "https://img/pod.png")
-        val fromFeed = PodcastPipeline.buildEpisodeDict(feed, entryWithItunes(), "t", "p.mp3", listOf("science"))!!
+        val fromFeed = PodcastPipeline.buildEpisodeDict(feed, entryWithItunes(), "t", listOf("science"))!!
         val recovered =
-            PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", "p.mp3", null, listOf("science"))!!
+            PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", null, listOf("science"))!!
 
         PodcastPipeline.podcastFields(feed, listOf("science")).keys.forEach { key ->
             assertEquals(fromFeed[key], recovered[key], key)
@@ -769,7 +767,6 @@ class PodcastPipelineCompanionTest {
                 feedWithItunes(),
                 recoveredDir("2019-01-01-deadbeef-An-Old-Episode"),
                 "transcript text",
-                "Pod/2019-01-01-deadbeef-An-Old-Episode/audio.mp3",
                 1830,
             )!!
 
@@ -778,13 +775,13 @@ class PodcastPipelineCompanionTest {
         assertEquals("An Old Episode", dict["episode_title"])
         assertEquals(1830, dict["episode_duration"])
         assertEquals("transcript text", dict["episode_transcript"])
-        assertEquals("Pod/2019-01-01-deadbeef-An-Old-Episode/audio.mp3", dict["episode_relative_audio_path"])
+        assertFalse(dict.containsKey("episode_relative_audio_path"))
         assertEquals(true, dict["episode_metadata_recovered"])
     }
 
     @Test
     fun `buildRecoveredEpisodeDict nulls every field only the feed entry could supply`() {
-        val dict = PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir(), "t", "p.mp3", null)!!
+        val dict = PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir(), "t", null)!!
 
         listOf(
             "episode_audio_link", "episode_web_link", "episode_image", "episode_summary",
@@ -800,19 +797,19 @@ class PodcastPipelineCompanionTest {
     @Test
     fun `buildRecoveredEpisodeDict title is null when the directory carries no title`() {
         val dict =
-            PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir("2019-01-01-deadbeef-"), "t", "p.mp3", null)!!
+            PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir("2019-01-01-deadbeef-"), "t", null)!!
         assertNull(dict["episode_title"])
     }
 
     @Test
     fun `buildRecoveredEpisodeDict tags come from the feed only, normalised`() {
         val feed = feedWithItunes(categories = listOf("  Science  ", "SCIENCE", "History", "ok"))
-        val dict = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", "p.mp3", null)!!
+        val dict = PodcastPipeline.buildRecoveredEpisodeDict(feed, recoveredDir(), "t", null)!!
         assertEquals(listOf("science", "history"), dict["all_tags"])
     }
 
     @Test
     fun `buildRecoveredEpisodeDict returns null for an empty transcript`() {
-        assertNull(PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir(), "", "p.mp3", null))
+        assertNull(PodcastPipeline.buildRecoveredEpisodeDict(feedWithItunes(), recoveredDir(), "", null))
     }
 }

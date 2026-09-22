@@ -310,8 +310,7 @@ class PodcastPipeline(
     /** Matches the directory back to its feed so the decode keeps the podcast's language. */
     private fun podcastFor(episodeDirPath: Path): PodcastConfig {
         val podcastDir = episodeDirPath.parent.fileName.toString()
-        config.podcasts.firstOrNull { escapeFilename(it.name).equals(escapeFilename(podcastDir), ignoreCase = true) }
-            ?.let { return it }
+        podcastForDir(config.podcasts, podcastDir)?.let { return it }
 
         // Renamed or dropped from pods.yaml, but its episodes are still on
         // disk. The language then falls through to the top-level one, which is
@@ -1067,6 +1066,12 @@ class PodcastPipeline(
             return "$date-${episodeId(entry)}"
         }
 
+        /** The pods.yaml entry whose slugged name is this directory's, accents and case aside. */
+        internal fun podcastForDir(
+            podcasts: List<PodcastConfig>,
+            podcastDir: String,
+        ): PodcastConfig? = podcasts.firstOrNull { escapeFilename(it.name).equals(escapeFilename(podcastDir), ignoreCase = true) }
+
         /**
          * A directory name with no `-<hex8>-` component cannot be resolved back
          * to its audio: 97 episodes once stored one, and the keys pointed at
@@ -1075,7 +1080,9 @@ class PodcastPipeline(
          * worth asserting -- a silent recurrence costs a re-ingest to find.
          */
         fun getEpisodeDirName(entry: SyndEntry): String {
-            val name = "${episodeStablePrefix(entry)}-${entry.title ?: "unknown"}"
+            // A title with no ASCII letters slugs to nothing and would lose the prefix's separator.
+            val title = entry.title?.takeIf { escapeFilename(it).isNotEmpty() } ?: "unknown"
+            val name = "${episodeStablePrefix(entry)}-$title"
             require(EpisodeDirName.matches(escapeFilename(name))) {
                 "Episode directory name is missing its date-id prefix: $name"
             }

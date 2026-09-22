@@ -42,6 +42,7 @@ data class AppConfig(
      * a feed thinking it has the punctuation lever when it does not.
      */
     internal fun validate() {
+        checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {
             podcast.language?.let { checkLanguage(it, "${podcast.name}'s language") }
@@ -57,6 +58,20 @@ data class AppConfig(
                     ?: error("${podcast.name} sets initial_prompt but no language, so there is no language it is written in")
             if (podcastLanguage.lowercase() == Transcriber.AUTO_LANGUAGE) {
                 error("${podcast.name} sets initial_prompt but its language is \"auto\", which never takes a prompt")
+            }
+        }
+    }
+
+    /** A show's directory is its slugged name, so the slug must exist and be its own. */
+    private fun checkShowDirectories() {
+        val seen = mutableMapOf<String, String>()
+        for (podcast in podcasts) {
+            val dir = escapeFilename(podcast.name).lowercase()
+            if (dir.isEmpty()) {
+                error("${podcast.name} has no ASCII letters or digits to name its directory; rename it in pods.yaml")
+            }
+            seen.put(dir, podcast.name)?.let {
+                error("${podcast.name} and $it would share the directory ${escapeFilename(podcast.name)}")
             }
         }
     }

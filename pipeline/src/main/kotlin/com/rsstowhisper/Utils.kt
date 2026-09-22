@@ -49,6 +49,7 @@ fun resolvePath(
     directoryName: String,
 ): Path {
     val escaped = escapeFilename(directoryName)
+    require(escaped.isNotEmpty()) { "$directoryName has no ASCII letters or digits to name a directory" }
     return findCaseInsensitive(parentPath, escaped) ?: parentPath.resolve(escaped)
 }
 
@@ -75,12 +76,18 @@ private fun findCaseInsensitive(
     name: String,
 ): Path? {
     if (!Files.isDirectory(parentPath)) return null
-    val match =
+    val matches =
         parentPath.toFile()
             .listFiles()
-            ?.firstOrNull { it.isDirectory && escapeFilename(it.name).equals(name, ignoreCase = true) }
-            ?: return null
-    if (match.name != name) {
+            ?.filter { it.isDirectory && escapeFilename(it.name).equals(name, ignoreCase = true) }
+            ?.sortedBy { it.name }
+            .orEmpty()
+    if (matches.isEmpty()) return null
+    // listFiles() has no order, so an exact name must win or a half-migrated show splits.
+    val match = matches.firstOrNull { it.name == name } ?: matches.first()
+    if (matches.size > 1) {
+        logger.error("${matches.map { it.name }} all name $name; using ${match.name}. Merge them.")
+    } else if (match.name != name) {
         logger.info("Reusing existing directory ${match.name} for $name (differs only by case or accents)")
     }
     return match.toPath()

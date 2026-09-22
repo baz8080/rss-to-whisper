@@ -7,6 +7,7 @@ import org.junit.jupiter.params.provider.CsvSource
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 
 class UtilsTest {
     @ParameterizedTest
@@ -40,6 +41,22 @@ class UtilsTest {
     fun `escapeFilename leaves only ASCII`() {
         assertEquals("Closes-in-on-Kamo-oalewa", escapeFilename("Closes in on Kamo\u02bboalewa"))
         assertEquals("Stra-e", escapeFilename("Stra\u00dfe"))
+    }
+
+    @Test
+    fun `an exact name wins over one that differs only by accents`(
+        @TempDir parent: Path,
+    ) {
+        Files.createDirectory(parent.resolve("Bl\u00fair\u00edn\u00ed-B\u00e9aloidis"))
+        val ascii = Files.createDirectory(parent.resolve("Bluirini-Bealoidis"))
+        repeat(5) { assertEquals(ascii, createPath(parent, "Bl\u00fair\u00edn\u00ed B\u00e9aloidis")) }
+    }
+
+    @Test
+    fun `a name with no ASCII letters is refused, not resolved to the parent`(
+        @TempDir parent: Path,
+    ) {
+        assertFailsWith<IllegalArgumentException> { resolvePath(parent, "\u65e5\u672c") }
     }
 
     @Test

@@ -47,9 +47,10 @@ class UtilsTest {
     fun `an exact name wins over one that differs only by accents`(
         @TempDir parent: Path,
     ) {
-        Files.createDirectory(parent.resolve("Bl\u00fair\u00edn\u00ed-B\u00e9aloidis"))
-        val ascii = Files.createDirectory(parent.resolve("Bluirini-Bealoidis"))
-        repeat(5) { assertEquals(ascii, createPath(parent, "Bl\u00fair\u00edn\u00ed B\u00e9aloidis")) }
+        // "Bluirini Bealoidis" slugs alike and sorts first, so only the exact-name rule picks the other.
+        Files.createDirectory(parent.resolve("Bluirini Bealoidis"))
+        val exact = Files.createDirectory(parent.resolve("Bluirini-Bealoidis"))
+        assertEquals(exact, createPath(parent, "Bl\u00fair\u00edn\u00ed B\u00e9aloidis"))
     }
 
     @Test

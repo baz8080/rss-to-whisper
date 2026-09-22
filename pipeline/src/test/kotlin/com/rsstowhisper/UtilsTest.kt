@@ -1,7 +1,11 @@
 package com.rsstowhisper
 
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.CsvSource
+import java.nio.file.Files
+import java.nio.file.Path
 import kotlin.test.assertEquals
 
 class UtilsTest {
@@ -20,6 +24,25 @@ class UtilsTest {
         expected: String,
     ) {
         assertEquals(expected, escapeFilename(input))
+    }
+
+    @Test
+    fun `escapeFilename gives one slug whatever the feed's Unicode form`() {
+        val composed = "Bl\u00fair\u00edn\u00ed B\u00e9aloidis"
+        val decomposed = "Blu\u0301iri\u0301ni\u0301 Be\u0301aloidis"
+        val mixed = "Bl\u00fairi\u0301n\u00ed Be\u0301aloidis"
+        for (title in listOf(composed, decomposed, mixed)) {
+            assertEquals("Bluirini-Bealoidis", escapeFilename(title))
+        }
+    }
+
+    @Test
+    fun `an accented directory from before stripping is reused, not duplicated`(
+        @TempDir parent: Path,
+    ) {
+        val old = Files.createDirectory(parent.resolve("Bl\u00fair\u00edn\u00ed-B\u00e9aloidis"))
+        assertEquals(old, createPath(parent, "Blu\u0301iri\u0301ni\u0301 Be\u0301aloidis"))
+        assertEquals(1, parent.toFile().listFiles()!!.size)
     }
 
     @ParameterizedTest

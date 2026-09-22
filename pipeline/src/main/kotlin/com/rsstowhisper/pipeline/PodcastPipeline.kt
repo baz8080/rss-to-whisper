@@ -310,7 +310,7 @@ class PodcastPipeline(
     /** Matches the directory back to its feed so the decode keeps the podcast's language. */
     private fun podcastFor(episodeDirPath: Path): PodcastConfig {
         val podcastDir = episodeDirPath.parent.fileName.toString()
-        config.podcasts.firstOrNull { escapeFilename(it.name).equals(podcastDir, ignoreCase = true) }
+        config.podcasts.firstOrNull { escapeFilename(it.name).equals(escapeFilename(podcastDir), ignoreCase = true) }
             ?.let { return it }
 
         // Renamed or dropped from pods.yaml, but its episodes are still on

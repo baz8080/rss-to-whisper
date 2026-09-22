@@ -3,17 +3,24 @@ package com.rsstowhisper
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.text.Normalizer
 import kotlin.math.pow
 
 private val logger = LoggerFactory.getLogger("com.rsstowhisper.Utils")
 
 private val CONSECUTIVE_DASHES = Regex("-{2,}")
+private val COMBINING_MARKS = Regex("\\p{M}+")
 
+/**
+ * Accents are stripped rather than kept: a feed sends `ú` composed or as `u` + a combining
+ * mark, and the mark is not a letter, so the same title used to slug two different ways.
+ */
 fun escapeFilename(filename: String?): String {
     if (filename.isNullOrEmpty()) return ""
 
     val escaped =
-        filename
+        Normalizer.normalize(filename, Normalizer.Form.NFKD)
+            .replace(COMBINING_MARKS, "")
             .map { if (it.isLetterOrDigit()) it else '-' }
             .joinToString("")
             .replace(CONSECUTIVE_DASHES, "-")
@@ -61,7 +68,7 @@ fun createPath(
  * Reusing the existing directory rather than case-folding the stored name:
  * 17,750 directories exist, and renaming them is a migration in its own right.
  * The defect is that a second directory can appear, not that the first has
- * capitals.
+ * capitals. An accented directory from before accents were stripped matches the same way.
  */
 private fun findCaseInsensitive(
     parentPath: Path,
@@ -71,10 +78,10 @@ private fun findCaseInsensitive(
     val match =
         parentPath.toFile()
             .listFiles()
-            ?.firstOrNull { it.isDirectory && it.name.equals(name, ignoreCase = true) }
+            ?.firstOrNull { it.isDirectory && escapeFilename(it.name).equals(name, ignoreCase = true) }
             ?: return null
     if (match.name != name) {
-        logger.info("Reusing existing directory ${match.name} for $name (differs only by case)")
+        logger.info("Reusing existing directory ${match.name} for $name (differs only by case or accents)")
     }
     return match.toPath()
 }

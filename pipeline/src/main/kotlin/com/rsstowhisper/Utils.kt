@@ -12,8 +12,8 @@ private val CONSECUTIVE_DASHES = Regex("-{2,}")
 private val COMBINING_MARKS = Regex("\\p{M}+")
 
 /**
- * Accents are stripped rather than kept: a feed sends `ú` composed or as `u` + a combining
- * mark, and the mark is not a letter, so the same title used to slug two different ways.
+ * ASCII only: a feed sends `ú` composed or as `u` + a combining mark, and a byte-exact volume
+ * holds the two spellings apart. ASCII has no normalisation forms, so a slug has one spelling.
  */
 fun escapeFilename(filename: String?): String {
     if (filename.isNullOrEmpty()) return ""
@@ -21,7 +21,7 @@ fun escapeFilename(filename: String?): String {
     val escaped =
         Normalizer.normalize(filename, Normalizer.Form.NFKD)
             .replace(COMBINING_MARKS, "")
-            .map { if (it.isLetterOrDigit()) it else '-' }
+            .map { if (it.isLetterOrDigit() && it.code < 128) it else '-' }
             .joinToString("")
             .replace(CONSECUTIVE_DASHES, "-")
 

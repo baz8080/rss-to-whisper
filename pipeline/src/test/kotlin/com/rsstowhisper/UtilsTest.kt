@@ -37,6 +37,12 @@ class UtilsTest {
     }
 
     @Test
+    fun `escapeFilename leaves only ASCII`() {
+        assertEquals("Closes-in-on-Kamo-oalewa", escapeFilename("Closes in on Kamo\u02bboalewa"))
+        assertEquals("Stra-e", escapeFilename("Stra\u00dfe"))
+    }
+
+    @Test
     fun `an accented directory from before stripping is reused, not duplicated`(
         @TempDir parent: Path,
     ) {

@@ -80,6 +80,9 @@ jobs:
           ids = [r[0] for r in c.execute("SELECT id FROM episodes")]
           assert ids == ["ep1"], f"expected only ep1, got {ids}"
           assert c.execute("SELECT count(*) FROM episodes WHERE id IS NULL").fetchone()[0] == 0
+          # Derived from where the file sits: the fixture stores no audio path.
+          audio = c.execute("SELECT episode_relative_audio_path FROM episodes").fetchone()[0]
+          assert audio == "Show/ep1/audio.mp3", audio
           hits = c.execute("SELECT episode_title FROM episodes_fts WHERE episodes_fts MATCH 'coroutines'").fetchall()
           assert hits == [("Kotlin episode",)], f"unexpected FTS result: {hits}"
           print("index.py smoke test passed")

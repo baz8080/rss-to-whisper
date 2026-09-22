@@ -122,7 +122,8 @@ class PodcastPipelineRunTest {
         val json = Files.readString(episodeDir.resolve("transcript.json"))
         assertTrue(json.contains("\"episode_title\""))
         assertTrue(json.contains("My Episode"))
-        assertTrue(json.contains("audio.mp3"))
+        // The audio is beside the transcript; the path is not stored in it.
+        assertFalse(json.contains("audio.mp3"))
     }
 
     /**
@@ -468,8 +469,8 @@ class PodcastPipelineRunTest {
         assertTrue(json.contains("Second sentence."))
         assertTrue(json.contains("\"podcast_collections\""))
         assertTrue(json.contains("tech"))
-        assertTrue(json.contains("\"episode_relative_audio_path\""))
-        assertTrue(json.contains("Show/"))
+        // The key is the directory the file sits in; storing it only let the two drift.
+        assertFalse(json.contains("\"episode_relative_audio_path\""))
     }
 
     /**

@@ -247,7 +247,7 @@ python3 - "$D/transcript.json" <<'EOF'
 import json, sys
 vtt = "WEBVTT\n\n00:00:00.000 --> 00:00:02.000\nHello there & welcome.\n\n00:00:02.000 --> 00:00:04.000\nNothing to see here.\n"
 json.dump({"_id":"abcd1234","podcast_title":"Show","episode_title":"Hello There","episode_published_on":"2024-01-02",
-           "episode_transcript":vtt,"episode_relative_audio_path":"Show/2024-01-02-abcd1234-hello-there/audio.mp3",
+           "episode_transcript":vtt,
            "episode_duration":1000,"all_tags":["talk"],"podcast_collections":["c1"]}, open(sys.argv[1],"w"))
 EOF
 python3 index.py $S/data --db $S/podcasts.db

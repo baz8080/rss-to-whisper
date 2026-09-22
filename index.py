@@ -241,6 +241,18 @@ def is_unknown(source_path, unknown):
     return any(source_path.startswith(p) for p in unknown if p.endswith(os.sep))
 
 
+# The audio sits beside the transcript, so the path is derived rather than read:
+# the field the pipeline used to store drifted from the file's own location
+# (a missing id segment, a re-cased show slug, an accented directory), and old
+# transcripts still carry whichever value they were written with.
+AUDIO_BASENAME = "audio.mp3"
+
+
+def audio_path(source_path):
+    """Where the episode's audio is, relative to the data directory."""
+    return os.path.join(os.path.dirname(source_path), AUDIO_BASENAME)
+
+
 def read_episode(data_dir, source_path, stamp):
     """The row a transcript.json becomes, paired with how it went.
 
@@ -296,7 +308,7 @@ def read_episode(data_dir, source_path, stamp):
         "episode_duration": episode.get("episode_duration"),
         "episode_transcript": transcript,
         "episode_transcript_plain": strip_vtt(transcript),
-        "episode_relative_audio_path": episode.get("episode_relative_audio_path"),
+        "episode_relative_audio_path": audio_path(source_path),
         "all_tags": join_list(episode.get("all_tags")),
         "source_path": source_path,
         "source_mtime": stamp[0],
@@ -359,9 +371,8 @@ def load_stored(conn):
     cannot be trusted to be up to date either, so the caller rebuilds.
     """
     stored = {}
-    for rowid, source_path, episode_id, source_id, mtime, size, audio in conn.execute(
-        "SELECT rowid, source_path, id, source_id, source_mtime, source_size, "
-        "episode_relative_audio_path FROM episodes"
+    for rowid, source_path, episode_id, source_id, mtime, size in conn.execute(
+        "SELECT rowid, source_path, id, source_id, source_mtime, source_size FROM episodes"
     ):
         if source_path is None:
             return None
@@ -370,7 +381,6 @@ def load_stored(conn):
             "id": episode_id,
             "source_id": source_id,
             "stamp": (mtime, size),
-            "audio": audio,
         }
     return stored
 
@@ -448,7 +458,7 @@ def run_incremental(conn, data_dir, sources, unknown, db_path):
         {
             "source_path": p,
             "source_id": stored[p]["source_id"],
-            "episode_relative_audio_path": stored[p]["audio"],
+            "episode_relative_audio_path": audio_path(p),
         }
         for p in stored
         if p not in drop and p not in read

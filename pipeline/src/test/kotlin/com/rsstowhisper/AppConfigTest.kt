@@ -525,6 +525,31 @@ class AppConfigTest {
     }
 
     @Test
+    fun `a podcast name with no ASCII letters is refused at load`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(tmp, "podcasts:\n- name: \"\u65e5\u672c\u306e\u8a71\"\n  url: https://example.com/a.rss")
+            }
+        assertTrue(e.message!!.contains("ASCII"), e.message!!)
+    }
+
+    @Test
+    fun `two podcasts whose names slug alike are refused at load`(
+        @TempDir tmp: Path,
+    ) {
+        val e =
+            assertFailsWith<IllegalStateException> {
+                configWith(
+                    tmp,
+                    "podcasts:\n- name: Caf\u00e9 Talk\n  url: https://a\n- name: cafe talk\n  url: https://b",
+                )
+            }
+        assertTrue(e.message!!.contains("would share"), e.message!!)
+    }
+
+    @Test
     fun `a podcast's own language is validated too`(
         @TempDir tmp: Path,
     ) {

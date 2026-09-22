@@ -3,18 +3,25 @@ package com.rsstowhisper
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
+import java.text.Normalizer
 import kotlin.math.pow
 
 private val logger = LoggerFactory.getLogger("com.rsstowhisper.Utils")
 
 private val CONSECUTIVE_DASHES = Regex("-{2,}")
+private val COMBINING_MARKS = Regex("\\p{M}+")
 
+/**
+ * ASCII only: a feed sends `ú` composed or as `u` + a combining mark, and a byte-exact volume
+ * holds the two spellings apart. ASCII has no normalisation forms, so a slug has one spelling.
+ */
 fun escapeFilename(filename: String?): String {
     if (filename.isNullOrEmpty()) return ""
 
     val escaped =
-        filename
-            .map { if (it.isLetterOrDigit()) it else '-' }
+        Normalizer.normalize(filename, Normalizer.Form.NFKD)
+            .replace(COMBINING_MARKS, "")
+            .map { if (it.isLetterOrDigit() && it.code < 128) it else '-' }
             .joinToString("")
             .replace(CONSECUTIVE_DASHES, "-")
 
@@ -42,6 +49,7 @@ fun resolvePath(
     directoryName: String,
 ): Path {
     val escaped = escapeFilename(directoryName)
+    require(escaped.isNotEmpty()) { "$directoryName has no ASCII letters or digits to name a directory" }
     return findCaseInsensitive(parentPath, escaped) ?: parentPath.resolve(escaped)
 }
 
@@ -61,20 +69,26 @@ fun createPath(
  * Reusing the existing directory rather than case-folding the stored name:
  * 17,750 directories exist, and renaming them is a migration in its own right.
  * The defect is that a second directory can appear, not that the first has
- * capitals.
+ * capitals. An accented directory from before accents were stripped matches the same way.
  */
 private fun findCaseInsensitive(
     parentPath: Path,
     name: String,
 ): Path? {
     if (!Files.isDirectory(parentPath)) return null
-    val match =
+    val matches =
         parentPath.toFile()
             .listFiles()
-            ?.firstOrNull { it.isDirectory && it.name.equals(name, ignoreCase = true) }
-            ?: return null
-    if (match.name != name) {
-        logger.info("Reusing existing directory ${match.name} for $name (differs only by case)")
+            ?.filter { it.isDirectory && escapeFilename(it.name).equals(name, ignoreCase = true) }
+            ?.sortedBy { it.name }
+            .orEmpty()
+    if (matches.isEmpty()) return null
+    // listFiles() has no order, so an exact name must win or a half-migrated show splits.
+    val match = matches.firstOrNull { it.name == name } ?: matches.first()
+    if (matches.size > 1) {
+        logger.error("${matches.map { it.name }} all name $name; using ${match.name}. Merge them.")
+    } else if (match.name != name) {
+        logger.info("Reusing existing directory ${match.name} for $name (differs only by case or accents)")
     }
     return match.toPath()
 }

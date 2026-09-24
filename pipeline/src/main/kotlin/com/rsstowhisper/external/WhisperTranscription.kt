@@ -71,6 +71,25 @@ data class WhisperTranscription(
                 .maxOrNull()
                 ?.toInt()
 
+    /**
+     * Share of cues whose words fall outside the cue's own time range. A server
+     * applying VAD leaves the words in VAD-compressed time while the cues are
+     * remapped to real time, so nearly every cue misses; no pair in the corpus
+     * decoded without VAD misses on any.
+     */
+    val misplacedWordShare: Double
+        get() {
+            val bySegment = words.groupBy { it.segment }
+            var checked = 0
+            var misplaced = 0
+            for ((segment, segmentWords) in bySegment) {
+                val cue = cues.getOrNull(segment) ?: continue
+                checked++
+                if (!wordsFitCue(cue.start, cue.end, segmentWords.first().start, segmentWords.last().end)) misplaced++
+            }
+            return if (checked == 0) 0.0 else misplaced.toDouble() / checked
+        }
+
     /** Newline-delimited JSON, gzipped. ~274 KB per episode before compression. */
     fun writeWords(path: Path) {
         val mapper = ObjectMapper()
@@ -97,6 +116,21 @@ data class WhisperTranscription(
     companion object {
         const val VTT_HEADER = "WEBVTT"
         const val WORDS_FILENAME = "words.jsonl.gz"
+
+        /** Above this share of misplaced cues the word times are not in the cues' clock. */
+        const val MAX_MISPLACED_WORD_SHARE = 0.01
+
+        private const val WORD_TIME_SLACK_SECONDS = 1.0
+
+        fun wordsFitCue(
+            cueStart: Double,
+            cueEnd: Double,
+            firstWordStart: Double,
+            lastWordEnd: Double,
+        ): Boolean =
+            firstWordStart >= cueStart - WORD_TIME_SLACK_SECONDS &&
+                firstWordStart <= cueEnd + WORD_TIME_SLACK_SECONDS &&
+                lastWordEnd <= cueEnd + WORD_TIME_SLACK_SECONDS
 
         private val mapper = ObjectMapper()
 

@@ -57,7 +57,9 @@ class TranscriptPairTest {
         text: String,
         seg: Int,
         run: String? = null,
-    ) = mapOf("w" to text, "s" to 0.0, "e" to 0.1, "p" to 0.9, "seg" to seg) + (run?.let { mapOf("run" to it) } ?: emptyMap())
+        // Inside its own cue: the fixture VTT's cues are three seconds each.
+        start: Double = seg * 3.0 + 0.5,
+    ) = mapOf("w" to text, "s" to start, "e" to start + 0.1, "p" to 0.9, "seg" to seg) + (run?.let { mapOf("run" to it) } ?: emptyMap())
 
     @Test
     fun `words that rebuild their cues are one decode`(
@@ -216,5 +218,40 @@ class TranscriptPairTest {
 
         assertEquals(listOf("Show/2024-01-02-abcd1234-hello"), paths)
         assertEquals(listOf("deadBEEF"), ids)
+    }
+
+    /** What a server that applies VAD returns: cues in real time, words in VAD-compressed time. */
+    @Test
+    fun `words outside their cues' time diverge even when the text fits`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episodeDir(tempDir, vtt, listOf(word(" One", 0, start = 0.5), word(" Four", 1, start = 0.5)))
+
+        assertIs<TranscriptPair.Diverged>(TranscriptPair.check(dir))
+    }
+
+    @Test
+    fun `a decode whose words are off the cue clock is never written, and stops the batch`(
+        @TempDir tempDir: Path,
+    ) {
+        val first = episodeDir(tempDir, vtt, listOf(word(" Unrelated", 0), word(" words.", 5)))
+        val second = tempDir.resolve("Show").resolve("2024-01-03-12345678-next")
+        Files.createDirectories(second)
+        Files.writeString(second.resolve("audio.mp3"), "fake-mp3-bytes")
+        Files.writeString(second.resolve("transcript.json"), mapper.writeValueAsString(mapOf("episode_transcript" to vtt)))
+        val before = Files.readString(first.resolve("transcript.json"))
+        val vadShifted =
+            """{"task":"transcribe","segments":[""" +
+                """{"start":8.0,"end":11.0,"text":" One two.","words":[{"word":" One","start":0.0,"end":0.4,"probability":0.9},""" +
+                """{"word":" two.","start":0.4,"end":0.9,"probability":0.9}]},""" +
+                """{"start":12.0,"end":15.0,"text":" Three.","words":[{"word":" Three.","start":3.0,"end":3.5,"probability":0.9}]}""" +
+                "]}"
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(vadShifted))
+
+        val ok = pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${first.fileName}", "Show/${second.fileName}")))
+
+        assertFalse(ok)
+        assertEquals(1, txSvc.calls.size)
+        assertEquals(before, Files.readString(first.resolve("transcript.json")))
     }
 }

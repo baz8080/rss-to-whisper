@@ -11,7 +11,10 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /** Nothing was decoded at all: the server could not be reached, or would not answer. */
-class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+open class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+/** The server answered with word times no transcript can use, and will for every decode until it is restarted. */
+class WordTimesMisplaced(message: String) : TranscriberUnavailable(message)
 
 open class Transcriber(
     private val serverUrl: String,

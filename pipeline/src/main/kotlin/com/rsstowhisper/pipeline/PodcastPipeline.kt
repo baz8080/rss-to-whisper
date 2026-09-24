@@ -18,6 +18,7 @@ import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperRun
 import com.rsstowhisper.external.WhisperTranscription
+import com.rsstowhisper.external.WordTimesMisplaced
 import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.feed.libsynAdMarkers
 import com.rsstowhisper.resolvePath
@@ -195,6 +196,9 @@ class PodcastPipeline(
                 try {
                     if (retranscribeEpisode(target, request.force)) done++
                     true
+                } catch (e: WordTimesMisplaced) {
+                    logger.error("Stopping: ${e.message}")
+                    break
                 } catch (e: TranscriberUnavailable) {
                     // Nothing was decoded, so nothing was learned about this
                     // episode. Rotating it to the back would mean a server that
@@ -1133,6 +1137,16 @@ class PodcastPipeline(
         logger.debug("Transcribed in: ${"%.2f".format(Locale.ROOT, elapsedMinutes)} Minutes")
 
         val parsed = WhisperTranscription.parse(json)
+        val misplaced = parsed.misplacedWordShare
+        if (misplaced > WhisperTranscription.MAX_MISPLACED_WORD_SHARE) {
+            decodesSucceeded--
+            decodesUnreachable++
+            throw WordTimesMisplaced(
+                "${"%.0f".format(Locale.ROOT, misplaced * 100)}% of cues from ${config.whisperServerUrl} have their words " +
+                    "outside the cue's time, the signature of a server applying VAD whatever the request says. " +
+                    "Restart it without --vad",
+            )
+        }
         val run =
             WhisperRun(
                 runId = WhisperRun.newId(),

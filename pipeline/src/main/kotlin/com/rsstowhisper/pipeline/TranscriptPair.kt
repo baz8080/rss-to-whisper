@@ -71,7 +71,7 @@ internal object TranscriptPair {
             return Diverged("words.jsonl.gz is run ${wordRuns.first()}, transcript.json records no run")
         }
 
-        return checkText(cueTexts(transcript.path("episode_transcript").asText("")), words)
+        return checkCues(parseCues(transcript.path("episode_transcript").asText("")), words)
     }
 
     /**
@@ -79,42 +79,78 @@ internal object TranscriptPair {
      * cue: in order, whitespace aside, allowing for a word whisper gave no times
      * and the pipeline dropped. The rule episode.html applies before it trusts a sidecar.
      */
-    private fun checkText(
-        cues: List<String>,
+    private fun checkCues(
+        cues: List<VttCue>,
         words: List<JsonNode>,
     ): Verdict {
         val bySegment = words.groupBy { it.path("seg").asInt(-1) }
+        var timed = 0
+        var misplaced = 0
         for ((segment, segmentWords) in bySegment.toSortedMap()) {
             if (segment !in cues.indices) {
                 return Diverged("words.jsonl.gz has words for cue $segment, transcript has ${cues.size} cues")
             }
+            val cue = cues[segment]
             val joined = letters(segmentWords.joinToString("") { it.path("w").asText("") })
-            if (!isSubsequence(joined, letters(cues[segment]))) {
+            if (!isSubsequence(joined, letters(cue.text))) {
                 return Diverged("cue $segment does not contain its words")
             }
+            if (cue.start != null && cue.end != null) {
+                timed++
+                val fits =
+                    WhisperTranscription.wordsFitCue(
+                        cue.start,
+                        cue.end,
+                        segmentWords.first().path("s").asDouble(),
+                        segmentWords.last().path("e").asDouble(),
+                    )
+                if (!fits) misplaced++
+            }
+        }
+        if (timed > 0 && misplaced.toDouble() / timed > WhisperTranscription.MAX_MISPLACED_WORD_SHARE) {
+            return Diverged("$misplaced of $timed cues have their words outside the cue's time")
         }
         return Consistent
     }
 
+    internal class VttCue(val start: Double?, val end: Double?, val text: String)
+
     /** Every cue's text, blank cues included: the word ordinals count them. */
-    internal fun cueTexts(vtt: String): List<String> {
-        val texts = mutableListOf<String>()
-        var current: StringBuilder? = null
+    internal fun cueTexts(vtt: String): List<String> = parseCues(vtt).map { it.text }
+
+    private fun parseCues(vtt: String): List<VttCue> {
+        val cues = mutableListOf<VttCue>()
+        var times: List<Double?>? = null
+        var text: StringBuilder? = null
+
+        fun flush() {
+            val t = times ?: return
+            cues += VttCue(t[0], t[1], text.toString())
+            times = null
+        }
         for (line in vtt.lineSequence()) {
             when {
                 "-->" in line -> {
-                    current?.let { texts += it.toString() }
-                    current = StringBuilder()
+                    flush()
+                    times = line.split("-->").map { seconds(it.trim()) } + listOf(null, null)
+                    text = StringBuilder()
                 }
-                line.isBlank() -> {
-                    current?.let { texts += it.toString() }
-                    current = null
-                }
-                else -> current?.append(line)?.append('\n')
+                line.isBlank() -> flush()
+                times != null -> text?.append(line)?.append('\n')
             }
         }
-        current?.let { texts += it.toString() }
-        return texts
+        flush()
+        return cues
+    }
+
+    /** Null for a timestamp that does not parse, which some externally edited files carry. */
+    private fun seconds(stamp: String): Double? {
+        val parts = stamp.split(':')
+        if (parts.size != 3 || parts[0].length > 6) return null
+        val h = parts[0].toLongOrNull() ?: return null
+        val m = parts[1].toLongOrNull() ?: return null
+        val s = parts[2].toDoubleOrNull() ?: return null
+        return h * 3600.0 + m * 60 + s
     }
 
     private fun letters(text: String): String = text.filterNot { it.isWhitespace() }

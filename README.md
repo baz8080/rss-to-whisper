@@ -370,8 +370,10 @@ cp .env.example .env
 
 ```ini
 APP_DB_PATH=/path/to/podcasts.db
-# Required. The pipeline's data directory, served over HTTP. Audio and word timings are read from under it.
+# Required. The pipeline's data directory, served over HTTP. Word timings are read from under it.
 APP_DATA_URL=http://your-nas:9280
+# Optional. The pipeline's audio directory, served over HTTP; defaults to APP_DATA_URL.
+#APP_AUDIO_URL=http://your-nas:9281
 ```
 
 Quarkus picks up `.env` automatically. Alternatively, override properties inline:
@@ -513,10 +515,16 @@ Copy `pipeline/.env.example` to `pipeline/.env` and fill in your values (`.env` 
 
 ```ini
 PIPELINE_DATA_DIRECTORY=/path/to/download-directory
+#PIPELINE_AUDIO_DIRECTORY=/path/to/audio-directory
 PIPELINE_WHISPER_SERVER_URL=http://localhost:8080
 PIPELINE_CONFIG_PATH=/path/to/pods.yaml
 #PIPELINE_VERBOSE=true
 ```
+
+`PIPELINE_AUDIO_DIRECTORY` is optional. Unset, the mp3s sit beside their transcripts in the
+data directory. Set, the mp3s go there instead, under the same `<podcast>/<episode>` layout,
+and the data directory keeps everything else. Moving an existing tree from one layout to the
+other is not supported.
 
 `PIPELINE_VERBOSE` is optional; when set to a non-blank value it overrides the `verbose` value from
 `pods.yaml`. Leave it commented out (or blank) to let `pods.yaml` decide — note that any value other
@@ -533,6 +541,7 @@ below supply the three required values.
 | --- | --- |
 | `--config <path>` | `PIPELINE_CONFIG_PATH` |
 | `--data-dir <path>` | `PIPELINE_DATA_DIRECTORY` |
+| `--audio-dir <path>` | `PIPELINE_AUDIO_DIRECTORY` |
 | `--whisper-url <url>` | `PIPELINE_WHISPER_SERVER_URL` |
 | `--verbose` / `--no-verbose` | `PIPELINE_VERBOSE` |
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
@@ -1010,6 +1019,9 @@ For each episode, the following files are created:
     words.jsonl.gz                 # One line per word, with its own start/end
     recovery-failed                # Only when recovery found no speech in the audio
 ```
+
+With `PIPELINE_AUDIO_DIRECTORY` set, `audio.mp3` moves to
+`{audio_directory}/{podcast_name}/{same episode directory}/` and the rest stays put.
 
 The `episode_transcript` field in `transcript.json` is a raw WebVTT string,
 rendered from the same `verbose_json` response that produced `words.jsonl.gz`.

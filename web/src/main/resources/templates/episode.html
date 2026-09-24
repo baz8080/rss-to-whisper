@@ -86,7 +86,7 @@
             <audio id="episode-audio"
                    controls="controls"
                    preload="none"
-                   th:src="${dataUrl + '/' + episode.audioPath}">
+                   th:src="${audioUrl + '/' + episode.audioPath}">
                 <track id="episode-track" kind="captions" srclang="en" label="English" default="default"/>
                 Your browser does not support audio.
             </audio>

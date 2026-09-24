@@ -25,6 +25,7 @@ import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
@@ -64,6 +65,10 @@ class PodcastPipeline(
 
     internal val report = RunReport()
 
+    private val dataRoot = Path.of(config.dataDirectory).normalize()
+    private val audioRoot = Path.of(config.audioRoot).normalize()
+    private val separateAudio = audioRoot != dataRoot
+
     /** What the run's exit code is made of. See [decodingWorked]. */
     private var decodesAttempted = 0
     private var decodesSucceeded = 0
@@ -94,6 +99,10 @@ class PodcastPipeline(
 
         if (!Files.isWritable(Path.of(dataDir))) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
+            return false
+        }
+        if (!Files.isWritable(audioRoot)) {
+            logger.error("The audio directory $audioRoot is missing, or not writable. Cannot continue")
             return false
         }
 
@@ -222,7 +231,7 @@ class PodcastPipeline(
         force: Boolean = false,
     ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
-        val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
+        val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
             logger.error("Cannot re-transcribe $label: it has no audio")
             return false
@@ -363,7 +372,11 @@ class PodcastPipeline(
                     continue
                 }
 
-                val existingDir = findExistingEpisodeDir(podPath, stablePrefix)
+                val existingDir =
+                    findExistingEpisodeDir(podPath, stablePrefix)
+                        ?: audioDirFor(podPath).takeIf { separateAudio }
+                            ?.let { findExistingEpisodeDir(it, stablePrefix) }
+                            ?.let { podPath.resolve(it.fileName) }
                 if (existingDir != null && Files.exists(existingDir.resolve(TRANSCRIPT_FILENAME))) {
                     consecutiveTranscribed++
                     if (consecutiveTranscribed >= skipThreshold) {
@@ -379,7 +392,7 @@ class PodcastPipeline(
 
                 // Not created yet: a run killed mid-way should leave one empty directory, not a feed's worth.
                 val episodeDirPath = existingDir ?: podPath.resolve(escapeFilename(getEpisodeDirName(entry)))
-                val mp3Info = getMp3Info(entry, episodeDirPath)
+                val mp3Info = getMp3Info(entry, audioDirFor(episodeDirPath))
                 if (mp3Info == null) {
                     logger.warn("${entry.title} has no mp3 link. Skipping")
                     report.forPodcast(podcast.name).failed++
@@ -564,13 +577,16 @@ class PodcastPipeline(
 
         // A dry run does not create it, and a podcast with no directory has nothing
         // orphaned -- listing it would only raise an error about its own absence.
-        if (!Files.isDirectory(podPath)) return
+        val podDirs = episodeDirsFor(podPath).filter { Files.isDirectory(it) }
+        if (podDirs.isEmpty()) return
 
         val onDisk =
             try {
-                Files.newDirectoryStream(podPath).use { stream ->
-                    stream.mapNotNull { EpisodeDirName.parse(it.fileName.toString()) }
-                }
+                podDirs.flatMap { dir ->
+                    Files.newDirectoryStream(dir).use { stream ->
+                        stream.mapNotNull { EpisodeDirName.parse(it.fileName.toString()) }
+                    }
+                }.distinctBy { it.dirName }
             } catch (e: Exception) {
                 logger.error("${podcast.name}: could not list $podPath", e)
                 return
@@ -625,7 +641,14 @@ class PodcastPipeline(
             val episodeDirPath = podPath.resolve(parsed.dirName)
             val contents =
                 try {
-                    Files.newDirectoryStream(episodeDirPath).use { s -> s.mapTo(HashSet()) { it.fileName.toString() } }
+                    episodeDirsFor(episodeDirPath).flatMapTo(HashSet()) { dir ->
+                        try {
+                            Files.newDirectoryStream(dir).use { s -> s.map { it.fileName.toString() } }
+                        } catch (_: NoSuchFileException) {
+                            // Audio downloaded but never transcribed has no data-side directory.
+                            emptyList()
+                        }
+                    }
                 } catch (e: Exception) {
                     logger.debug("Skipping ${parsed.dirName}: could not read it (${e.message})")
                     continue
@@ -743,7 +766,7 @@ class PodcastPipeline(
         episodeDirPath: Path,
         parsed: EpisodeDirName,
     ): Boolean {
-        if (Files.size(episodeDirPath.resolve(AUDIO_FILENAME)) == 0L) {
+        if (Files.size(audioFileFor(episodeDirPath)) == 0L) {
             logger.warn("Cannot recover ${parsed.dirName}: its audio file is empty")
             return false
         }
@@ -756,7 +779,7 @@ class PodcastPipeline(
         episodeDirPath: Path,
         parsed: EpisodeDirName,
     ): Boolean {
-        val audioPath = episodeDirPath.resolve(AUDIO_FILENAME)
+        val audioPath = audioFileFor(episodeDirPath)
         if (!hasUsableAudio(episodeDirPath, parsed)) return false
 
         logger.info("Recovering ${parsed.dirName}")
@@ -801,6 +824,7 @@ class PodcastPipeline(
         reason: String,
     ) {
         try {
+            Files.createDirectories(episodeDirPath)
             Files.writeString(
                 episodeDirPath.resolve(RECOVERY_FAILED_FILENAME),
                 "${Instant.now()} $reason\n",
@@ -848,6 +872,8 @@ class PodcastPipeline(
     ): Boolean {
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
         val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+        // Only the download creates it when audio lives in its own tree.
+        Files.createDirectories(episodeDirPath)
 
         if (!replace) {
             // Re-checked here rather than only at the callers: transcription takes minutes,
@@ -953,6 +979,16 @@ class PodcastPipeline(
             false
         }
     }
+
+    /** The same `<podcast>/<episode>` path, under the audio directory. */
+    private fun audioDirFor(dataPath: Path): Path =
+        if (separateAudio) audioRoot.resolve(dataRoot.relativize(dataPath.normalize())) else dataPath
+
+    /** Both trees' copies of a path, or the one when audio shares the data directory. */
+    private fun episodeDirsFor(dataPath: Path): List<Path> =
+        if (separateAudio) listOf(dataPath, audioDirFor(dataPath)) else listOf(dataPath)
+
+    private fun audioFileFor(episodeDirPath: Path): Path = audioDirFor(episodeDirPath).resolve(AUDIO_FILENAME)
 
     /**
      * The single place a decode happens, so both the feed path and the recovery

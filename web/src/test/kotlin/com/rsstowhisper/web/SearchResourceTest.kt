@@ -60,7 +60,8 @@ class SearchResourceTest {
         SearchResource().also {
             it.repository = repository
             it.templateEngine = templateEngine
-            it.dataUrl = "http://audio.example.com/" // trailing slash — to verify trimming
+            it.dataUrl = "http://data.example.com"
+            it.audioUrl = "http://audio.example.com/" // trailing slash — to verify trimming
         }
 
     // --- index ---
@@ -173,7 +174,7 @@ class SearchResourceTest {
     }
 
     @Test
-    fun `episode trims trailing slash from the data URL`() {
+    fun `episode trims trailing slash from the audio URL`() {
         every { repository.getEpisodeById("ep1") } returns minimalEpisode()
 
         val ctxSlot = slot<IContext>()
@@ -181,8 +182,7 @@ class SearchResourceTest {
 
         resource.episode("ep1", "")
 
-        val dataUrl = ctxSlot.captured.getVariable("dataUrl") as String
-        assertEquals("http://audio.example.com", dataUrl)
+        assertEquals("http://audio.example.com", ctxSlot.captured.getVariable("audioUrl"))
     }
 
     @Test

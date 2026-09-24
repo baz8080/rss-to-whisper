@@ -981,7 +981,8 @@ class PodcastPipeline(
     }
 
     /** The same `<podcast>/<episode>` path, under the audio directory. */
-    private fun audioDirFor(dataPath: Path): Path = audioRoot.resolve(dataRoot.relativize(dataPath.normalize()))
+    private fun audioDirFor(dataPath: Path): Path =
+        if (separateAudio) audioRoot.resolve(dataRoot.relativize(dataPath.normalize())) else dataPath
 
     /** Both trees' copies of a path, or the one when audio shares the data directory. */
     private fun episodeDirsFor(dataPath: Path): List<Path> =

@@ -59,6 +59,9 @@ class SearchResource {
     @ConfigProperty(name = "app.data.url")
     lateinit var dataUrl: String
 
+    @ConfigProperty(name = "app.audio.url")
+    lateinit var audioUrl: String
+
     @GET
     @Produces(MediaType.TEXT_HTML)
     fun index(): Response = Response.seeOther(URI("/search")).build()
@@ -92,14 +95,14 @@ class SearchResource {
             )
         val result = repository.search(filters)
         val filterOptions = repository.getFilterOptions(filters.query)
-        val base = dataUrl.trimEnd('/')
+        val audioBase = audioUrl.trimEnd('/')
 
         val ctx =
             Context().apply {
                 setVariable("result", result)
                 setVariable("filters", filters)
                 setVariable("filterOptions", filterOptions)
-                setVariable("dataUrl", base)
+                setVariable("audioUrl", audioBase)
                 setVariable("hasActiveFilters", filters.hasActiveFilters())
                 setVariable("prevUrl", buildSearchUrl(filters.copy(page = filters.page - 1)))
                 setVariable("nextUrl", buildSearchUrl(filters.copy(page = filters.page + 1)))
@@ -335,7 +338,7 @@ class SearchResource {
                     .type(MediaType.TEXT_HTML)
                     .build()
 
-        val base = dataUrl.trimEnd('/')
+        val audioBase = audioUrl.trimEnd('/')
         val terms = searchTerms(query)
         val transcriptLines =
             episode.transcript?.let { parseTranscript(it) }.orEmpty().map { line ->
@@ -349,7 +352,7 @@ class SearchResource {
         val ctx =
             Context().apply {
                 setVariable("episode", episode)
-                setVariable("dataUrl", base)
+                setVariable("audioUrl", audioBase)
                 setVariable("transcriptLines", transcriptLines)
                 setVariable("linkifiedSummary", linkifiedSummary)
                 setVariable("query", query.trim())

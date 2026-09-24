@@ -228,10 +228,12 @@ internal fun buildPipeline(
     audioBytes: ByteArray = FAKE_MP3_BYTES,
     /** Supply one when the test needs a reference to it before the pipeline exists. */
     feedService: FakeFeedService? = null,
+    audioDir: Path? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
             dataDirectory = dataDir.toAbsolutePath().toString(),
+            audioDirectory = audioDir?.toAbsolutePath()?.toString() ?: "",
             whisperServerUrl = FAKE_SERVER_URL,
             skipAfterConsecutive = skipAfterConsecutive,
             minEpisodeDurationSeconds = minEpisodeDurationSeconds,

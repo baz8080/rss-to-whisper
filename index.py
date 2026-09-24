@@ -241,7 +241,7 @@ def is_unknown(source_path, unknown):
     return any(source_path.startswith(p) for p in unknown if p.endswith(os.sep))
 
 
-# The audio sits beside the transcript, so the path is derived rather than read:
+# The audio has the transcript's relative path, so it is derived rather than read:
 # the field the pipeline used to store drifted from the file's own location
 # (a missing id segment, a re-cased show slug, an accented directory), and old
 # transcripts still carry whichever value they were written with.
@@ -249,7 +249,7 @@ AUDIO_BASENAME = "audio.mp3"
 
 
 def audio_path(source_path):
-    """Where the episode's audio is, relative to the data directory."""
+    """Where the episode's audio is, relative to the data or audio directory."""
     return os.path.join(os.path.dirname(source_path), AUDIO_BASENAME)
 
 

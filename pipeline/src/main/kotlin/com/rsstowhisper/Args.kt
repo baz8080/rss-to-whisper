@@ -6,7 +6,9 @@ internal val USAGE =
 
     Options:
       --config <path>        Path to pods.yaml                  (PIPELINE_CONFIG_PATH)
-      --data-dir <path>      Where audio and transcripts go     (PIPELINE_DATA_DIRECTORY)
+      --data-dir <path>      Where transcripts go, and audio    (PIPELINE_DATA_DIRECTORY)
+                             unless --audio-dir is given
+      --audio-dir <path>     Where the mp3s go                  (PIPELINE_AUDIO_DIRECTORY)
       --whisper-url <url>    Base URL of the whisper.cpp server (PIPELINE_WHISPER_SERVER_URL)
       --verbose              Enable debug logging               (PIPELINE_VERBOSE)
       --no-verbose           Force debug logging off
@@ -57,6 +59,7 @@ internal val USAGE =
 internal data class Args(
     val configPath: String? = null,
     val dataDirectory: String? = null,
+    val audioDirectory: String? = null,
     val whisperServerUrl: String? = null,
     val verbose: Boolean? = null,
     val recoverOrphans: Boolean? = null,
@@ -87,6 +90,7 @@ internal fun parseArgs(argv: Array<String>): Args {
             when (flag) {
                 "--config" -> args.copy(configPath = valueFor(flag, argv, ++i))
                 "--data-dir" -> args.copy(dataDirectory = valueFor(flag, argv, ++i))
+                "--audio-dir" -> args.copy(audioDirectory = valueFor(flag, argv, ++i))
                 "--whisper-url" -> args.copy(whisperServerUrl = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)

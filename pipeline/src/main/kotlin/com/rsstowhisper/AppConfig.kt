@@ -13,6 +13,8 @@ import java.io.File
 data class AppConfig(
     val verbose: Boolean = false,
     val dataDirectory: String = "",
+    /** Where the mp3s go, under the same `<podcast>/<episode>` layout. Blank means [dataDirectory]. */
+    val audioDirectory: String = "",
     val whisperServerUrl: String = "",
     val skipAfterConsecutive: Int = 20,
     val excludeTitleKeywords: List<String> = DEFAULT_EXCLUDE_TITLE_KEYWORDS,
@@ -97,6 +99,9 @@ data class AppConfig(
         )
     }
 
+    internal val audioRoot: String
+        get() = audioDirectory.ifBlank { dataDirectory }
+
     /** The prompt sent when no podcast overrides it. */
     internal val defaultPrompt: String
         get() = initialPrompt ?: Transcriber.DEFAULT_INITIAL_PROMPT
@@ -153,6 +158,10 @@ data class AppConfig(
                 args.dataDirectory
                     ?: env["PIPELINE_DATA_DIRECTORY"]
                     ?: error("PIPELINE_DATA_DIRECTORY must be set in .env, or passed as --data-dir")
+            val audioDirectory =
+                args.audioDirectory
+                    ?: env["PIPELINE_AUDIO_DIRECTORY"]?.takeIf { it.isNotBlank() }
+                    ?: dataDirectory
             val whisperServerUrl =
                 args.whisperServerUrl
                     ?: env["PIPELINE_WHISPER_SERVER_URL"]
@@ -165,6 +174,7 @@ data class AppConfig(
             raw.validate()
             return raw.copy(
                 dataDirectory = dataDirectory,
+                audioDirectory = audioDirectory,
                 whisperServerUrl = whisperServerUrl,
                 verbose = args.verbose ?: envVerbose ?: raw.verbose,
                 recoverOrphans = args.recoverOrphans ?: raw.recoverOrphans,

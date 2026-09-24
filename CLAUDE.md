@@ -32,12 +32,13 @@ passing arguments through. `./gradlew :pipeline:run` still works for a single in
 
 Configuration comes from `pipeline/.env` — copy `pipeline/.env.example` and fill in:
 - `PIPELINE_CONFIG_PATH` — path to your `pods.yaml`
-- `PIPELINE_DATA_DIRECTORY` — where audio and transcripts are stored
+- `PIPELINE_DATA_DIRECTORY` — where transcripts are stored, and audio unless the next is set
+- `PIPELINE_AUDIO_DIRECTORY` — optional; where the mp3s go instead, under the same `<podcast>/<episode>` layout
 - `PIPELINE_WHISPER_SERVER_URL` — URL of the whisper HTTP server
 - `PIPELINE_VERBOSE` — set to `true` to enable debug logging
 
 Each of those has a command-line equivalent that takes precedence (`--config`, `--data-dir`,
-`--whisper-url`, `--verbose`/`--no-verbose`), which is how two instances run side by side:
+`--audio-dir`, `--whisper-url`, `--verbose`/`--no-verbose`), which is how two instances run side by side:
 
 ```bash
 ./transcribe --config ~/pods-b.yaml --whisper-url http://localhost:8082
@@ -94,6 +95,7 @@ The web module reads `web/.env`:
 ```
 APP_DB_PATH=/path/to/podcasts.db
 APP_DATA_URL=http://your-data-server:port
+APP_AUDIO_URL=http://your-audio-server:port   # optional; defaults to APP_DATA_URL
 ```
 
 ## Code style

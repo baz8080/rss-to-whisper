@@ -33,6 +33,12 @@ class ArgsTest {
     }
 
     @Test
+    fun `parseArgs reads the audio directory`() {
+        assertEquals("/tmp/audio", parseArgs(arrayOf("--audio-dir", "/tmp/audio")).audioDirectory)
+        assertNull(parseArgs(arrayOf("--data-dir", "/tmp/data")).audioDirectory)
+    }
+
+    @Test
     fun `parseArgs maps verbose flags to true false and null`() {
         assertEquals(true, parseArgs(arrayOf("--verbose")).verbose)
         assertEquals(false, parseArgs(arrayOf("--no-verbose")).verbose)

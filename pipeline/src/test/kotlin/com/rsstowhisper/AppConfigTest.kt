@@ -64,6 +64,28 @@ class AppConfigTest {
         assertEquals("http://env-whisper", config.whisperServerUrl)
     }
 
+    @Test
+    fun `audio goes to the data directory unless PIPELINE_AUDIO_DIRECTORY is set`(
+        @TempDir tmp: Path,
+    ) {
+        val yaml = tmp.resolve("pods.yaml").toFile()
+        yaml.writeText("podcasts: []\n")
+        val env =
+            mapOf(
+                "PIPELINE_CONFIG_PATH" to yaml.absolutePath,
+                "PIPELINE_DATA_DIRECTORY" to "/env/data",
+                "PIPELINE_WHISPER_SERVER_URL" to "http://env-whisper",
+            )
+
+        assertEquals("/env/data", AppConfig.load(env).audioRoot)
+        assertEquals("/env/data", AppConfig.load(env + ("PIPELINE_AUDIO_DIRECTORY" to "")).audioRoot)
+        assertEquals("/env/audio", AppConfig.load(env + ("PIPELINE_AUDIO_DIRECTORY" to "/env/audio")).audioRoot)
+        assertEquals(
+            "/args/audio",
+            AppConfig.load(Args(audioDirectory = "/args/audio"), env + ("PIPELINE_AUDIO_DIRECTORY" to "/env/audio")).audioRoot,
+        )
+    }
+
     /**
      * The shipped example is what people copy, so it has to parse against the
      * real schema -- a key that silently doesn't bind is invisible until someone

@@ -16,6 +16,8 @@ data class AppConfig(
     /** Where the mp3s go, under the same `<podcast>/<episode>` layout. Blank means [dataDirectory]. */
     val audioDirectory: String = "",
     val whisperServerUrl: String = "",
+    /** A label recorded with each decode; the server does not report which model it loaded. */
+    val whisperModel: String? = null,
     val skipAfterConsecutive: Int = 20,
     val excludeTitleKeywords: List<String> = DEFAULT_EXCLUDE_TITLE_KEYWORDS,
     val minEpisodeDurationSeconds: Int = 150,
@@ -176,6 +178,10 @@ data class AppConfig(
                 dataDirectory = dataDirectory,
                 audioDirectory = audioDirectory,
                 whisperServerUrl = whisperServerUrl,
+                whisperModel =
+                    args.whisperModel
+                        ?: env["PIPELINE_WHISPER_MODEL"]?.takeIf { it.isNotBlank() }
+                        ?: raw.whisperModel,
                 verbose = args.verbose ?: envVerbose ?: raw.verbose,
                 recoverOrphans = args.recoverOrphans ?: raw.recoverOrphans,
                 orphanRecoveryLimit = args.orphanRecoveryLimit ?: raw.orphanRecoveryLimit,

@@ -543,6 +543,7 @@ below supply the three required values.
 | `--data-dir <path>` | `PIPELINE_DATA_DIRECTORY` |
 | `--audio-dir <path>` | `PIPELINE_AUDIO_DIRECTORY` |
 | `--whisper-url <url>` | `PIPELINE_WHISPER_SERVER_URL` |
+| `--whisper-model <name>` | `PIPELINE_WHISPER_MODEL`, or `whisper_model` in `pods.yaml` |
 | `--verbose` / `--no-verbose` | `PIPELINE_VERBOSE` |
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
@@ -550,7 +551,8 @@ below supply the three required values.
 | `--dry-run` | No equivalent; see [Dry run](#dry-run) |
 | `--dump-feed-markup <url>`, `--dump-limit <n>` | No equivalent; see [What else a feed carries](#what-else-a-feed-carries) |
 | `--dump-audio-chapters <dir>` | No equivalent; see [Chapters inside the audio](#chapters-inside-the-audio) |
-| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
+| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-list <file>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
+| `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -752,7 +754,13 @@ gate recording flags, the loop closes:
 ./transcribe --retranscribe-flagged --retranscribe-limit 50
 ./transcribe --retranscribe "Ask-a-Spaceman/2024-01-02-abcd1234-some-episode"
 ./transcribe --retranscribe-id abcd1234
+./transcribe --retranscribe-list episodes.txt
 ```
+
+`--retranscribe-list` takes one `<podcast>/<episode>` path or id per line. Blank lines and
+`#` comments are skipped and anything after a tab is ignored, so the output of
+`--verify-pairs` can be passed straight back in. It counts as naming its targets, so
+`--retranscribe-force` applies to it.
 
 A path is the episode's directory as it sits on disk, so it carries the escaped podcast
 name (`Ask-a-Spaceman`, not `Ask a Spaceman`) — every character that is not a letter or
@@ -822,7 +830,12 @@ replace, by the same measure the quality gate's retry uses — fewer flags, then
 punctuation, then word times. Whisper is not deterministic, so a redo can come back worse than what it
 overwrites, and that write is the only copy: re-transcribing can improve an episode or
 leave it alone, never cost it the better decode. A transcript written before the quality
-gate has no score to compare against, so it is simply replaced.
+gate has no score to compare against, so it is simply replaced. Nor is a transcript
+whose `words.jsonl.gz` came from another decode: its score describes one half of a pair
+neither half of which is usable, so it is replaced whatever it scores.
+
+After the batch every target is checked with the same test as `--verify-pairs`, written
+or not, and the run fails listing any whose pair still disagrees.
 
 A re-decode that comes back with no word timestamps at all is refused outright when the
 decode on disk had them — judged by its recorded score rather than by whether
@@ -1036,6 +1049,27 @@ writing `transcript.json` anyway would mark done an episode that will never get
 one. A decode that simply carries no word times, from a server that ignored
 `token_timestamps`, still writes its transcript; otherwise no episode could ever
 complete against such a server.
+
+Both files carry the decode's run id: `whisper_run.run_id` in `transcript.json`, and a
+`run` field on every line of `words.jsonl.gz` — per line rather than as a header row,
+since every existing reader takes each line to be a word. `whisper_run` also records
+when the decode ran, the server, the model (from `--whisper-model`, since whisper does
+not report it), every form field sent, the audio's SHA-256 and size, the pipeline's
+`git describe`, and how many words the sidecar holds. Both files are staged in full
+before either is moved into place, and the pair is checked on disk after every write.
+
+### Checking pairs
+
+```bash
+./transcribe --verify-pairs > diverged.txt
+```
+
+Reads every episode under the data directory and prints one `<podcast>/<episode>`, a
+tab, and the reason for each whose `transcript.json` and `words.jsonl.gz` did not come
+from one decode, exiting 1 if there are any. It never contacts whisper. Pairs with run
+ids are compared on them; older ones by whether each cue's words rebuild that cue, the
+test the web player applies before it trusts a sidecar. A transcript from before word
+timings, with no sidecar and no run id, is counted but not listed.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

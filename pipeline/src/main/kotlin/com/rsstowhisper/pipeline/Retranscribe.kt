@@ -32,6 +32,23 @@ data class RetranscribeRequest(
     val force: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
+
+    companion object {
+        private val ID = Regex("[0-9a-fA-F]{8}")
+
+        /**
+         * One target per line, as `<podcast dir>/<episode dir>` or a bare id.
+         * Blank lines and `#` comments are skipped, and anything after a tab
+         * is ignored, so `--verify-pairs` output can be fed straight back in.
+         */
+        fun parseList(lines: List<String>): Pair<List<String>, List<String>> {
+            val targets =
+                lines.map { it.substringBefore('\t').trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+            val (ids, paths) = targets.partition { ID.matches(it) }
+            return paths to ids
+        }
+    }
 }
 
 /**
@@ -151,7 +168,7 @@ internal object RetranscribeTargets {
     }
 
     /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. */
-    private fun episodeDirs(dataDir: Path): List<Path> =
+    internal fun episodeDirs(dataDir: Path): List<Path> =
         listDirectories(dataDir)
             // logs/ sits beside the podcast directories and holds no episodes.
             .filter { it.name != "logs" }

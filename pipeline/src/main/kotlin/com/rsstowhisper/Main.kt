@@ -74,14 +74,31 @@ fun main(argv: Array<String>) {
     val logPath = installErrorLog(config.dataDirectory)
     val tally = installRunTally()
 
+    val (listedPaths, listedIds) =
+        args.retranscribeList?.let { file ->
+            try {
+                RetranscribeRequest.parseList(Files.readAllLines(Path.of(file)))
+            } catch (e: Exception) {
+                System.err.println("Cannot read --retranscribe-list $file: ${e.message}")
+                exitProcess(1)
+            }
+        } ?: (emptyList<String>() to emptyList())
+    if (args.retranscribeList != null && listedPaths.isEmpty() && listedIds.isEmpty()) {
+        // Otherwise an empty list would fall through to following the feeds.
+        System.err.println("--retranscribe-list ${args.retranscribeList} names no episodes")
+        exitProcess(1)
+    }
+
     val pipeline = PodcastPipeline(config)
     val ok =
         try {
-            if (args.isRetranscribe) {
+            if (args.verifyPairs) {
+                pipeline.verifyPairs()
+            } else if (args.isRetranscribe) {
                 pipeline.retranscribe(
                     RetranscribeRequest(
-                        paths = args.retranscribePaths,
-                        ids = args.retranscribeIds,
+                        paths = args.retranscribePaths + listedPaths,
+                        ids = args.retranscribeIds + listedIds,
                         flagged = args.retranscribeFlagged,
                         limit = args.retranscribeLimit,
                         force = args.retranscribeForce,

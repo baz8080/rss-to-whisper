@@ -87,6 +87,9 @@ internal val WORDLESS_JSON =
         """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
         "]}"
 
+/** Named per process, as the pipeline names it; a test blocks a write by occupying it. */
+internal fun stagedWordsName(): String = "words.jsonl.gz.${ProcessHandle.current().pid()}.new"
+
 internal val FAKE_MP3_BYTES = "fake-mp3-bytes".toByteArray()
 
 internal open class FakeFeedService(

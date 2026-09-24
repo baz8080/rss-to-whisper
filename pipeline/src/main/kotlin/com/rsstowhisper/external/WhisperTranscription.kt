@@ -53,6 +53,8 @@ data class WhisperTranscription(
     val words: List<Word>,
     val lastCueEnd: Double? = null,
     val cues: List<Cue> = emptyList(),
+    /** Stamped on every word line and into transcript.json by the one writer of the pair. */
+    val run: WhisperRun? = null,
 ) {
     val isEmpty: Boolean get() = vtt.isBlank() || vtt.trim() == VTT_HEADER
 
@@ -82,6 +84,8 @@ data class WhisperTranscription(
                         node.put("e", w.end)
                         node.put("p", w.probability)
                         node.put("seg", w.segment)
+                        // Per line rather than a header row: every existing reader treats each line as a word.
+                        run?.let { node.put(WhisperRun.WORD_FIELD, it.runId) }
                         out.write(mapper.writeValueAsString(node))
                         out.newLine()
                     }

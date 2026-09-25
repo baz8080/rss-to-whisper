@@ -363,4 +363,31 @@ class WindowRepairTest {
         assertEquals("time", replacement.anchorLeft)
         assertEquals(" AI", replacement.words.first().text)
     }
+
+    /** Barry's Physics Frontiers window: two sentences alternating, every copy clamped onto one timestamp. */
+    @Test
+    fun `an alternating loop stacked on one timestamp is a defect`() {
+        val a = " So he wrote something like, we now live in a marvelous age where we discover fundamental law."
+        val b = " to be done, or theory would be so complicated, would become so complicated."
+        val cues =
+            listOf(Cue(930.0, 942.0, " law, but there may be a time when this is no longer possible.")) +
+                listOf(a, b, a, b, a).map { Cue(942.6, 942.6, it) } +
+                listOf(Cue(943.9, 947.0, " no longer can do the calculations. And now 50 or more years after"))
+
+        val defects = WindowRepair.defectCues(cues)
+
+        assertEquals(setOf(1, 2, 3, 4, 5), defects)
+    }
+
+    @Test
+    fun `ordinary speech is neither too fast nor an echo`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins, and it gets stranger."),
+                Cue(3.0, 4.0, " Yeah."),
+                Cue(4.0, 7.0, " We looked at the data again, carefully, and found it."),
+            )
+
+        assertEquals(emptySet(), WindowRepair.defectCues(cues))
+    }
 }

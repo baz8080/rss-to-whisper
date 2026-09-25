@@ -42,6 +42,7 @@ internal object WindowRepair {
             if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN) defects.addAll(i..j)
             i = j + 1
         }
+        defects += echoes(cues)
         val prompt = cues.map { it.text.trim().lowercase() in promptSentences }
         val leaks = cues.indices.filter { prompt[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
         // A short copy beside a leak is the same leak, and must not be kept as an anchor.
@@ -52,6 +53,39 @@ internal object WindowRepair {
         defects += leaks
         return defects
     }
+
+    /**
+     * A cue of this many words in no time. Alone it is too common to call: over
+     * 4,000 episodes have one, most reading as real lines whose timing collapsed.
+     * Beside an echo it is part of the loop.
+     */
+    private const val MIN_WORDS_FOR_RATE = 5
+    private const val ZERO_LENGTH_SECONDS = 0.1
+
+    /** A sentence this long repeated verbatim within a few cues is the decoder looping, alternating or not. */
+    private const val MIN_WORDS_FOR_ECHO = 8
+    private const val ECHO_LOOKBACK_CUES = 3
+
+    /** A sentence repeated within a few cues, and any stack of zero-length cues against it. */
+    internal fun echoes(cues: List<Cue>): Set<Int> {
+        val keys =
+            cues.map { cue ->
+                cue.text.lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }.split(WHITESPACE).filter { it.isNotEmpty() }
+            }
+        val echoes =
+            cues.indices.filter { i ->
+                keys[i].size >= MIN_WORDS_FOR_ECHO && (maxOf(0, i - ECHO_LOOKBACK_CUES) until i).any { keys[it] == keys[i] }
+            }.toMutableSet()
+        val flat =
+            cues.indices
+                .filter { keys[it].size >= MIN_WORDS_FOR_RATE && cues[it].end - cues[it].start <= ZERO_LENGTH_SECONDS }
+                .toSet()
+        var grew = echoes.isNotEmpty()
+        while (grew) grew = echoes.addAll(echoes.flatMap { listOf(it - 1, it + 1) }.filter { it in flat })
+        return echoes
+    }
+
+    private val WHITESPACE = Regex("\\s+")
 
     fun promptSentences(prompt: String?): Set<String> =
         prompt.orEmpty().split(Regex("(?<=[.!?])\\s+")).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()

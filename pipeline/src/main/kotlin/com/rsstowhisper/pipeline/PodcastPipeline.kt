@@ -1077,13 +1077,13 @@ class PodcastPipeline(
         label: String,
     ): ScoredTranscription {
         val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
-        val first = decodeAndScore(audioPath, episodePath, podcast, audio)
+        val first = decodeAndScore(audioPath, episodePath, podcast, audio, conditioned = !config.decodeWithoutHistory)
         if (!first.quality.isFlagged || !config.qualityRetry) return warnIfFlagged(first, label)
 
         logger.info("$label scored ${first.quality.flags}; decoding it once more")
         val second =
             try {
-                decodeAndScore(audioPath, episodePath, podcast, audio)
+                decodeAndScore(audioPath, episodePath, podcast, audio, conditioned = true)
             } catch (e: Exception) {
                 // The first decode is still a usable transcript; a failed retry
                 // must not cost the episode entirely, nor fail the run.
@@ -1112,6 +1112,7 @@ class PodcastPipeline(
         episodePath: Path,
         podcast: PodcastConfig,
         audio: AudioIdentity,
+        conditioned: Boolean,
     ): ScoredTranscription {
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
@@ -1121,7 +1122,7 @@ class PodcastPipeline(
         decodesAttempted++
         val json =
             try {
-                transcriber.transcribe(audioPath, language, podcast.initialPrompt)
+                transcriber.transcribe(audioPath, language, podcast.initialPrompt, conditioned)
             } catch (e: TranscriberUnavailable) {
                 decodesUnreachable++
                 throw e
@@ -1153,7 +1154,7 @@ class PodcastPipeline(
                 decodedAt = decodedAt,
                 serverUrl = config.whisperServerUrl,
                 model = config.whisperModel,
-                request = transcriber.requestFields(language, podcast.initialPrompt),
+                request = transcriber.requestFields(language, podcast.initialPrompt, conditioned),
                 audioSha256 = audio.sha256,
                 audioBytes = audio.bytes,
                 pipelineVersion = WhisperRun.pipelineVersion,

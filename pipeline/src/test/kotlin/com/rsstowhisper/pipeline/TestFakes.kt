@@ -145,6 +145,9 @@ internal class FakeTranscriber(
     /** The per-podcast prompt each call carried, null where the default applies. */
     val prompts = mutableListOf<String?>()
 
+    /** Whether each call conditioned on earlier text, in call order. */
+    val conditioned = mutableListOf<Boolean>()
+
     var pings = 0
         private set
 
@@ -152,11 +155,13 @@ internal class FakeTranscriber(
         audioPath: Path,
         language: String,
         prompt: String?,
+        conditioned: Boolean,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
         languages.add(language)
         prompts.add(prompt)
+        this.conditioned.add(conditioned)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response
@@ -224,6 +229,7 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
     qualityRetry: Boolean = true,
+    decodeWithoutHistory: Boolean = false,
     dryRun: Boolean = false,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
@@ -244,6 +250,7 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
             qualityRetry = qualityRetry,
+            decodeWithoutHistory = decodeWithoutHistory,
             dryRun = dryRun,
             podcasts = podcasts,
         )

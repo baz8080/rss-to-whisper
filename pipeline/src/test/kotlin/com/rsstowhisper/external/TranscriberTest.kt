@@ -271,6 +271,22 @@ class TranscriberTest {
         assertEquals(null, fields["carry_initial_prompt"])
     }
 
+    /** whisper.cpp skips the initial prompt along with the history, so sending one would misrecord the decode. */
+    @Test
+    fun `an unconditioned decode sends max_context 0 and no prompt`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+            .transcribe(mp3File(tmp), "en", conditioned = false)
+
+        val fields = formFields(requests.single().body as okhttp3.MultipartBody)
+        assertEquals("0", fields["max_context"])
+        assertEquals(null, fields["prompt"])
+        assertEquals(null, fields["carry_initial_prompt"])
+        assertEquals("false", fields["vad"])
+    }
+
     @Test
     fun `a blank explicit prompt sends none rather than falling back to the default`(
         @TempDir tmp: Path,

@@ -110,6 +110,7 @@ open class Transcriber(
         language: String = DEFAULT_LANGUAGE,
         /** Overrides [initialPrompt]; written in [language] by construction, so it is not matched. */
         prompt: String? = null,
+        conditioned: Boolean = true,
     ): String {
         val bodyBuilder =
             MultipartBody.Builder()
@@ -119,7 +120,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-        requestFields(language, prompt).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
+        requestFields(language, prompt, conditioned).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
 
         val requestBody = bodyBuilder.build()
 
@@ -164,6 +165,11 @@ open class Transcriber(
     open fun requestFields(
         language: String = DEFAULT_LANGUAGE,
         prompt: String? = null,
+        /**
+         * False decodes each window with no text before it. whisper.cpp then skips
+         * the initial prompt too (n_max_text_ctx gates both), so none is sent.
+         */
+        conditioned: Boolean = true,
     ): Map<String, String> {
         // whisper.cpp looks the code up in a map keyed by lower case and never
         // checks the result: an unmatched one returns -1, which its caller adds
@@ -199,6 +205,10 @@ open class Transcriber(
         // Cut on word boundaries rather than mid-token.
         fields["split_on_word"] = "true"
         fields["beam_size"] = beamSize.toString()
+        if (!conditioned) {
+            fields["max_context"] = "0"
+            return fields
+        }
 
         // The prompt rides only with the language it is written in. It biases
         // VOCABULARY as well as style (see [initialPrompt]), so conditioning a

@@ -33,6 +33,12 @@ data class AppConfig(
      */
     val initialPrompt: String? = null,
     val qualityRetry: Boolean = true,
+    /**
+     * Decode first with no earlier text in context, which stops the loops and
+     * stretch-copies conditioning feeds. It drops the initial prompt too, so a
+     * flagged result is retried with it.
+     */
+    val decodeWithoutHistory: Boolean = false,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */

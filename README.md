@@ -745,6 +745,26 @@ constants. They live together at the top of
 `pipeline/src/main/kotlin/com/rsstowhisper/pipeline/TranscriptQuality.kt`, each with the
 number it came from.
 
+### Decoding without history
+
+`decode_without_history: true` in `pods.yaml` makes the first decode of every episode
+send `max_context=0`, so whisper conditions no window on the text before it. That text
+is what feeds repetition loops and stretch-copies. whisper.cpp skips the initial prompt
+along with the history, so no prompt is sent, and a decode that comes back flagged is
+retried with the prompt and the history; the better of the two is kept.
+
+Measured on the same audio, same model and server, 2026-09-25:
+
+| sample | request | clean | loops | stretch-copy | unpunctuated | words |
+| --- | --- | --- | --- | --- | --- | --- |
+| 24 random episodes | default | 18 | 5 | 1 | 0 | 1.00 |
+| | `max_context=0` | 23 | 0 | 0 | 1 | 1.01 |
+| 16 with stretch-copies or loops | default | 9 | 3 | 6 | 0 | 1.00 |
+| | `max_context=0` | 15 | 0 | 0 | 1 | 1.02 |
+
+The cost is punctuation: median marks per word fell from 0.140 to 0.114 without the
+prompt. It is off by default.
+
 ### Re-transcribing an episode
 
 Redoing an episode used to mean deleting its `transcript.json` by hand. With the quality

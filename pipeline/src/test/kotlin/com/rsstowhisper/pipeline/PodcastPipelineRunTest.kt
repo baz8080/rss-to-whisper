@@ -732,6 +732,48 @@ class PodcastPipelineRunTest {
     }
 
     @Test
+    fun `decoding without history retries a flagged decode with it`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(twoFlagJson(), healthyJson()),
+                decodeWithoutHistory = true,
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf(false, true), txSvc.conditioned)
+        @Suppress("UNCHECKED_CAST")
+        val run = transcriptJson(tempDir)["whisper_run"] as Map<String, Any?>
+        assertEquals("true", (run["request"] as Map<*, *>)["carry_initial_prompt"])
+    }
+
+    @Test
+    fun `decoding without history keeps a clean first decode`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(healthyJson()),
+                decodeWithoutHistory = true,
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf(false), txSvc.conditioned)
+        @Suppress("UNCHECKED_CAST")
+        val run = transcriptJson(tempDir)["whisper_run"] as Map<String, Any?>
+        assertEquals("0", (run["request"] as Map<*, *>)["max_context"])
+    }
+
+    @Test
     fun `--no-quality-retry keeps the first decode and makes one call`(
         @TempDir tempDir: Path,
     ) {

@@ -265,8 +265,9 @@ class WindowRepairTest {
     @Test
     fun `a long cue that is only a sentence of the prompt is a defect`() {
         val prompt = WindowRepair.promptSentences("Hello, and welcome back. Let's get started.")
+        // The second is someone actually saying it: short, and not beside a leak.
         val cues =
-            listOf(Cue(0.0, 30.0, " Let's get started."), Cue(30.0, 33.0, " Let's get started."), Cue(33.0, 36.0, " Welcome, everyone."))
+            listOf(Cue(0.0, 30.0, " Let's get started."), Cue(30.0, 33.0, " Welcome, everyone."), Cue(33.0, 35.0, " Let's get started."))
 
         assertEquals(setOf(0), WindowRepair.defectCues(cues, prompt))
     }
@@ -298,5 +299,19 @@ class WindowRepairTest {
 
         assertEquals(12.0 - 1.5, lost, 0.15)
         assertTrue(lost > WindowRepair.MAX_LOST_SPEECH_SECONDS)
+    }
+
+    @Test
+    fun `a short copy of a prompt sentence beside a leak is part of it`() {
+        val prompt = WindowRepair.promptSentences("Let's get started.")
+        val cues =
+            listOf(
+                Cue(0.0, 30.0, " Let's get started."),
+                Cue(30.0, 60.0, " Let's get started."),
+                Cue(60.0, 60.0, " Let's get started."),
+                Cue(60.0, 69.0, " I'm the publisher of Universe Today."),
+            )
+
+        assertEquals(setOf(0, 1, 2), WindowRepair.defectCues(cues, prompt))
     }
 }

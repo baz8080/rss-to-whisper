@@ -1275,6 +1275,7 @@ class PodcastPipeline(
                     "gap_left_s" to best?.gapLeft,
                     "gap_right_s" to best?.gapRight,
                     "speech_checked" to (speech != null),
+                    "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
                     "refused_for_lost_speech_s" to lostByAttempt.map { Math.round(it * 10) / 10.0 },
                 )
             best?.let { replacements += it }

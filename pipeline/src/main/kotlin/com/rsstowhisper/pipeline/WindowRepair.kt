@@ -42,9 +42,14 @@ internal object WindowRepair {
             if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN) defects.addAll(i..j)
             i = j + 1
         }
-        cues.forEachIndexed { index, cue ->
-            if (cue.end - cue.start >= MIN_PROMPT_LEAK_SECONDS && cue.text.trim().lowercase() in promptSentences) defects += index
+        val prompt = cues.map { it.text.trim().lowercase() in promptSentences }
+        val leaks = cues.indices.filter { prompt[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
+        // A short copy beside a leak is the same leak, and must not be kept as an anchor.
+        var grew = true
+        while (grew) {
+            grew = leaks.addAll(leaks.flatMap { listOf(it - 1, it + 1) }.filter { it in cues.indices && prompt[it] })
         }
+        defects += leaks
         return defects
     }
 
@@ -303,6 +308,16 @@ internal object WindowRepair {
         if (needle.isEmpty()) return emptyList()
         return (0..haystack.size - needle.size).filter { at -> needle.indices.all { haystack[at + it] == needle[it] } }
     }
+
+    /** A window long enough to judge, with next to no punctuation: what a decode without the prompt can produce. */
+    fun unpunctuated(replacement: Replacement): Boolean {
+        val text = replacement.cues.joinToString(" ") { it.text }
+        val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
+        val marks = text.count { it in ".,!?;:" }
+        return words >= MIN_WORDS_TO_JUDGE_PUNCTUATION && marks.toDouble() / words < TranscriptQuality.MIN_PUNCTUATION_PER_WORD
+    }
+
+    private const val MIN_WORDS_TO_JUDGE_PUNCTUATION = 30
 
     /** Every replacement's range is in [base]'s cue numbering, and they must not overlap. */
     fun splice(

@@ -294,7 +294,9 @@ internal object WindowRepair {
             // Words kept from over an anchor's span belong after it, not inside it.
             out +=
                 segmentWords.map {
-                    val wordStart = it.start.coerceIn(floor ?: it.start, ceiling ?: it.start)
+                    // Anchors can overlap by a few hundredths of a second; the floor wins.
+                    val low = floor ?: it.start
+                    val wordStart = it.start.coerceIn(low, maxOf(low, ceiling ?: it.start))
                     it.copy(start = wordStart, end = it.end.coerceIn(wordStart, maxOf(wordStart, ceiling ?: it.end)), segment = cues.size)
                 }
             cues += Cue(start, maxOf(start, end), text)

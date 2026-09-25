@@ -445,4 +445,26 @@ class WindowRepairTest {
         assertEquals(" We looked at the data again, carefully.", replacement.cues.first().text)
         assertEquals(" And then we found something odd.", replacement.cues.last().text)
     }
+
+    /** Why This Universe 77: the left anchor ended at 2408.28 s and the right began at 2408.24 s. */
+    @Test
+    fun `anchors that overlap in time do not throw`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.04, " So that is where the story begins."),
+                Cue(3.0, 3.0, " Welcome to the show, with your host."),
+                Cue(3.0, 3.0, " Welcome to the show, with your host."),
+                Cue(3.0, 3.0, " Welcome to the show, with your host."),
+                Cue(3.0, 3.0, " Welcome to the show, with your host."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+            )
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(0.0, 3.1, " So that is where the story begins. New words."),
+                Cue(3.1, 6.0, " We looked at the data again, carefully."),
+            )
+
+        WindowRepair.anchor(base, decoded, 0..5, setOf(1, 2, 3, 4))
+    }
 }

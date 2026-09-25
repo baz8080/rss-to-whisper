@@ -1241,7 +1241,7 @@ class PodcastPipeline(
             var bestDefects = before
             var bestConditioned = true
             val lostByAttempt = mutableListOf<Double>()
-            for (conditioned in listOf(true, false)) {
+            for (conditioned in REPAIR_ATTEMPTS) {
                 val decoded = decode(audioPath, podcast, conditioned, window)
                 val anchored = WindowRepair.anchor(base, decoded, range, defects)
                 // Empty is a repair only when VAD says nothing is said there; otherwise it is lost speech.
@@ -1337,6 +1337,14 @@ class PodcastPipeline(
         internal const val STAGING_SUFFIX = ".new"
 
         private const val VERIFY_THREADS = 8
+
+        /**
+         * Prompted, then without history, twice over. whisper can skip a stretch of
+         * speech on one decode and transcribe it on the next, identical request: a
+         * phone-quality Irish History window lost 24 s on one no-history decode and
+         * none on the other. A window decode takes seconds, so the retries are cheap.
+         */
+        private val REPAIR_ATTEMPTS = listOf(true, false, true, false)
         internal const val AUDIO_FILENAME = "audio.mp3"
 
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */

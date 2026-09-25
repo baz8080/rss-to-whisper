@@ -183,7 +183,7 @@ class WindowRepairTest {
     }
 
     @Test
-    fun `a window no better than it was is tried without history, then left alone`(
+    fun `a window no better than it was is tried both ways twice, then left alone`(
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir, looping())
@@ -193,7 +193,7 @@ class WindowRepairTest {
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
-        assertEquals(listOf(true, false), txSvc.conditioned)
+        assertEquals(listOf(true, false, true, false), txSvc.conditioned)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 

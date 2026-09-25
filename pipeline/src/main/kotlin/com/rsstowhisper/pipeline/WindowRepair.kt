@@ -7,8 +7,12 @@ import com.rsstowhisper.external.Word
 
 /** Re-decoding only the stretches of an episode whose cues are loops or stretch-copies. */
 internal object WindowRepair {
-    /** Good cues kept either side of a defect, so the splice lands on cue boundaries whisper chose. */
-    private const val MARGIN_CUES = 1
+    /**
+     * Cues taken either side of a defect. The outer one anchors the splice and is
+     * kept verbatim; the one against the defect is re-decoded with it, since it is
+     * the cue most often damaged: the loop's seed at its end, or a garbled start.
+     */
+    private const val MARGIN_CUES = 2
 
     /**
      * [range] is the base cues this replaces; [anchors] says how each edge was

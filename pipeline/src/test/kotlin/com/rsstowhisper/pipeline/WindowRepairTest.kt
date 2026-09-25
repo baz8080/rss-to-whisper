@@ -44,14 +44,14 @@ class WindowRepairTest {
             )
 
     @Test
-    fun `a run of identical cues is a defect, windowed with a good cue either side`() {
+    fun `a run of identical cues is a defect, windowed with two good cues either side`() {
         val cues = looping()
 
         val defects = WindowRepair.defectCues(cues)
 
         assertEquals(setOf(2, 3, 4, 5), defects)
-        assertEquals(listOf(1..6), WindowRepair.windows(cues, defects))
-        assertEquals(TimeWindow(3.0, 21.0), WindowRepair.window(cues, 1..6))
+        assertEquals(listOf(0..7), WindowRepair.windows(cues, defects))
+        assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
     }
 
     private fun decodedWindow(vararg cues: Cue): WhisperTranscription = transcription(cues.toList())
@@ -167,7 +167,7 @@ class WindowRepairTest {
         val ok = pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
         assertTrue(ok)
-        assertEquals(listOf<TimeWindow?>(TimeWindow(3.0, 21.0)), txSvc.windows.toList())
+        assertEquals(listOf<TimeWindow?>(TimeWindow(0.0, 24.0)), txSvc.windows.toList())
         assertEquals(listOf(true), txSvc.conditioned)
         assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
         val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
@@ -424,5 +424,25 @@ class WindowRepairTest {
             )
 
         assertEquals(listOf(2), WindowRepair.longCopies(cues))
+    }
+
+    /** Barry's We Have Ways edges: the cues against the loop were its seed on one side and a garbled start on the other. */
+    @Test
+    fun `the cue against a defect is re-decoded and the one beyond it anchors`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Welcome to the show."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+                Cue(21.0, 24.0, " Nobody expected that part at all."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 0..7, setOf(2, 3, 4, 5))
+
+        assertEquals(1..6, replacement.range)
+        assertEquals(" We looked at the data again, carefully.", replacement.cues.first().text)
+        assertEquals(" And then we found something odd.", replacement.cues.last().text)
     }
 }

@@ -390,4 +390,17 @@ class WindowRepairTest {
 
         assertEquals(emptySet(), WindowRepair.defectCues(cues))
     }
+
+    /** Barry's Mindscape window: the anchor kept was the loop's first lap, so its hallucination survived the repair. */
+    @Test
+    fun `a cue holding a loop's sentence beside the loop is part of it`() {
+        val lap = " So it's a system where it's often referred to as a neural network."
+        val cues =
+            listOf(
+                Cue(432.94, 441.74, " in terms of a set of programmatic rules, but instead it's a system where it's often"),
+                Cue(441.74, 442.10, " referred to as a neural network.$lap"),
+            ) + (0 until 5).map { Cue(442.10, 442.10 + it * 6, lap) }
+
+        assertEquals(setOf(1, 2, 3, 4, 5, 6), WindowRepair.defectCues(cues))
+    }
 }

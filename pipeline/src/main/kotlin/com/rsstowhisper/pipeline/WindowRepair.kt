@@ -39,7 +39,13 @@ internal object WindowRepair {
             val key = cues[i].text.trim().lowercase()
             var j = i
             while (key.isNotEmpty() && j + 1 < cues.size && cues[j + 1].text.trim().lowercase() == key) j++
-            if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN) defects.addAll(i..j)
+            if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN) {
+                defects.addAll(i..j)
+                // The loop's first lap usually arrives inside the cue before it, which
+                // must not survive as the repair's anchor.
+                if (i > 0 && cues[i - 1].text.lowercase().contains(key)) defects += i - 1
+                if (j + 1 < cues.size && cues[j + 1].text.lowercase().contains(key)) defects += j + 1
+            }
             i = j + 1
         }
         defects += echoes(cues)

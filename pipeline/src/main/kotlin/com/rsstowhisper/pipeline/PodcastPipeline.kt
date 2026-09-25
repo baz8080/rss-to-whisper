@@ -14,10 +14,14 @@ import com.rsstowhisper.audio.readId3ChaptersOrNull
 import com.rsstowhisper.audio.toSecondsMap
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
+import com.rsstowhisper.external.Cue
+import com.rsstowhisper.external.SpeechDetector
+import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.TranscriberUnavailable
 import com.rsstowhisper.external.WhisperRun
 import com.rsstowhisper.external.WhisperTranscription
+import com.rsstowhisper.external.Word
 import com.rsstowhisper.external.WordTimesMisplaced
 import com.rsstowhisper.feed.FeedService
 import com.rsstowhisper.feed.libsynAdMarkers
@@ -42,6 +46,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
 
 class PodcastPipeline(
     private val config: AppConfig,
@@ -58,6 +63,8 @@ class PodcastPipeline(
             initialPrompt = config.defaultPrompt,
             promptLanguage = config.defaultPromptLanguage,
         ),
+    private val speechDetector: SpeechDetector? =
+        config.vadBinary?.let { binary -> config.vadModel?.let { SpeechDetector(binary, it) } },
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
@@ -194,7 +201,8 @@ class PodcastPipeline(
         for (target in targets) {
             val attempted =
                 try {
-                    if (retranscribeEpisode(target, request.force)) done++
+                    val written = if (request.repairWindows) repairEpisode(target) else retranscribeEpisode(target, request.force)
+                    if (written) done++
                     true
                 } catch (e: WordTimesMisplaced) {
                     logger.error("Stopping: ${e.message}")
@@ -1119,15 +1127,7 @@ class PodcastPipeline(
         val language = podcast.language ?: config.language
         val decodedAt = WhisperRun.now()
 
-        decodesAttempted++
-        val json =
-            try {
-                transcriber.transcribe(audioPath, language, podcast.initialPrompt, conditioned)
-            } catch (e: TranscriberUnavailable) {
-                decodesUnreachable++
-                throw e
-            }
-        decodesSucceeded++
+        val parsed = decode(audioPath, podcast, conditioned)
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.
@@ -1137,17 +1137,6 @@ class PodcastPipeline(
         val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
         logger.debug("Transcribed in: ${"%.2f".format(Locale.ROOT, elapsedMinutes)} Minutes")
 
-        val parsed = WhisperTranscription.parse(json)
-        val misplaced = parsed.misplacedWordShare
-        if (misplaced > WhisperTranscription.MAX_MISPLACED_WORD_SHARE) {
-            decodesSucceeded--
-            decodesUnreachable++
-            throw WordTimesMisplaced(
-                "${"%.0f".format(Locale.ROOT, misplaced * 100)}% of cues from ${config.whisperServerUrl} have their words " +
-                    "outside the cue's time, the signature of a server applying VAD whatever the request says. " +
-                    "Restart it without --vad",
-            )
-        }
         val run =
             WhisperRun(
                 runId = WhisperRun.newId(),
@@ -1163,6 +1152,181 @@ class PodcastPipeline(
         val transcription = parsed.copy(run = run)
         return ScoredTranscription(transcription, TranscriptQuality.score(transcription))
     }
+
+    /** One request to whisper, counted for the exit code, and refused if its word times are unusable. */
+    private fun decode(
+        audioPath: Path,
+        podcast: PodcastConfig,
+        conditioned: Boolean,
+        window: TimeWindow? = null,
+    ): WhisperTranscription {
+        decodesAttempted++
+        val json =
+            try {
+                transcriber.transcribe(audioPath, podcast.language ?: config.language, podcast.initialPrompt, conditioned, window)
+            } catch (e: TranscriberUnavailable) {
+                decodesUnreachable++
+                throw e
+            }
+        decodesSucceeded++
+
+        val parsed = WhisperTranscription.parse(json)
+        val misplaced = parsed.misplacedWordShare
+        if (misplaced > WhisperTranscription.MAX_MISPLACED_WORD_SHARE) {
+            decodesSucceeded--
+            decodesUnreachable++
+            throw WordTimesMisplaced(
+                "${"%.0f".format(Locale.ROOT, misplaced * 100)}% of cues from ${config.whisperServerUrl} have their words " +
+                    "outside the cue's time, the signature of a server applying VAD whatever the request says. " +
+                    "Restart it without --vad",
+            )
+        }
+        return parsed
+    }
+
+    /**
+     * Re-decodes only the windows around an episode's loops and stretch-copies,
+     * with the prompt first and without history if that is still defective, and
+     * splices in whichever leaves the window with fewer defects than it had.
+     * Only a pair already from one decode is repaired: the splice keeps its words.
+     */
+    private fun repairEpisode(episodeDirPath: Path): Boolean {
+        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        val audioPath = audioFileFor(episodeDirPath)
+        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
+            logger.error("Cannot repair $label: it has no audio")
+            return false
+        }
+        when (val verdict = TranscriptPair.check(episodeDirPath)) {
+            TranscriptPair.Consistent -> Unit
+            TranscriptPair.Unpaired -> {
+                logger.warn("Cannot repair $label: it has no word timings to splice into; re-transcribe it instead")
+                return false
+            }
+            is TranscriptPair.Diverged -> {
+                logger.warn("Cannot repair $label: ${verdict.reason}; re-transcribe it instead")
+                return false
+            }
+        }
+
+        @Suppress("UNCHECKED_CAST")
+        val existing =
+            jsonMapper.readValue(
+                Files.readString(episodeDirPath.resolve(TRANSCRIPT_FILENAME)),
+                Map::class.java,
+            ) as Map<String, Any?>
+        val parsedCues = TranscriptPair.parseCues(existing["episode_transcript"]?.toString().orEmpty())
+        if (parsedCues.any { it.start == null || it.end == null }) {
+            logger.warn("Cannot repair $label: a cue timestamp does not parse; re-transcribe it instead")
+            return false
+        }
+        val cues = parsedCues.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
+        val base = WhisperTranscription.of(cues, readWords(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)))
+
+        val podcast = podcastFor(episodeDirPath)
+        val promptSentences = WindowRepair.promptSentences(podcast.initialPrompt ?: config.defaultPrompt)
+        val defects = WindowRepair.defectCues(cues, promptSentences)
+        if (defects.isEmpty()) {
+            logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
+            return false
+        }
+        val speech = speechDetector?.let { detector -> detector.speech(audioPath) }
+
+        val replacements = mutableListOf<WindowRepair.Replacement>()
+        val repairs = mutableListOf<Map<String, Any?>>()
+        for (range in WindowRepair.windows(cues, defects)) {
+            val window = WindowRepair.window(cues, range)
+            val before = defects.count { it in range }
+            var best: WindowRepair.Replacement? = null
+            var bestDefects = before
+            var bestConditioned = true
+            val lostByAttempt = mutableListOf<Double>()
+            for (conditioned in listOf(true, false)) {
+                val decoded = decode(audioPath, podcast, conditioned, window)
+                val anchored = WindowRepair.anchor(base, decoded, range, defects)
+                // Empty is a repair only when VAD says nothing is said there; otherwise it is lost speech.
+                if (anchored.cues.isEmpty() && (speech == null || !WindowRepair.silent(base, anchored.range, speech))) continue
+                val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
+                val lost = speech?.let { WindowRepair.lostSpeech(base, replacement, it) }
+                if (lost != null && lost > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
+                    lostByAttempt += lost
+                    continue
+                }
+                val after = WindowRepair.defectsAfter(base, replacement, promptSentences)
+                if (after < bestDefects) {
+                    best = replacement
+                    bestDefects = after
+                    bestConditioned = conditioned
+                }
+                if (bestDefects == 0) break
+            }
+            repairs +=
+                mapOf(
+                    "start" to window.start,
+                    "end" to window.end,
+                    "cues" to listOf(range.first, range.last),
+                    "defects_before" to before,
+                    "defects_after" to if (best != null) bestDefects else before,
+                    "conditioned" to if (best != null) bestConditioned else null,
+                    "applied" to (best != null),
+                    "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
+                    "anchor_left" to best?.anchorLeft,
+                    "anchor_right" to best?.anchorRight,
+                    "gap_left_s" to best?.gapLeft,
+                    "gap_right_s" to best?.gapRight,
+                    "speech_checked" to (speech != null),
+                    "refused_for_lost_speech_s" to lostByAttempt.map { Math.round(it * 10) / 10.0 },
+                )
+            best?.let { replacements += it }
+        }
+        if (replacements.isEmpty()) {
+            logger.warn("No window of $label came back better than it was; keeping it")
+            return false
+        }
+
+        val spliced = WindowRepair.splice(base, replacements)
+        val language = podcast.language ?: config.language
+        val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
+        val run =
+            WhisperRun(
+                runId = WhisperRun.newId(),
+                decodedAt = WhisperRun.now(),
+                serverUrl = config.whisperServerUrl,
+                model = config.whisperModel,
+                request = transcriber.requestFields(language, podcast.initialPrompt),
+                audioSha256 = audio.sha256,
+                audioBytes = audio.bytes,
+                pipelineVersion = WhisperRun.pipelineVersion,
+                words = spliced.words.size,
+                base = existing[WhisperRun.FIELD] as? Map<*, *>,
+                repairs = repairs,
+            )
+        val repaired = spliced.copy(run = run)
+        val quality = TranscriptQuality.score(repaired)
+        val updated = existing.toMutableMap()
+        updated["episode_transcript"] = repaired.vtt
+        updated["episode_quality"] = quality.toMap()
+        if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true)) return false
+        logger.info(
+            "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
+                "${defects.size} defective cues before, ${WindowRepair.defectCues(repaired.cues, promptSentences).size} after",
+        )
+        return true
+    }
+
+    private fun readWords(path: Path): List<Word> =
+        GZIPInputStream(Files.newInputStream(path)).bufferedReader().useLines { lines ->
+            lines.filter { it.isNotBlank() }.map { line ->
+                val node = jsonMapper.readTree(line)
+                Word(
+                    text = node.path("w").asText(""),
+                    start = node.path("s").asDouble(),
+                    end = node.path("e").asDouble(),
+                    probability = node.path("p").asDouble(),
+                    segment = node.path("seg").asInt(),
+                )
+            }.toList()
+        }
 
     private class AudioIdentity(val sha256: String, val bytes: Long)
 

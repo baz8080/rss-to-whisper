@@ -13,6 +13,11 @@ import java.util.concurrent.TimeUnit
 /** Nothing was decoded at all: the server could not be reached, or would not answer. */
 open class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
 
+data class TimeWindow(val start: Double, val end: Double) {
+    val offsetMillis: Long get() = Math.round(start * 1000)
+    val durationMillis: Long get() = Math.round((end - start) * 1000)
+}
+
 /** The server answered with word times no transcript can use, and will for every decode until it is restarted. */
 class WordTimesMisplaced(message: String) : TranscriberUnavailable(message)
 
@@ -111,6 +116,7 @@ open class Transcriber(
         /** Overrides [initialPrompt]; written in [language] by construction, so it is not matched. */
         prompt: String? = null,
         conditioned: Boolean = true,
+        window: TimeWindow? = null,
     ): String {
         val bodyBuilder =
             MultipartBody.Builder()
@@ -120,7 +126,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-        requestFields(language, prompt, conditioned).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
+        requestFields(language, prompt, conditioned, window).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
 
         val requestBody = bodyBuilder.build()
 
@@ -170,6 +176,8 @@ open class Transcriber(
          * the initial prompt too (n_max_text_ctx gates both), so none is sent.
          */
         conditioned: Boolean = true,
+        /** Decode only this stretch of the file; whisper returns times from the file's start. */
+        window: TimeWindow? = null,
     ): Map<String, String> {
         // whisper.cpp looks the code up in a map keyed by lower case and never
         // checks the result: an unmatched one returns -1, which its caller adds
@@ -205,6 +213,10 @@ open class Transcriber(
         // Cut on word boundaries rather than mid-token.
         fields["split_on_word"] = "true"
         fields["beam_size"] = beamSize.toString()
+        if (window != null) {
+            fields["offset_t"] = window.offsetMillis.toString()
+            fields["duration"] = window.durationMillis.toString()
+        }
         if (!conditioned) {
             fields["max_context"] = "0"
             return fields

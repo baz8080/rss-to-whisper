@@ -118,7 +118,7 @@ internal object TranscriptPair {
     /** Every cue's text, blank cues included: the word ordinals count them. */
     internal fun cueTexts(vtt: String): List<String> = parseCues(vtt).map { it.text }
 
-    private fun parseCues(vtt: String): List<VttCue> {
+    internal fun parseCues(vtt: String): List<VttCue> {
         val cues = mutableListOf<VttCue>()
         var times: List<Double?>? = null
         var text: StringBuilder? = null

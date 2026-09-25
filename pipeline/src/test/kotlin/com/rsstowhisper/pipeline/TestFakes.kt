@@ -12,6 +12,7 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.feed.FeedService
 import org.slf4j.LoggerFactory
@@ -148,6 +149,9 @@ internal class FakeTranscriber(
     /** Whether each call conditioned on earlier text, in call order. */
     val conditioned = mutableListOf<Boolean>()
 
+    /** The stretch of audio each call asked for, null for the whole file. */
+    val windows = mutableListOf<TimeWindow?>()
+
     var pings = 0
         private set
 
@@ -156,12 +160,14 @@ internal class FakeTranscriber(
         language: String,
         prompt: String?,
         conditioned: Boolean,
+        window: TimeWindow?,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
         languages.add(language)
         prompts.add(prompt)
         this.conditioned.add(conditioned)
+        windows.add(window)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response

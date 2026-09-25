@@ -24,6 +24,10 @@ data class WhisperRun(
     val pipelineVersion: String?,
     /** How many lines `words.jsonl.gz` holds, so a decode with none is told apart from a lost file. */
     val words: Int,
+    /** For a window repair: the `whisper_run` of the pair it was spliced into. */
+    val base: Map<*, *>? = null,
+    /** For a window repair: each window re-decoded, and what came of it. */
+    val repairs: List<Map<String, Any?>> = emptyList(),
 ) {
     fun toMap(): Map<String, Any?> =
         mapOf(
@@ -36,7 +40,7 @@ data class WhisperRun(
             "audio_bytes" to audioBytes,
             "pipeline_version" to pipelineVersion,
             "words" to words,
-        )
+        ) + if (repairs.isEmpty()) emptyMap() else mapOf("base_run" to base, "repairs" to repairs)
 
     companion object {
         const val FIELD = "whisper_run"

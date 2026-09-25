@@ -56,6 +56,9 @@ internal val USAGE =
                                  every transcript.json, which is slow on a
                                  network volume
       --retranscribe-limit <n>   Cap --retranscribe-flagged; 0 means no limit
+      --repair-windows           Re-decode only the windows around loops and
+                                 stretch-copies of the targets above, and
+                                 splice them in; the rest of each episode is kept
       --retranscribe-force       Keep the new decode even if it scores worse.
                                  Only with --retranscribe, --retranscribe-id or
                                  --retranscribe-list,
@@ -88,6 +91,7 @@ internal data class Args(
     val retranscribeForce: Boolean = false,
     val retranscribeList: String? = null,
     val verifyPairs: Boolean = false,
+    val repairWindows: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -107,6 +111,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--whisper-url" -> args.copy(whisperServerUrl = valueFor(flag, argv, ++i))
                 "--whisper-model" -> args.copy(whisperModel = valueFor(flag, argv, ++i))
                 "--verify-pairs" -> args.copy(verifyPairs = true)
+                "--repair-windows" -> args.copy(repairWindows = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
@@ -151,6 +156,12 @@ internal fun parseArgs(argv: Array<String>): Args {
         args.retranscribeList == null
     ) {
         error("--retranscribe-force needs a target: --retranscribe, --retranscribe-id or --retranscribe-list")
+    }
+    if (args.repairWindows && !args.isRetranscribe) {
+        error("--repair-windows needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.repairWindows && args.retranscribeForce) {
+        error("--repair-windows keeps a window only when it comes back better, so --retranscribe-force does not apply")
     }
     if (args.verifyPairs && args.isRetranscribe) {
         error("--verify-pairs cannot be combined with re-transcription; it runs after every batch anyway")

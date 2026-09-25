@@ -66,6 +66,11 @@ and carry the same run id (`whisper_run.run_id`, and `run` on every word line). 
 write either file. `--verify-pairs` lists every episode whose pair disagrees, and
 `--retranscribe-list <file>` re-transcribes such a list.
 
+`--repair-windows` with any re-transcription target re-decodes only the windows around
+loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues
+either side. `vad_binary`/`vad_model` in `pods.yaml` (optional) let it drop cues over
+non-speech and refuse attempts that lose speech.
+
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.
 `--retranscribe-force` keeps a worse-scoring decode for explicitly named targets, and is

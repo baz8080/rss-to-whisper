@@ -30,6 +30,8 @@ data class RetranscribeRequest(
      * prompt, a model change -- is invisible to a flag count.
      */
     val force: Boolean = false,
+    /** Re-decode only the windows around loops and stretch-copies, not the whole episode. */
+    val repairWindows: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 

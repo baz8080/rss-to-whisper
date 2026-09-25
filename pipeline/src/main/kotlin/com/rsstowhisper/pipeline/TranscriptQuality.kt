@@ -96,7 +96,7 @@ object TranscriptQuality {
 
         val repeatedShare = repeatedShare(words)
         val longestRepeatedCueRun = longestRepeatedCueRun(cues.map { it.text })
-        val stretchCopies = stretchCopies(cues)
+        val stretchCopies = stretchCopyCues(cues).size
 
         // Empty for anything decoded before token_timestamps was turned on, and
         // an absent signal must not read as a passing one.
@@ -136,14 +136,14 @@ object TranscriptQuality {
         )
     }
 
-    private fun stretchCopies(cues: List<Cue>): Int {
+    internal fun stretchCopyCues(cues: List<Cue>): List<Int> {
         val tokens = cues.map { cue -> TOKEN.findAll(cue.text.lowercase()).map { it.value }.toList() }
-        return cues.indices.count { i ->
+        return cues.indices.filter { i ->
             val cue = cues[i]
             val seconds = cue.end - cue.start
             val words = tokens[i]
             if (seconds < MIN_STRETCH_SECONDS || words.isEmpty() || words.size / seconds >= MAX_STRETCH_WORDS_PER_SECOND) {
-                return@count false
+                return@filter false
             }
             val previous = tokens.subList(maxOf(0, i - STRETCH_LOOKBACK_CUES), i).flatten().toSet()
             previous.isNotEmpty() && words.count { it in previous }.toDouble() / words.size >= MIN_STRETCH_COPIED_SHARE

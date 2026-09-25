@@ -139,23 +139,29 @@ data class WhisperTranscription(
             val segments = root.path("segments")
             if (!segments.isArray) return WhisperTranscription("$VTT_HEADER\n\n", emptyList())
 
-            val vtt = StringBuilder(VTT_HEADER).append("\n\n")
             val words = mutableListOf<Word>()
             val cues = mutableListOf<Cue>()
-            var lastCueEnd: Double? = null
             segments.forEachIndexed { index, segment ->
-                val start = segment.path("start").asDouble()
-                val end = segment.path("end").asDouble()
-                val text = segment.path("text").asText()
-                lastCueEnd = end
-                cues += Cue(start, end, text)
-                vtt.append(timestamp(start)).append(" --> ").append(timestamp(end)).append('\n')
-                vtt.append(text).append("\n\n")
+                cues += Cue(segment.path("start").asDouble(), segment.path("end").asDouble(), segment.path("text").asText())
                 segment.path("words").forEach { word ->
                     words += word.toWord(index) ?: return@forEach
                 }
             }
-            return WhisperTranscription(vtt.toString(), words, lastCueEnd, cues)
+            return of(cues, words)
+        }
+
+        /** The VTT rendered from [cues]; every word's segment is an index into them. */
+        fun of(
+            cues: List<Cue>,
+            words: List<Word>,
+            run: WhisperRun? = null,
+        ): WhisperTranscription {
+            val vtt = StringBuilder(VTT_HEADER).append("\n\n")
+            for (cue in cues) {
+                vtt.append(timestamp(cue.start)).append(" --> ").append(timestamp(cue.end)).append('\n')
+                vtt.append(cue.text).append("\n\n")
+            }
+            return WhisperTranscription(vtt.toString(), words, cues.lastOrNull()?.end, cues, run)
         }
 
         /**

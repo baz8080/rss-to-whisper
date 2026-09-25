@@ -39,6 +39,9 @@ data class AppConfig(
      * flagged result is retried with it.
      */
     val decodeWithoutHistory: Boolean = false,
+    /** whisper.cpp's `whisper-vad-speech-segments` and a Silero model, so window repair can tell silence from speech. */
+    val vadBinary: String? = null,
+    val vadModel: String? = null,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */
@@ -52,6 +55,7 @@ data class AppConfig(
      * a feed thinking it has the punctuation lever when it does not.
      */
     internal fun validate() {
+        require((vadBinary == null) == (vadModel == null)) { "vad_binary and vad_model are set together or not at all" }
         checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {

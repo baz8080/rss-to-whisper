@@ -48,7 +48,7 @@ internal object WindowRepair {
             }
             i = j + 1
         }
-        defects += echoes(cues)
+        defects += echoes(cues) + longCopies(cues)
         val prompt = cues.map { it.text.trim().lowercase() in promptSentences }
         val leaks = cues.indices.filter { prompt[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
         // A short copy beside a leak is the same leak, and must not be kept as an anchor.
@@ -89,6 +89,32 @@ internal object WindowRepair {
         var grew = echoes.isNotEmpty()
         while (grew) grew = echoes.addAll(echoes.flatMap { listOf(it - 1, it + 1) }.filter { it in flat })
         return echoes
+    }
+
+    /**
+     * A long cue that is mostly the text of the few before it: a stretch-copy that
+     * kept a normal word rate. Measured on 16,465 pairs: at 15 s it adds 395 cues,
+     * all reading as copies; without the length floor it adds 17,000, many real.
+     */
+    private const val MIN_LONG_COPY_SECONDS = 15.0
+    private const val MIN_COPIED_SHARE = 0.8
+    private const val COPY_LOOKBACK_CUES = 6
+    private const val GRAM = 4
+
+    internal fun longCopies(cues: List<Cue>): List<Int> {
+        val keys =
+            cues.map {
+                    cue ->
+                cue.text.lowercase().filter { it.isLetterOrDigit() || it.isWhitespace() }.split(WHITESPACE).filter { it.isNotEmpty() }
+            }
+
+        fun grams(words: List<String>): Set<List<String>> = (0..words.size - GRAM).map { words.subList(it, it + GRAM) }.toSet()
+        return cues.indices.filter { i ->
+            if (keys[i].size < MIN_WORDS_FOR_ECHO || cues[i].end - cues[i].start < MIN_LONG_COPY_SECONDS) return@filter false
+            val own = grams(keys[i])
+            val before = grams((maxOf(0, i - COPY_LOOKBACK_CUES) until i).flatMap { keys[it] })
+            own.isNotEmpty() && own.count { it in before }.toDouble() / own.size >= MIN_COPIED_SHARE
+        }
     }
 
     private val WHITESPACE = Regex("\\s+")

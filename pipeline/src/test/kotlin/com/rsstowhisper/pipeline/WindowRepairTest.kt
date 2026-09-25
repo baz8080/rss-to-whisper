@@ -403,4 +403,26 @@ class WindowRepairTest {
 
         assertEquals(setOf(1, 2, 3, 4, 5, 6), WindowRepair.defectCues(cues))
     }
+
+    /** Barry's We Have Ways intro: the show's own Patreon read, written again over the music that follows it. */
+    @Test
+    fun `a long cue copying the read before it is a defect`() {
+        val cues =
+            listOf(
+                Cue(
+                    0.0,
+                    13.03,
+                    " Thank you for listening to We Have Ways of Making You Talk. Sign up to our Patreon to receive bonus content,",
+                ),
+                Cue(13.03, 19.62, " plus early access to all live show tickets. That's patreon.com slash wehaveways."),
+                Cue(
+                    30.0,
+                    59.98,
+                    " Thank you for listening to We Have Ways of Making You Talk. Sign up to our Patreon to receive bonus content,",
+                ),
+                Cue(91.0, 99.2, " On December 17th 1944, my dad, George Melan, and his twin Joseph were serving in the heavy"),
+            )
+
+        assertEquals(listOf(2), WindowRepair.longCopies(cues))
+    }
 }

@@ -337,4 +337,30 @@ class WindowRepairTest {
         assertTrue(fitted.words.zipWithNext().all { (a, b) -> a.start <= b.start })
         assertEquals(55.4, fitted.words.last().end, 0.01)
     }
+
+    /** Barry heard "AI might be the" missing: whisper timed them inside the anchor cue, and a time cut dropped them. */
+    @Test
+    fun `words timed over an anchor that the anchor does not account for are kept`() {
+        val base = transcription(looping())
+        val cues =
+            listOf(
+                Cue(3.0, 6.0, " Look at the date again carefully. AI might be"),
+                Cue(6.0, 18.0, " the most important new technology."),
+            )
+        val words =
+            listOf(" Look", " at", " the", " date", " again", " carefully.").mapIndexed {
+                    i,
+                    t,
+                ->
+                Word(t, 3.0 + i * 0.3, 3.3 + i * 0.3, 0.9, 0)
+            } +
+                listOf(" AI", " might", " be").mapIndexed { i, t -> Word(t, 5.0 + i * 0.3, 5.3 + i * 0.3, 0.9, 0) } +
+                listOf(" the", " most", " important", " new", " technology.").mapIndexed { i, t -> Word(t, 6.0 + i, 7.0 + i, 0.9, 1) }
+        val decoded = WhisperTranscription.of(cues, words)
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals("time", replacement.anchorLeft)
+        assertEquals(" AI", replacement.words.first().text)
+    }
 }

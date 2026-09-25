@@ -82,6 +82,9 @@ internal object WindowRepair {
     /** Words compared when finding an anchor: the last of the cue before the defects, the first of the one after. */
     private const val ANCHOR_WORDS = 3
 
+    /** How far past an anchor cue a new word may be timed and still be one of the anchor's own. */
+    private const val OVERLAP_SLACK_SECONDS = 0.5
+
     /** How far from its old time an anchor's words may be found in the new decode. */
     private const val ANCHOR_SLACK_SECONDS = 2.0
 
@@ -127,7 +130,27 @@ internal object WindowRepair {
                 oldLeft = anchorWords.last().end
                 anchorLeft = "text"
             } else {
-                from = words.indexOfFirst { it.start >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+                // The decode renders the anchor its own way, and can time the next
+                // sentence's opening words inside it. Its words are walked over the
+                // anchor's in order and dropped while they resemble them; the first
+                // that resembles nothing is where the new content starts.
+                val anchor = baseWords[left].orEmpty().map { normalise(it.text) }.filter { it.isNotEmpty() }
+                var next = 0
+                var last = -1
+                for (at in content) {
+                    if (words[at].start >= cue.end + OVERLAP_SLACK_SECONDS) break
+                    val hit =
+                        (next until minOf(next + ANCHOR_LOOKAHEAD, anchor.size))
+                            .firstOrNull { similar(anchor[it], normalised[at]) } ?: break
+                    next = hit + 1
+                    last = at
+                }
+                from =
+                    if (last >= 0) {
+                        last + 1
+                    } else {
+                        words.indexOfFirst { it.start >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+                    }
                 anchorLeft = "time"
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
@@ -152,7 +175,24 @@ internal object WindowRepair {
                 oldRight = anchorWords.first().start
                 anchorRight = "text"
             } else {
-                until = words.indexOfFirst { it.start >= cue.start - 0.1 }.let { if (it < 0) words.size else maxOf(it, from) }
+                // The same from the other end, past any words whisper ran on with beyond the window.
+                val anchor = baseWords[right].orEmpty().map { normalise(it.text) }.filter { it.isNotEmpty() }
+                var next = anchor.size - 1
+                var first: Int? = null
+                for (at in content.reversed()) {
+                    if (at < from || words[at].end <= cue.start - OVERLAP_SLACK_SECONDS) break
+                    val hit =
+                        (next downTo maxOf(0, next - ANCHOR_LOOKAHEAD + 1))
+                            .firstOrNull { it >= 0 && similar(anchor[it], normalised[at]) }
+                    if (hit == null) {
+                        if (first == null && words[at].start >= cue.end - OVERLAP_SLACK_SECONDS) continue
+                        break
+                    }
+                    next = hit - 1
+                    first = at
+                    if (next < 0) break
+                }
+                until = first ?: words.indexOfFirst { it.start >= cue.start - 0.1 }.let { if (it < 0) words.size else maxOf(it, from) }
                 anchorRight = "time"
             }
         }
@@ -181,7 +221,12 @@ internal object WindowRepair {
             var end = if (whole) clock(original.end) else segmentWords.last().end
             if (floor != null) start = maxOf(start, floor)
             if (ceiling != null) end = minOf(end, ceiling)
-            out += segmentWords.map { it.copy(segment = cues.size) }
+            // Words kept from over an anchor's span belong after it, not inside it.
+            out +=
+                segmentWords.map {
+                    val wordStart = it.start.coerceIn(floor ?: it.start, ceiling ?: it.start)
+                    it.copy(start = wordStart, end = it.end.coerceIn(wordStart, maxOf(wordStart, ceiling ?: it.end)), segment = cues.size)
+                }
             cues += Cue(start, maxOf(start, end), text)
         }
         return Replacement(
@@ -330,6 +375,43 @@ internal object WindowRepair {
             }
         }
         return replacement.copy(cues = cues, words = words)
+    }
+
+    /** Anchor words a garbled rendering may skip past and still be counted as the anchor. */
+    private const val ANCHOR_LOOKAHEAD = 3
+
+    /** The same word as whisper might render it twice: equal, one a prefix of the other, or a letter or two off. */
+    private fun similar(
+        a: String,
+        b: String,
+    ): Boolean {
+        if (a == b) return true
+        if (minOf(a.length, b.length) >= 3 && (a.startsWith(b) || b.startsWith(a))) return true
+        val allowed =
+            if (maxOf(a.length, b.length) >= 7) {
+                2
+            } else if (maxOf(a.length, b.length) >= 4) {
+                1
+            } else {
+                0
+            }
+        return allowed > 0 && editDistance(a, b) <= allowed
+    }
+
+    private fun editDistance(
+        a: String,
+        b: String,
+    ): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in 1..a.length) {
+            val current = IntArray(b.length + 1)
+            current[0] = i
+            for (j in 1..b.length) {
+                current[j] = minOf(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + if (a[i - 1] == b[j - 1]) 0 else 1)
+            }
+            previous = current
+        }
+        return previous[b.length]
     }
 
     private fun normalise(word: String): String = word.lowercase().filter { it.isLetterOrDigit() }

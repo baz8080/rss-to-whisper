@@ -265,6 +265,38 @@ internal object WindowRepair {
         return lost
     }
 
+    /** How far a cue's words may run into non-speech at either end before they are moved onto the speech. */
+    private const val MAX_WORDS_OUTSIDE_SPEECH_SECONDS = 1.0
+
+    /**
+     * After music, whisper starts a segment at its 30 s window's edge and smears
+     * the words across the music: a cue whose speech begins at 49.4 s had its
+     * first word at 29.8 s. Its words are mapped, in order, onto the stretch VAD
+     * hears as speech, and the cue's edges moved with them.
+     */
+    private fun fitToSpeech(
+        cue: Cue,
+        words: List<Word>,
+        speech: List<TimeWindow>,
+    ): Pair<Cue, List<Word>> {
+        if (words.isEmpty()) return cue to words
+        val inside = speech.filter { it.end > cue.start && it.start < cue.end }
+        if (inside.isEmpty()) return cue to words
+        val onset = maxOf(cue.start, inside.first().start)
+        val offset = minOf(cue.end, inside.last().end)
+        val first = words.first().start
+        val last = words.last().end
+        val early = onset - first > MAX_WORDS_OUTSIDE_SPEECH_SECONDS
+        val late = last - offset > MAX_WORDS_OUTSIDE_SPEECH_SECONDS
+        if (!early && !late || last <= first) return cue to words
+        val to0 = if (early) onset else first
+        val to1 = if (late) offset else last
+        if (to1 <= to0) return cue to words
+        val map = { t: Double -> to0 + (t - first) * (to1 - to0) / (last - first) }
+        val moved = words.map { it.copy(start = map(it.start), end = map(it.end)) }
+        return Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
+    }
+
     /** Whether the base cues in [range] lie over non-speech, which is what makes removing them a repair. */
     fun silent(
         base: WhisperTranscription,
@@ -285,8 +317,9 @@ internal object WindowRepair {
         val words = mutableListOf<Word>()
         for ((index, cue) in replacement.cues.withIndex()) {
             if (heard(cue.start, cue.end, speech) >= MIN_SPEECH_SECONDS) {
-                words += bySegment[index].orEmpty().map { it.copy(segment = cues.size) }
-                cues += cue
+                val (fitted, fittedWords) = fitToSpeech(cue, bySegment[index].orEmpty(), speech)
+                words += fittedWords.map { it.copy(segment = cues.size) }
+                cues += fitted
             } else if (MUSIC.matches(cue.text.trim())) {
                 val previous = cues.lastOrNull()
                 if (previous != null && previous.text.trim() == "♪") {

@@ -314,4 +314,27 @@ class WindowRepairTest {
 
         assertEquals(setOf(0, 1, 2), WindowRepair.defectCues(cues, prompt))
     }
+
+    /** Measured: a cue whose speech starts at 49.4 s had its first word at 29.8 s, smeared across an intro. */
+    @Test
+    fun `words smeared across music before the speech are moved onto it`() {
+        val replacement =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(29.7, 55.4, " astronomy cast episode seven")),
+                listOf(
+                    Word(" astronomy", 29.8, 34.0, 0.9, 0),
+                    Word(" cast", 34.1, 36.0, 0.9, 0),
+                    Word(" episode", 36.1, 39.0, 0.9, 0),
+                    Word(" seven", 54.0, 55.4, 0.9, 0),
+                ),
+            )
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(49.4, 55.4)))
+
+        assertEquals(49.4, fitted.cues.single().start, 0.01)
+        assertEquals(49.4, fitted.words.first().start, 0.01)
+        assertTrue(fitted.words.zipWithNext().all { (a, b) -> a.start <= b.start })
+        assertEquals(55.4, fitted.words.last().end, 0.01)
+    }
 }

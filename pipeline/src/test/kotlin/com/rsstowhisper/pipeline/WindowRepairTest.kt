@@ -144,6 +144,40 @@ class WindowRepairTest {
         assertEquals(" His recordings never go out of print.", replacement.cues.last().text)
     }
 
+    /** Measured: the decode skipped "Did he..." and smeared "Nobody" 1.5 s back into it. */
+    @Test
+    fun `words smeared into an anchor the decode skipped are kept when they open the next cue`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " Did he..."),
+                Cue(6.0, 9.0, " Nobody knows."),
+            ) + (0 until 3).map { Cue(9.0 + it * 3, 12.0 + it * 3, loopText) } +
+                listOf(Cue(18.0, 21.0, " And then we found something odd."), Cue(21.0, 24.0, " Nobody expected that part at all."))
+        val base = transcription(cues)
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(4.5, 9.0, " Nobody knows."), Cue(9.0, 18.0, " A detail."), Cue(18.0, 21.0, " And then we found something odd.")),
+                listOf(
+                    Word(" Nobody", 4.5, 6.2, 0.9, 0),
+                    Word(" knows.", 6.2, 9.0, 0.9, 0),
+                    Word(" A", 9.0, 13.0, 0.9, 1),
+                    Word(" detail.", 13.0, 18.0, 0.9, 1),
+                ) +
+                    listOf(" And", " then", " we", " found", " something", " odd.").mapIndexed {
+                            i,
+                            t,
+                        ->
+                        Word(t, 18.0 + i * 0.5, 18.5 + i * 0.5, 0.9, 2)
+                    },
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(3, 4, 5))
+
+        assertEquals("time", replacement.anchorLeft)
+        assertEquals(" Nobody knows.", replacement.cues.first().text)
+    }
+
     @Test
     fun `a splice renumbers the words after it`() {
         val base = transcription(looping())

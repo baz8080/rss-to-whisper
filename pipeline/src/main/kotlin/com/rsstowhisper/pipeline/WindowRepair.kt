@@ -270,7 +270,9 @@ internal object WindowRepair {
                 oldLeft = anchorWords(left).last().end
                 anchorLeft = "text"
             } else {
-                from = walkLeft(words, normalised, content, base.cues[left], anchorWords(left).map { normalise(it.text) }, shift)
+                val anchor = anchorWords(left).map { normalise(it.text) }
+                val next = (left + 1).takeIf { it in inner && it !in defects }?.let { cue -> anchorWords(cue).map { normalise(it.text) } }
+                from = walkLeft(words, normalised, content, base.cues[left], anchor, shift, next.orEmpty())
                 anchorLeft = "time"
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
@@ -369,6 +371,7 @@ internal object WindowRepair {
         cue: Cue,
         anchor: List<String>,
         shift: Double,
+        following: List<String>,
     ): Int {
         fun hit(
             next: Int,
@@ -405,7 +408,11 @@ internal object WindowRepair {
             i++
         }
         if (last >= 0) return last + 1
-        return words.indexOfFirst { it.start + shift >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+        val cut = words.indexOfFirst { it.start + shift >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+        // No anchor word at all: words timed inside it that open the cue after it were smeared early, not the anchor.
+        val head = following.take(ANCHOR_WORDS)
+        if (head.size < 2) return cut
+        return matches(content.map { normalised[it] }, head).map { content[it] }.firstOrNull { it < cut } ?: cut
     }
 
     /** [walkLeft] from the other end, past any words whisper ran on with beyond the window. */

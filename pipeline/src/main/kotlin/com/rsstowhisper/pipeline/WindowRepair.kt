@@ -80,16 +80,35 @@ internal object WindowRepair {
         return defects
     }
 
-    /** More words than anyone says in the time: [MIN_CRAMMED_WORDS] or more at over [MAX_WORDS_PER_SECOND]. */
-    private fun crammed(cue: Cue): Boolean {
+    /** More words than anyone says in the time: [least] or more at over [MAX_WORDS_PER_SECOND]. */
+    private fun crammed(
+        cue: Cue,
+        least: Int = MIN_CRAMMED_WORDS,
+    ): Boolean {
         val words = Prompt.wordsOf(cue.text).size
-        return words >= MIN_CRAMMED_WORDS && cue.end - cue.start < words / MAX_WORDS_PER_SECOND
+        return words >= least && cue.end - cue.start < words / MAX_WORDS_PER_SECOND
     }
 
     private const val MAX_WORDS_PER_SECOND = 20.0
 
     /** Only ever judged beside a defect, at a window's edge or in a new decode: "but also how peer" in 0.14 s. */
     private const val MIN_CRAMMED_WORDS = 3
+
+    /** In a new decode, where a better attempt may be had: "make maneuverability." at no length at all. */
+    private const val MIN_CRAMMED_WORDS_IN_DECODE = 2
+
+    /** What whisper writes over music and silence from its training subtitles, seen held 10 s or more in this corpus. */
+    private val STOCK by lazy {
+        listOf(
+            "I'll see you next time.",
+            "Thanks for watching.",
+            "Thank you for watching.",
+            "Transcription by CastingWords",
+            "Transcription by ESO. Translation by",
+            "Transcript Emily Beynon",
+            "BF-WATCH TV 2021",
+        ).map { Prompt(it) }
+    }
 
     /**
      * A cue of this many words in no time. Alone it is too common to call: over
@@ -854,7 +873,12 @@ internal object WindowRepair {
         val said = replacement.range.filter { it !in defects }.map { Prompt.wordsOf(base.cues[it].text) }.toSet()
         val leaks = inside.filter { prompt.voices(spliced.cues[it].text) && Prompt.wordsOf(spliced.cues[it].text) !in said }
         // At its own 30 s boundaries a window decode crams in paraphrases of what it just said.
-        val crammed = inside.filter { crammed(spliced.cues[it]) }
-        return (defectCues(spliced.cues, prompt) + leaks + crammed).count { it in inside }
+        val crammed = inside.filter { crammed(spliced.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
+        val stock =
+            inside.filter {
+                    cue ->
+                STOCK.any { it.voices(spliced.cues[cue].text) } && Prompt.wordsOf(spliced.cues[cue].text) !in said
+            }
+        return (defectCues(spliced.cues, prompt) + leaks + crammed + stock).count { it in inside }
     }
 }

@@ -483,6 +483,26 @@ class WindowRepairTest {
         assertEquals(1, WindowRepair.defectsAfter(base, replacement))
     }
 
+    /** Measured: a decode skipped "Astronomycast" and wrote whisper's stock "I'll see you next time." where it is said. */
+    @Test
+    fun `a stock phrase a window decode brings, and the base did not say, is a defect`() {
+        val base = transcription(looping())
+        val cues = listOf(Cue(6.0, 7.0, " I'll see you next time."), Cue(7.0, 18.0, " Today we are talking about the telescope."))
+        val replacement = WindowRepair.Replacement(2..5, cues, transcription(cues).words)
+
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement))
+    }
+
+    /** Measured: a prompted decode's "make maneuverability." at no length, where the unprompted one had it right. */
+    @Test
+    fun `two words at no length in a window decode are a defect`() {
+        val base = transcription(looping())
+        val cues = listOf(Cue(6.0, 18.0, " Today we are talking about the telescope."), Cue(18.0, 18.0, " make maneuverability."))
+        val replacement = WindowRepair.Replacement(2..5, cues, transcription(cues).words)
+
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement))
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

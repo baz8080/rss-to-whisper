@@ -205,12 +205,15 @@
             return audioEl.readyState >= 1 ? audioEl.currentTime : (pendingStart || 0);
         }
 
+        // whisper times a cue's first word late, often onto the second, so playback starts a little early.
+        const LEAD_IN_SECONDS = 0.2;
+
         function seekAudio(seconds) {
             // Before the guard: an episode with no audio still has a transcript
             // worth linking to.
             rememberPosition(seconds);
             if (!audioEl) return;
-            startAudioAt(seconds);
+            startAudioAt(Math.max(0, seconds - LEAD_IN_SECONDS));
             if (audioEl.paused) audioEl.play();
         }
 
@@ -283,7 +286,7 @@
         function openAtTime(seconds) {
             // Armed first: the assignment can raise events, and none of them
             // should arrive after the cue below has been marked.
-            startAudioAt(seconds);
+            startAudioAt(Math.max(0, seconds - LEAD_IN_SECONDS));
             const line = findActiveLine(seconds * 1000);
             if (line) {
                 if (activeLine) activeLine.classList.remove('active');

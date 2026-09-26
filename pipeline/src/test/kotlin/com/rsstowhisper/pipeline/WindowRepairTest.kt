@@ -560,6 +560,32 @@ class WindowRepairTest {
         assertEquals(listOf(" Today we talk about the telescope."), replacement.cues.map { it.text })
     }
 
+    /** Measured: the decode's "dexterous", three tokens, before an anchor the original rendered as "dexters come and rescue you." */
+    @Test
+    fun `a word split into tokens is still recognised as the right anchor's own`() {
+        val cues =
+            looping().take(6) +
+                listOf(
+                    Cue(18.0, 21.0, " dexters come and rescue you."),
+                    Cue(21.0, 24.0, " Nobody expected that part at all."),
+                )
+        val base = transcription(cues)
+        val left = transcription(listOf(Cue(3.0, 6.0, " We looked at the data again, carefully."))).words
+        val tokens =
+            listOf(" Your", " crewmates", " are", " fully").mapIndexed { i, t -> Word(t, 6.0 + i * 2.5, 8.0 + i * 2.5, 0.9, 1) } +
+                listOf(" de", "xter", "ous").mapIndexed { i, t -> Word(t, 17.4 + i * 0.2, 17.6 + i * 0.2, 0.9, 1) } +
+                listOf(" come", " and", " rescue", " you.").mapIndexed { i, t -> Word(t, 18.2 + i * 0.6, 18.8 + i * 0.6, 0.9, 1) }
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(3.0, 6.0, " We looked at the data again, carefully."), Cue(6.0, 21.0, tokens.joinToString("") { it.text })),
+                left + tokens,
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" Your crewmates are fully", replacement.cues.last().text)
+    }
+
     /** Barry heard "AI might be the" missing: whisper timed them inside the anchor cue, and a time cut dropped them. */
     @Test
     fun `words timed over an anchor that the anchor does not account for are kept`() {

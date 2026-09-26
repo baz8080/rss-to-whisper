@@ -292,19 +292,8 @@ internal object WindowRepair {
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
             while (from < words.size && normalised[from].isEmpty()) from++
-            val again =
-                content.firstOrNull { it >= from }?.let {
-                    repeated(
-                        words,
-                        it,
-                        anchorWords(left).map {
-                                w ->
-                            normalise(w.text)
-                        },
-                        true,
-                    )
-                }
-            if (!again.isNullOrEmpty()) {
+            val again = repeated(words, (from until words.size).toList(), anchorWords(left), closesAnchor = true)
+            if (again.isNotEmpty()) {
                 from = again.last() + 1
                 while (from < words.size && normalised[from].isEmpty()) from++
             }
@@ -325,19 +314,8 @@ internal object WindowRepair {
                 until = walkRight(words, normalised, content, base.cues[right], anchorWords(right).map { normalise(it.text) }, shift, from)
                 anchorRight = "time"
             }
-            val again =
-                content.lastOrNull { it in from until until }?.let {
-                    repeated(
-                        words,
-                        it,
-                        anchorWords(right).map {
-                                w ->
-                            normalise(w.text)
-                        },
-                        false,
-                    )
-                }
-            if (!again.isNullOrEmpty()) until = again.first()
+            val again = repeated(words, (from until until).toList(), anchorWords(right), closesAnchor = false)
+            if (again.isNotEmpty()) until = again.first()
         }
 
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
@@ -734,31 +712,43 @@ internal object WindowRepair {
     private const val ANCHOR_LOOKAHEAD = 3
 
     /**
-     * whisper can end a segment and open the next on the same words ("fully dexterous" / "dexters come", "I'm Frisian." /
-     * "I'm Frisian Cain."). The spoken words at the end, or start, of [at]'s segment that are the anchor's [edge] again.
+     * The decode's spoken words beside an anchor that are the anchor's own edge words again ("fully dexterous" /
+     * "dexters come", "I'm Frisian." / "I'm Frisian Cain."): whisper repeating them across a break, or rendering the
+     * anchor's a little differently. [beside] is the decode's words after the left anchor, or before the right one.
      */
     private fun repeated(
         words: List<Word>,
-        at: Int,
-        edge: List<String>,
-        opensSegment: Boolean,
+        beside: List<Int>,
+        anchor: List<Word>,
+        closesAnchor: Boolean,
     ): List<Int> {
-        val spoken = words.indices.filter { words[it].segment == words[at].segment && normalise(words[it].text).isNotEmpty() }
-        if (at != if (opensSegment) spoken.first() else spoken.last()) return emptyList()
-        for (k in minOf(MAX_REPEATED_WORDS, spoken.size, edge.size) downTo 1) {
-            val own = if (opensSegment) spoken.take(k) else spoken.takeLast(k)
-            val said = own.map { normalise(words[it].text) }
-            val theirs = if (opensSegment) edge.takeLast(k) else edge.take(k)
+        val own = spoken(beside.map { words[it] }).map { group -> group.map { beside[it] } }
+        val theirs = spoken(anchor).map { group -> normalise(group.joinToString("") { anchor[it].text }) }
+        for (k in minOf(MAX_REPEATED_WORDS, own.size, theirs.size) downTo 1) {
+            val mine = if (closesAnchor) own.take(k) else own.takeLast(k)
+            val said = mine.map { group -> normalise(group.joinToString("") { words[it].text }) }
+            val edge = if (closesAnchor) theirs.takeLast(k) else theirs.take(k)
             // One word is let off a letter or two, as the anchor's rendering of it may be; a short one never is.
             val same =
                 if (k == 1) {
-                    minOf(said[0].length, theirs[0].length) >= MIN_REPEATED_WORD_LETTERS && similar(said[0], theirs[0])
+                    minOf(said[0].length, edge[0].length) >= MIN_REPEATED_WORD_LETTERS && similar(said[0], edge[0])
                 } else {
-                    said == theirs
+                    said == edge
                 }
-            if (same) return own
+            if (same) return mine.flatten()
         }
         return emptyList()
+    }
+
+    /** Tokens grouped into the words they spell, punctuation left out: whisper splits "dexterous" as "de", "xter", "ous". */
+    private fun spoken(tokens: List<Word>): List<List<Int>> {
+        val groups = mutableListOf<MutableList<Int>>()
+        for ((i, token) in tokens.withIndex()) {
+            if (normalise(token.text).isEmpty()) continue
+            val opens = groups.isEmpty() || token.text.startsWith(" ") || normalise(tokens[i - 1].text).isEmpty()
+            if (opens) groups += mutableListOf(i) else groups.last() += i
+        }
+        return groups
     }
 
     private const val MAX_REPEATED_WORDS = 4

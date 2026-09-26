@@ -201,6 +201,43 @@ class WindowRepairTest {
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
+    /** Measured: a prompted decode skipped two sentences and smeared its next four words across 10 s of speech. */
+    @Test
+    fun `of two clean attempts the one whose words sit on the speech is kept`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val smeared =
+            serverJson(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " if Euclid goes far."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+        val dense =
+            serverJson(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 10.0, " The WISE data set was looked through to see what could be found."),
+                Cue(10.0, 14.0, " I'm sure the Roman data set is going to be looked through."),
+                Cue(14.0, 18.0, " I don't know if Euclid goes far enough into the infrared."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(smeared, dense),
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 27.0))),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        assertEquals(listOf(true, false), txSvc.conditioned)
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("The WISE data set" in vtt)
+        assertFalse("if Euclid goes far." in vtt)
+    }
+
     @Test
     fun `a pair from two decodes is not repaired`(
         @TempDir tempDir: Path,

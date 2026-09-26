@@ -1232,7 +1232,7 @@ class PodcastPipeline(
         label: String,
     ): Boolean {
         if (transcription.words.isEmpty()) {
-            logger.warn("No word timestamps for $label; is token_timestamps still set?")
+            if (transcription.cues.isNotEmpty()) logger.warn("No word timestamps for $label; is token_timestamps still set?")
             return false
         }
         return try {
@@ -1529,6 +1529,8 @@ class PodcastPipeline(
     /**
      * Every attempt at one window, keeping the one that leaves it with fewest defects and no speech lost. An attempt
      * whose new words reach seconds into an anchor says that anchor is not what was said there, and is refused.
+     * Between equals, the one whose words sit closest to the speech VAD hears wins: a prompted decode can skip two
+     * sentences and smear its next words across them, where the unprompted one transcribes them.
      */
     private fun tryWindow(
         base: WhisperTranscription,
@@ -1543,6 +1545,7 @@ class PodcastPipeline(
         var best: WindowRepair.Replacement? = null
         var bestDefects = defects.count { it in range }
         var bestConditioned = true
+        var bestThin = Double.MAX_VALUE
         val lost = mutableListOf<Double>()
         var disputedLeft = false
         var disputedRight = false
@@ -1556,18 +1559,21 @@ class PodcastPipeline(
             val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
             // Nothing said is a repair only where VAD confirms nothing is said.
             if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
-            val missed = WindowRepair.lostSpeech(base, replacement, speech ?: WindowRepair.spokenIn(base, replacement.range, defects))
+            val spoken = speech ?: WindowRepair.spokenIn(base, replacement.range, defects)
+            val missed = WindowRepair.lostSpeech(base, replacement, spoken)
             if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
                 lost += missed
                 continue
             }
             val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
-            if (after < bestDefects) {
+            val thin = speech?.let { WindowRepair.lostSpeech(base, replacement, it, WindowRepair.CLOSE_COVER_SECONDS) } ?: 0.0
+            if (after < bestDefects || (best != null && after == bestDefects && thin < bestThin)) {
                 best = replacement
                 bestDefects = after
                 bestConditioned = conditioned
+                bestThin = thin
             }
-            if (bestDefects == 0) break
+            if (bestDefects == 0 && bestThin <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
         }
         return Tried(best, bestDefects, bestConditioned, lost, disputedLeft, disputedRight)
     }

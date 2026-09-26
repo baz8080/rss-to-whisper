@@ -517,6 +517,9 @@ internal object WindowRepair {
     /** Speech this close to where a word starts counts as covered by it. */
     private const val COVER_SLACK_SECONDS = 1.5
 
+    /** Closer than that: a decode that skips a sentence smears its next words across the gap, a word every second or two. */
+    const val CLOSE_COVER_SECONDS = 0.5
+
     /**
      * Seconds of speech between the anchors that no cue of [replacement] covers.
      * whisper can skip a whole 30 s window of real speech and carry on after it,
@@ -526,11 +529,12 @@ internal object WindowRepair {
         base: WhisperTranscription,
         replacement: Replacement,
         speech: List<TimeWindow>,
+        slack: Double = COVER_SLACK_SECONDS,
     ): Double {
         val from = replacement.range.first.let { if (it > 0) base.cues[it - 1].end else base.cues[it].start }
         val to = replacement.range.last.let { if (it + 1 < base.cues.size) base.cues[it + 1].start else base.cues[it].end }
         // By word, not by cue: a stretched cue spans the seconds it skipped.
-        val covered = replacement.words.map { (it.start - COVER_SLACK_SECONDS)..(it.start + COVER_SLACK_SECONDS) }
+        val covered = replacement.words.map { (it.start - slack)..(it.start + slack) }
         var lost = 0.0
         for (span in speech) {
             val start = maxOf(span.start, from)

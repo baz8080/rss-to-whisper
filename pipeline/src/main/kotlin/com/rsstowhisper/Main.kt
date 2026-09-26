@@ -68,7 +68,7 @@ fun main(argv: Array<String>) {
         }
 
     // Its stdout is the list --retranscribe-list reads back, so everything else goes to stderr.
-    if (args.verifyPairs) logToStderr()
+    if (args.verifyPairs || args.listDefects) logToStderr()
 
     if (config.verbose) {
         val loggerContext = LoggerFactory.getILoggerFactory() as LoggerContext
@@ -98,6 +98,8 @@ fun main(argv: Array<String>) {
         try {
             if (args.verifyPairs) {
                 pipeline.verifyPairs()
+            } else if (args.listDefects) {
+                pipeline.listDefects()
             } else if (args.isRetranscribe) {
                 pipeline.retranscribe(
                     RetranscribeRequest(
@@ -115,7 +117,7 @@ fun main(argv: Array<String>) {
         } finally {
             // A run that died still has to say so: silence is the one outcome
             // indistinguishable from a run that never launched.
-            (if (args.verifyPairs) System.err else System.out).println(tally.summary(logPath))
+            (if (args.verifyPairs || args.listDefects) System.err else System.out).println(tally.summary(logPath))
             // Without the log path -- it is a local filesystem path, and the
             // notification may land on a public topic.
             config.notifyUrl?.takeIf { it.isNotBlank() }?.let { Notifier().notify(it, tally.summary(null)) }

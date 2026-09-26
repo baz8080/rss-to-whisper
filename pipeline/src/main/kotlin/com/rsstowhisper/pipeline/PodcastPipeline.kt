@@ -431,6 +431,56 @@ class PodcastPipeline(
         return diverged + unreadable == 0
     }
 
+    /**
+     * Every episode --repair-windows would find something in, by the same rules: one <podcast>/<episode> per line,
+     * then its defect cues, windows and each kind, so the output works as a --retranscribe-list. Reads only.
+     */
+    fun listDefects(out: Appendable = System.out): Boolean {
+        val dataDir = Path.of(config.dataDirectory)
+        if (!Files.isDirectory(dataDir)) {
+            logger.error("The data_dir $dataDir is missing. Cannot list its defects")
+            return false
+        }
+        val dirs =
+            try {
+                RetranscribeTargets.episodeDirs(dataDir, strict = true).filter { Files.exists(it.resolve(TRANSCRIPT_FILENAME)) }
+            } catch (e: Exception) {
+                logger.error("Cannot list every episode under $dataDir, so cannot check them all", e)
+                return false
+            }
+        logger.info("Listing defects in ${dirs.size} episodes")
+        val pool = Executors.newFixedThreadPool(VERIFY_THREADS)
+        val lines =
+            try {
+                dirs.map { dir -> pool.submit(Callable { defectLine(dir) }) }.map { it.get() }
+            } finally {
+                pool.shutdownNow()
+            }
+        val found = lines.filterNotNull()
+        found.forEach { out.append(it).append('\n') }
+        logger.info("${found.size} of ${dirs.size} episodes have defects to repair")
+        return true
+    }
+
+    private fun defectLine(dir: Path): String? {
+        val label = "${dir.parent.fileName}/${dir.fileName}"
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            val existing = jsonMapper.readValue(Files.readString(dir.resolve(TRANSCRIPT_FILENAME)), Map::class.java) as Map<String, Any?>
+            val parsed = TranscriptPair.parseCues(existing["episode_transcript"]?.toString().orEmpty())
+            if (parsed.any { it.start == null || it.end == null }) return "$label\tunparseable"
+            val cues = parsed.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
+            val podcast = podcastForDir(config.podcasts, dir.parent.fileName.toString())
+            val prompt = WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt)
+            val defects = WindowRepair.defectCues(cues, prompt)
+            if (defects.isEmpty()) return null
+            val kinds = WindowRepair.defectKinds(cues, prompt).entries.joinToString("\t") { "${it.key}=${it.value}" }
+            "$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds"
+        } catch (e: Exception) {
+            "$label\tcould not be read: ${e.message}"
+        }
+    }
+
     /** Matches the directory back to its feed so the decode keeps the podcast's language. */
     private fun podcastFor(episodeDirPath: Path): PodcastConfig {
         val podcastDir = episodeDirPath.parent.fileName.toString()

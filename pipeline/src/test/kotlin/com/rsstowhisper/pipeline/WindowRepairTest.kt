@@ -246,6 +246,20 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `list-defects names each episode the repair would work on, with its kinds`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+        val out = StringBuilder()
+
+        assertTrue(pipeline.listDefects(out))
+
+        assertEquals("Show/${dir.fileName}\tdefects=4\twindows=1\tloop=4\tstretch=0\techo=0\tcopy=0\tleak=0\n", out.toString())
+        assertEquals(0, txSvc.calls.size)
+    }
+
+    @Test
     fun `a window no better than it was is tried both ways twice, then left alone`(
         @TempDir tempDir: Path,
     ) {

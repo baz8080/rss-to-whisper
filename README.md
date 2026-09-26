@@ -553,6 +553,7 @@ below supply the three required values.
 | `--dump-audio-chapters <dir>` | No equivalent; see [Chapters inside the audio](#chapters-inside-the-audio) |
 | `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-list <file>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 | `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
+| `--list-defects` | No equivalent; see [Repairing windows](#repairing-windows) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -802,6 +803,9 @@ prompted decode voices the prompt.
 - Only a pair already from one decode is repaired. The result gets a new run id;
   `whisper_run.base_run` is the pair it was spliced into and `whisper_run.repairs`
   records each window, its anchors and gaps, and what was refused.
+
+`--list-defects` prints every episode the repair would find something in, with counts by kind,
+as a list that works with `--retranscribe-list`. It only reads.
 
 ### Re-transcribing an episode
 

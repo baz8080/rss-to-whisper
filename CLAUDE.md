@@ -64,7 +64,8 @@ prints a warning/error count when it finishes. Every run also writes what it did
 `transcript.json` and `words.jsonl.gz` are written only together, by `writeTranscriptArtifacts`,
 and carry the same run id (`whisper_run.run_id`, and `run` on every word line). Nothing else may
 write either file. `--verify-pairs` lists every episode whose pair disagrees, and
-`--retranscribe-list <file>` re-transcribes such a list.
+`--retranscribe-list <file>` re-transcribes such a list. `--list-defects` lists every episode `--repair-windows` would
+find something in.
 
 `--repair-windows` with any re-transcription target re-decodes only the windows around
 loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues

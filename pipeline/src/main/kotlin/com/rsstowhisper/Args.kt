@@ -42,6 +42,9 @@ internal val USAGE =
                              words.jsonl.gz came from one decode. Prints one
                              <podcast>/<episode> and reason per offender, exits
                              1 if there are any. Never contacts whisper
+      --list-defects         List every episode --repair-windows would find
+                             loops, copies, echoes or leaks in, with counts by
+                             kind; works as a --retranscribe-list. Reads only
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -91,6 +94,7 @@ internal data class Args(
     val retranscribeForce: Boolean = false,
     val retranscribeList: String? = null,
     val verifyPairs: Boolean = false,
+    val listDefects: Boolean = false,
     val repairWindows: Boolean = false,
     val help: Boolean = false,
 ) {
@@ -111,6 +115,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--whisper-url" -> args.copy(whisperServerUrl = valueFor(flag, argv, ++i))
                 "--whisper-model" -> args.copy(whisperModel = valueFor(flag, argv, ++i))
                 "--verify-pairs" -> args.copy(verifyPairs = true)
+                "--list-defects" -> args.copy(listDefects = true)
                 "--repair-windows" -> args.copy(repairWindows = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
@@ -165,6 +170,9 @@ internal fun parseArgs(argv: Array<String>): Args {
     }
     if (args.verifyPairs && args.isRetranscribe) {
         error("--verify-pairs cannot be combined with re-transcription; it runs after every batch anyway")
+    }
+    if (args.listDefects && (args.isRetranscribe || args.verifyPairs)) {
+        error("--list-defects only reads; run its output with --retranscribe-list and --repair-windows")
     }
     return args
 }

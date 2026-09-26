@@ -50,21 +50,51 @@ internal object WindowRepair {
         prompt: Prompt = Prompt.NONE,
     ): Set<Int> {
         val defects = TranscriptQuality.stretchCopyCues(cues).toMutableSet()
+        defects += loops(cues) + echoes(cues) + longCopies(cues) + leaks(cues, prompt)
+        // A cue of many words in no time beside a defect is part of it, and must not be kept as an anchor.
+        val crammed = cues.indices.filter { crammed(cues[it]) }.toSet()
+        var grew = true
+        while (grew) grew = defects.addAll(defects.flatMap { listOf(it - 1, it + 1) }.filter { it in crammed })
+        return defects
+    }
+
+    /** How many cues of each kind of defect, as [defectCues] finds them. */
+    fun defectKinds(
+        cues: List<Cue>,
+        prompt: Prompt = Prompt.NONE,
+    ): Map<String, Int> =
+        mapOf(
+            "loop" to loops(cues).size,
+            "stretch" to TranscriptQuality.stretchCopyCues(cues).size,
+            "echo" to echoes(cues).size,
+            "copy" to longCopies(cues).size,
+            "leak" to leaks(cues, prompt).size,
+        )
+
+    /** Runs of identical cues, with the cue either side that holds the loop's first or last lap. */
+    private fun loops(cues: List<Cue>): Set<Int> {
+        val loops = mutableSetOf<Int>()
         var i = 0
         while (i < cues.size) {
             val key = cues[i].text.trim().lowercase()
             var j = i
             while (key.isNotEmpty() && j + 1 < cues.size && cues[j + 1].text.trim().lowercase() == key) j++
             if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN) {
-                defects.addAll(i..j)
+                loops.addAll(i..j)
                 // The loop's first lap usually arrives inside the cue before it, which
                 // must not survive as the repair's anchor.
-                if (i > 0 && cues[i - 1].text.lowercase().contains(key)) defects += i - 1
-                if (j + 1 < cues.size && cues[j + 1].text.lowercase().contains(key)) defects += j + 1
+                if (i > 0 && cues[i - 1].text.lowercase().contains(key)) loops += i - 1
+                if (j + 1 < cues.size && cues[j + 1].text.lowercase().contains(key)) loops += j + 1
             }
             i = j + 1
         }
-        defects += echoes(cues) + longCopies(cues)
+        return loops
+    }
+
+    private fun leaks(
+        cues: List<Cue>,
+        prompt: Prompt,
+    ): Set<Int> {
         val voiced = cues.map { prompt.voices(it.text) }
         val leaks = cues.indices.filter { voiced[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
         // A short copy beside a leak is the same leak, and must not be kept as an anchor.
@@ -72,12 +102,7 @@ internal object WindowRepair {
         while (grew) {
             grew = leaks.addAll(leaks.flatMap { listOf(it - 1, it + 1) }.filter { it in cues.indices && voiced[it] })
         }
-        defects += leaks
-        // A cue of many words in no time beside a defect is part of it, and must not be kept as an anchor.
-        val crammed = cues.indices.filter { crammed(cues[it]) }.toSet()
-        grew = true
-        while (grew) grew = defects.addAll(defects.flatMap { listOf(it - 1, it + 1) }.filter { it in crammed })
-        return defects
+        return leaks
     }
 
     /** More words than anyone says in the time: [least] or more at over [MAX_WORDS_PER_SECOND]. */

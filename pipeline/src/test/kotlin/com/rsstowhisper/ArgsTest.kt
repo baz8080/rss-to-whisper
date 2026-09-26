@@ -209,6 +209,13 @@ class ArgsTest {
     }
 
     @Test
+    fun `list-defects only reads`() {
+        assertTrue(parseArgs(arrayOf("--list-defects")).listDefects)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--retranscribe-id", "abcd1234")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--verify-pairs")) }
+    }
+
+    @Test
     fun `verify-pairs is its own run`() {
         assertTrue(parseArgs(arrayOf("--verify-pairs")).verifyPairs)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--verify-pairs", "--retranscribe-id", "abcd1234")) }

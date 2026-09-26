@@ -16,6 +16,7 @@ import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeechDetector
+import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.TranscriberUnavailable
@@ -30,6 +31,7 @@ import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
 import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
@@ -198,6 +200,7 @@ class PodcastPipeline(
 
         logger.info("Re-transcribing ${targets.size} episodes")
         var done = 0
+        var vadFailed = false
         for (target in targets) {
             val attempted =
                 try {
@@ -206,6 +209,10 @@ class PodcastPipeline(
                     true
                 } catch (e: WordTimesMisplaced) {
                     logger.error("Stopping: ${e.message}")
+                    break
+                } catch (e: SpeechDetectorFailed) {
+                    logger.error("Stopping: ${e.message}. Fix vad_binary/vad_model, or remove them to repair without VAD")
+                    vadFailed = true
                     break
                 } catch (e: TranscriberUnavailable) {
                     // Nothing was decoded, so nothing was learned about this
@@ -222,7 +229,7 @@ class PodcastPipeline(
         }
         logger.info("Re-transcribed $done of ${targets.size} episodes")
         val paired = verifyBatch(targets)
-        return decodingWorked() && paired
+        return decodingWorked() && paired && !vadFailed
     }
 
     /** Every target, written or not: one this run declined to replace can still be a broken pair. */
@@ -350,7 +357,9 @@ class PodcastPipeline(
             scored.transcription.durationSeconds?.let { updated["episode_duration"] = it }
         }
 
-        if (!writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true)) return false
+        if (!writeTranscriptArtifacts(episodeDirPath, label, scored.transcription, updated, replace = true, runIdOf(existing))) {
+            return false
+        }
         logger.info("Re-transcribed $label")
         return true
     }
@@ -537,8 +546,11 @@ class PodcastPipeline(
                             podcast,
                             entry.title ?: episode.episodeDirPath.fileName.toString(),
                         )
-                    writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)
-                    counts.transcribed++
+                    if (writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)) {
+                        counts.transcribed++
+                    } else {
+                        counts.failed++
+                    }
                 } catch (e: Exception) {
                     // An Error on the prefetch thread arrives wrapped, and must still end the run.
                     val cause = (e as? ExecutionException)?.cause ?: e
@@ -915,12 +927,12 @@ class PodcastPipeline(
         episodeDirPath: Path,
         collections: List<String>,
         scored: ScoredTranscription,
-    ) {
+    ): Boolean {
         val transcription = scored.transcription
-        if (Files.exists(episodeDirPath.resolve(TRANSCRIPT_FILENAME))) return
+        if (Files.exists(episodeDirPath.resolve(TRANSCRIPT_FILENAME))) return true
         if (transcription.isEmpty) {
             logger.warn("Transcription for ${entry.title} came back empty; not writing transcript.json")
-            return
+            return true
         }
 
         val episodeDict =
@@ -931,15 +943,17 @@ class PodcastPipeline(
                 collections,
                 scored.quality,
                 mp3Info.filePath,
-            ) ?: return
+            ) ?: return true
 
-        writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
+        return writeTranscriptArtifacts(episodeDirPath, entry.title ?: episodeDirPath.fileName.toString(), transcription, episodeDict)
     }
 
     /**
      * The only writer of `transcript.json` and `words.jsonl.gz`: both come from
-     * [transcription], carry its run id, and are staged in full before either
-     * reaches its real name. False when the pair on disk is not that decode's.
+     * [transcription], carry its run id, and are staged and checked in full before
+     * either reaches its real name. A replace names the run it read in [replacing],
+     * null for a transcript with none, and is refused if the pair changed since.
+     * False when the pair on disk is not that decode's.
      */
     private fun writeTranscriptArtifacts(
         episodeDirPath: Path,
@@ -947,9 +961,9 @@ class PodcastPipeline(
         transcription: WhisperTranscription,
         episodeDict: Map<String, Any?>,
         replace: Boolean = false,
+        replacing: String? = null,
     ): Boolean {
         val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
-        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
         // Only the download creates it when audio lives in its own tree.
         Files.createDirectories(episodeDirPath)
 
@@ -967,26 +981,33 @@ class PodcastPipeline(
         try {
             Files.writeString(stagedJson, jsonMapper.writeValueAsString(record))
             val haveWords = writeWords(transcription, stagedWords, label)
-            // Clearing the old sidecar below would otherwise take its word times
-            // down with it. A full disk should cost the run this episode.
+            // A replace would otherwise take the old sidecar's word times down with it.
             if (!haveWords && transcription.words.isNotEmpty()) {
                 logger.error("Not writing $label: its word timestamps could not be written")
                 return false
             }
-
-            // The sidecar addresses cues by position, so either file left beside
-            // the other's transcript mis-times every word. It is cleared first:
-            // an interrupted write leaves it visibly missing rather than wrong.
-            Files.deleteIfExists(wordsPath)
-            if (replace) {
-                replaceWith(stagedJson, jsonPath)
-                if (haveWords) replaceWith(stagedWords, wordsPath)
-            } else {
-                // transcript.json is what marks an episode done, so it goes last:
-                // a crash in between leaves the episode to be redone.
-                if (haveWords) replaceWith(stagedWords, wordsPath)
-                Files.move(stagedJson, jsonPath)
+            (TranscriptPair.check(jsonMapper.valueToTree(record), stagedWords) as? TranscriptPair.Diverged)?.let {
+                logger.error("Not writing $label: the pair it would write disagrees: ${it.reason}")
+                return false
             }
+            val swapped =
+                withPairLock(episodeDirPath, label) {
+                    when {
+                        !replace && Files.exists(jsonPath) -> {
+                            logger.warn("$label was transcribed by something else while this run was working on it")
+                            false
+                        }
+                        replace && runIdOnDisk(jsonPath) != replacing -> {
+                            logger.warn("$label was rewritten by something else while this run was working on it; leaving it")
+                            false
+                        }
+                        else -> {
+                            swapPair(episodeDirPath, stagedJson, stagedWords.takeIf { haveWords }, replace)
+                            true
+                        }
+                    }
+                }
+            if (swapped != true) return false
         } catch (e: Exception) {
             logger.error("Could not write the transcript of $label", e)
             return false
@@ -996,6 +1017,84 @@ class PodcastPipeline(
         }
         return verifyPair(episodeDirPath, label)
     }
+
+    /**
+     * Words first, over the old ones, then the transcript: interrupted between the two,
+     * the old transcript sits beside words stamped with another run, which every check
+     * calls diverged. A failure puts the old words back, so the old pair survives it.
+     */
+    private fun swapPair(
+        episodeDirPath: Path,
+        stagedJson: Path,
+        stagedWords: Path?,
+        replace: Boolean,
+    ) {
+        val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
+        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+        val backup =
+            episodeDirPath.resolve("${WhisperTranscription.WORDS_FILENAME}.${ProcessHandle.current().pid()}.old").takeIf {
+                Files.exists(wordsPath)
+            }
+        backup?.let { Files.copy(wordsPath, it, StandardCopyOption.REPLACE_EXISTING) }
+        var landed = false
+        try {
+            stagedWords?.let { replaceWith(it, wordsPath) }
+            // transcript.json is what marks an episode done, so a new one goes last.
+            if (replace) replaceWith(stagedJson, jsonPath) else Files.move(stagedJson, jsonPath)
+            landed = true
+            if (stagedWords == null) Files.deleteIfExists(wordsPath)
+        } finally {
+            if (!landed) {
+                if (backup != null) {
+                    runCatching { replaceWith(backup, wordsPath) }
+                } else if (stagedWords != null) {
+                    runCatching { Files.deleteIfExists(wordsPath) }
+                }
+            }
+            backup?.let { runCatching { Files.deleteIfExists(it) } }
+        }
+    }
+
+    /**
+     * Only one writer swaps an episode's pair at a time. The swap takes milliseconds,
+     * so a lock older than [STALE_LOCK_SECONDS] was left by a run that died holding it.
+     * Null when another writer kept it throughout.
+     */
+    private fun <T> withPairLock(
+        episodeDirPath: Path,
+        label: String,
+        block: () -> T,
+    ): T? {
+        val lock = episodeDirPath.resolve(PAIR_LOCK_FILENAME)
+        repeat(LOCK_TRIES) {
+            try {
+                Files.createFile(lock)
+            } catch (_: FileAlreadyExistsException) {
+                val age = runCatching { Instant.now().epochSecond - Files.getLastModifiedTime(lock).toInstant().epochSecond }.getOrNull()
+                if (age != null && age > STALE_LOCK_SECONDS) runCatching { Files.deleteIfExists(lock) } else Thread.sleep(LOCK_WAIT_MILLIS)
+                return@repeat
+            }
+            try {
+                return block()
+            } finally {
+                runCatching { Files.deleteIfExists(lock) }
+            }
+        }
+        logger.warn("$label is being written by another run; leaving it to that one")
+        return null
+    }
+
+    private fun runIdOf(transcript: Map<String, Any?>): String? = (transcript[WhisperRun.FIELD] as? Map<*, *>)?.get("run_id") as? String
+
+    private fun runIdOnDisk(jsonPath: Path): String? =
+        if (Files.exists(
+                jsonPath,
+            )
+        ) {
+            jsonMapper.readTree(Files.readString(jsonPath)).path(WhisperRun.FIELD).path("run_id").textValue()
+        } else {
+            null
+        }
 
     private fun verifyPair(
         episodeDirPath: Path,
@@ -1185,9 +1284,8 @@ class PodcastPipeline(
     }
 
     /**
-     * Re-decodes only the windows around an episode's loops and stretch-copies,
-     * with the prompt first and without history if that is still defective, and
-     * splices in whichever leaves the window with fewer defects than it had.
+     * Re-decodes only the windows around an episode's defects and splices in the
+     * attempt that leaves each window with fewer defects than it had and no speech lost.
      * Only a pair already from one decode is repaired: the splice keeps its words.
      */
     private fun repairEpisode(episodeDirPath: Path): Boolean {
@@ -1221,7 +1319,6 @@ class PodcastPipeline(
             return false
         }
         val cues = parsedCues.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
-        val base = WhisperTranscription.of(cues, readWords(episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)))
 
         val podcast = podcastFor(episodeDirPath)
         val promptSentences = WindowRepair.promptSentences(podcast.initialPrompt ?: config.defaultPrompt)
@@ -1230,7 +1327,18 @@ class PodcastPipeline(
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
         }
-        val speech = speechDetector?.let { detector -> detector.speech(audioPath) }
+        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+        if (!Files.exists(wordsPath)) {
+            logger.warn("Cannot repair $label: its decode has no word timings to splice into; re-transcribe it instead")
+            return false
+        }
+        val base = WhisperTranscription.of(cues, readWords(wordsPath))
+        val speech =
+            speechDetector?.speech(audioPath)?.takeIf { spans ->
+                WindowRepair.plausible(base, defects, spans).also {
+                    if (!it) logger.warn("VAD hears no speech under most of $label's cues; repairing it without VAD")
+                }
+            }
 
         val replacements = mutableListOf<WindowRepair.Replacement>()
         val repairs = mutableListOf<Map<String, Any?>>()
@@ -1244,15 +1352,15 @@ class PodcastPipeline(
             for (conditioned in REPAIR_ATTEMPTS) {
                 val decoded = decode(audioPath, podcast, conditioned, window)
                 val anchored = WindowRepair.anchor(base, decoded, range, defects)
-                // Empty is a repair only when VAD says nothing is said there; otherwise it is lost speech.
-                if (anchored.cues.isEmpty() && (speech == null || !WindowRepair.silent(base, anchored.range, speech))) continue
                 val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
-                val lost = speech?.let { WindowRepair.lostSpeech(base, replacement, it) }
-                if (lost != null && lost > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
+                // Nothing said is a repair only where VAD confirms nothing is said.
+                if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
+                val lost = WindowRepair.lostSpeech(base, replacement, speech ?: WindowRepair.spokenIn(base, replacement.range, defects))
+                if (lost > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
                     lostByAttempt += lost
                     continue
                 }
-                val after = WindowRepair.defectsAfter(base, replacement, promptSentences)
+                val after = WindowRepair.defectsAfter(base, replacement, promptSentences, defects)
                 if (after < bestDefects) {
                     best = replacement
                     bestDefects = after
@@ -1307,7 +1415,7 @@ class PodcastPipeline(
         val updated = existing.toMutableMap()
         updated["episode_transcript"] = repaired.vtt
         updated["episode_quality"] = quality.toMap()
-        if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true)) return false
+        if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
         logger.info(
             "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
                 "${defects.size} defective cues before, ${WindowRepair.defectCues(repaired.cues, promptSentences).size} after",
@@ -1335,6 +1443,12 @@ class PodcastPipeline(
         internal const val TRANSCRIPT_FILENAME = "transcript.json"
 
         internal const val STAGING_SUFFIX = ".new"
+
+        /** Held while a pair is swapped; hidden and extension-less, so nothing walking the tree reads it. */
+        internal const val PAIR_LOCK_FILENAME = ".pair-lock"
+        private const val STALE_LOCK_SECONDS = 60
+        private const val LOCK_TRIES = 50
+        private const val LOCK_WAIT_MILLIS = 100L
 
         private const val VERIFY_THREADS = 8
 

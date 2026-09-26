@@ -773,25 +773,32 @@ prompt. It is off by default.
 
 Re-decodes only the stretches of each target around its defects, instead of the whole
 episode, and splices them into the pair on disk. A defect is a stretch-copy, a run of
-four or more identical cues, or a cue of 10 s or more that is nothing but a sentence of
-the initial prompt: over music or silence, a prompted decode voices the prompt.
+four or more identical cues, an echo or long copy of the cues before it, or a cue of 10 s
+or more that is nothing but a sentence of the initial prompt: over music or silence, a
+prompted decode voices the prompt.
 
-- **Windows** are the defective cues plus one good cue either side. whisper-server
+- **Windows** are the defective cues plus two good cues either side. whisper-server
   decodes just that stretch (`offset_t`, `duration`); nothing is cut from the mp3.
-- **Anchors.** The good cues either side are kept exactly as they were. The new decode
-  is cut after the last three words of the left one and before the first three of the
-  right one, found within 2 s of their old time; only if they are not there is it cut
-  by time. The new window's clock is mapped onto the old one between the two anchors.
-- **Attempts.** The prompted request first, then one without history (`max_context=0`)
-  if the window is still defective. A window is applied only if it comes back with
-  fewer defects than it had.
+- **Anchors.** The outer good cue at each end is kept exactly as it was; the one against
+  the defect is re-decoded, since it is the cue most often damaged. The new decode is cut
+  after the last three words of the left anchor and before the first three of the right
+  one, found within 2 s of their old time. Otherwise the decode's words are walked over
+  the anchor's, past a word the anchor does not have, and only then cut by time, in the
+  clock the other anchor's words set. The new window's clock is mapped onto the old one
+  between the two anchors.
+- **Attempts.** Prompted, then without history (`max_context=0`), twice over: whisper can
+  skip speech on one decode and keep it on the next. A window is applied only if it comes
+  back with fewer defects than it had, counting any sentence of the prompt it now holds.
+- **Lost speech.** An attempt that leaves more than 2 s of speech without a word near it
+  is refused: whisper can skip a whole window and carry on, and the words either side
+  still match. Without VAD, the speech is the base's own words in the window's good cues.
 - **Silence.** With `vad_binary` and `vad_model` set in `pods.yaml`, Silero VAD
-  (whisper.cpp's `whisper-vad-speech-segments`) says where speech is. Cues the new decode
-  put over non-speech are dropped, keeping one `♪` where it marked music, so a
-  hallucinated tail can be removed outright. An attempt that leaves more than 2 s of speech
-  VAD heard without a word near it is refused: whisper can skip a whole window and carry
-  on, and the words either side still match. The server's own VAD cannot be used for
-  this: with `vad` on it applies `offset_t` to VAD-compressed time.
+  (whisper.cpp's `whisper-vad-speech-segments`) says where speech is instead. Cues the new
+  decode put over non-speech are dropped, keeping one `♪` where it marked music, and a
+  window may come back empty only where VAD hears nothing. A VAD that cannot run stops the
+  batch; one that hears nothing under most of an episode's cues is ignored for it. The
+  server's own VAD cannot be used for this: with `vad` on it applies `offset_t` to
+  VAD-compressed time.
 - Only a pair already from one decode is repaired. The result gets a new run id;
   `whisper_run.base_run` is the pair it was spliced into and `whisper_run.repairs`
   records each window, its anchors and gaps, and what was refused.

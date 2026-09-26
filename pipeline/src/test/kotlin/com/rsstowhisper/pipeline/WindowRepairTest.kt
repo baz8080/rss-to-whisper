@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeechDetector
+import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
@@ -12,6 +13,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class WindowRepairTest {
@@ -466,5 +469,223 @@ class WindowRepairTest {
             )
 
         WindowRepair.anchor(base, decoded, 0..5, setOf(1, 2, 3, 4))
+    }
+
+    /** The server's verbose_json for [cues], one word per token as [transcription] spreads them. */
+    private fun serverJson(vararg cues: Cue): String {
+        val words = transcription(cues.toList()).words
+        val segments =
+            cues.mapIndexed { i, cue ->
+                mapOf(
+                    "start" to cue.start,
+                    "end" to cue.end,
+                    "text" to cue.text,
+                    "words" to
+                        words.filter { it.segment == i }.map {
+                            mapOf("word" to it.text, "start" to it.start, "end" to it.end, "probability" to 0.9)
+                        },
+                )
+            }
+        return mapper.writeValueAsString(mapOf("segments" to segments))
+    }
+
+    private val leakThenTitle =
+        listOf(
+            Cue(0.0, 30.0, " Let's get started."),
+            Cue(30.0, 55.3, " Astronomy Cast, episode 626, the terrestrial planets."),
+            Cue(55.8, 59.0, " Welcome to Astronomy Cast, our weekly journey."),
+            Cue(59.2, 62.0, " I'm Fraser Cain, publisher of Universe Today."),
+            Cue(62.7, 64.2, " With me, as always, is Dr. Pamela Gay."),
+        )
+
+    @Test
+    fun `a prompt leak fitted onto the speech it covers is not a repair`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, leakThenTitle)
+        val leakAgain =
+            serverJson(Cue(0.0, 55.7, " Let's get started."), Cue(55.8, 59.0, " Welcome to Astronomy Cast, our weekly journey."))
+        val title = serverJson(leakThenTitle[1], leakThenTitle[2])
+        val vad = FakeSpeechDetector(listOf(TimeWindow(49.5, 55.5), TimeWindow(56.0, 70.0)))
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(leakAgain, title), speechDetector = vad)
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertEquals(listOf(true, false), txSvc.conditioned)
+        assertTrue("the terrestrial planets" in vtt)
+        assertFalse("Let's get started." in vtt)
+    }
+
+    @Test
+    fun `a cue too short to hold half a second of speech is kept when it lies in speech`() {
+        val replacement =
+            WindowRepair.Replacement(
+                2..5,
+                listOf(Cue(6.0, 6.0, " AI might be"), Cue(6.0, 11.0, " the most important new technology.")),
+                listOf(Word(" AI", 6.0, 6.0, 0.9, 0), Word(" the", 6.0, 7.0, 0.9, 1)),
+            )
+
+        val kept = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(3.0, 12.0)))
+
+        assertEquals(listOf(" AI might be", " the most important new technology."), kept.cues.map { it.text })
+        assertEquals(listOf(0, 1), kept.words.map { it.segment })
+    }
+
+    @Test
+    fun `a filler in the decode's rendering of the anchor is walked past`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We um looked at the data again, closely."),
+                Cue(6.0, 18.0, " Today we are talking about the telescope."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals("time", replacement.anchorLeft)
+        assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
+    }
+
+    @Test
+    fun `a leading filler on an early clock does not cost the first new words`() {
+        val base = transcription(looping())
+        val early = { c: Cue -> Cue(c.start - 0.3, c.end - 0.3, c.text) }
+        val decoded =
+            decodedWindow(
+                early(Cue(3.0, 6.0, " Um, we looked at the data again, closely.")),
+                early(Cue(6.0, 18.0, " Today we are talking about the telescope.")),
+                early(Cue(18.0, 21.0, " And then we found something odd.")),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" Today", replacement.words.first().text)
+    }
+
+    @Test
+    fun `a right anchor rendered another way on an early clock is not kept as new words`() {
+        val base = transcription(looping())
+        val early = { c: Cue -> Cue(c.start - 1.5, c.end - 1.5, c.text) }
+        val decoded =
+            decodedWindow(
+                early(Cue(3.0, 6.0, " We looked at the data again, carefully.")),
+                early(Cue(6.0, 18.0, " Today we are talking about the telescope.")),
+                early(Cue(18.0, 21.0, " Then we found something odd.")),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
+    }
+
+    @Test
+    fun `words clamped onto an anchor join the cue beside them`() {
+        val base = transcription(looping())
+        val cues =
+            listOf(Cue(3.0, 6.0, " Look at the date again carefully. AI might be"), Cue(6.0, 18.0, " the most important new technology."))
+        val words =
+            listOf(" Look", " at", " the", " date", " again", " carefully.").mapIndexed {
+                    i,
+                    t,
+                ->
+                Word(t, 3.0 + i * 0.3, 3.3 + i * 0.3, 0.9, 0)
+            } +
+                listOf(" AI", " might", " be").mapIndexed { i, t -> Word(t, 5.0 + i * 0.3, 5.3 + i * 0.3, 0.9, 0) } +
+                listOf(" the", " most", " important", " new", " technology.").mapIndexed { i, t -> Word(t, 6.0 + i, 7.0 + i, 0.9, 1) }
+
+        val replacement = WindowRepair.anchor(base, WhisperTranscription.of(cues, words), 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(listOf(" AI might be the most important new technology."), replacement.cues.map { it.text })
+        assertEquals(setOf(0), replacement.words.map { it.segment }.toSet())
+    }
+
+    @Test
+    fun `without VAD a decode that skips the base's good speech is refused`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val skipping =
+            serverJson(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(6.0, 18.0, " Today we are talking about the telescope."),
+                Cue(21.0, 24.0, " Nobody expected that part at all."),
+            )
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(skipping))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        assertEquals(4, txSvc.calls.size)
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    @Test
+    fun `VAD output whose count disagrees with its segments is refused`() {
+        assertFailsWith<SpeechDetectorFailed> { SpeechDetector.parse("") }
+        assertFailsWith<SpeechDetectorFailed> {
+            SpeechDetector.parse("Detected 2 speech segments:\nSpeech segment 0: start = 100.00, end = 200.00\n")
+        }
+    }
+
+    @Test
+    fun `a VAD that cannot run stops the batch before any target is decoded or marked`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, speechDetector = FakeSpeechDetector(emptyList(), fails = true))
+
+        val ok = pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        assertFalse(ok)
+        assertEquals(0, txSvc.calls.size)
+        assertFalse(Files.exists(dir.resolve(PodcastPipeline.RETRANSCRIBE_ATTEMPTED_FILENAME)))
+    }
+
+    @Test
+    fun `a VAD that hears nothing under a transcript's speech is not trusted`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val clean =
+            serverJson(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Today we are talking about the telescope."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+                Cue(21.0, 24.0, " Nobody expected that part at all."),
+            )
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(clean), speechDetector = FakeSpeechDetector(emptyList()))
+
+        val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true)) }
+
+        assertTrue(log.any { "repairing it without VAD" in it })
+        val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
+        assertTrue("the telescope" in json.path("episode_transcript").asText())
+        assertFalse(json.path("whisper_run").path("repairs")[0].path("speech_checked").asBoolean())
+    }
+
+    @Test
+    fun `a pair whose decode has no word timings is refused before anything is read`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        Files.delete(dir.resolve(WhisperTranscription.WORDS_FILENAME))
+        Files.writeString(
+            dir.resolve("transcript.json"),
+            mapper.writeValueAsString(
+                mapOf("episode_transcript" to transcription(looping()).vtt, "whisper_run" to mapOf("run_id" to "r1", "words" to 0)),
+            ),
+        )
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+
+        val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true)) }
+
+        assertEquals(0, txSvc.calls.size)
+        assertTrue(log.any { "no word timings to splice into" in it })
     }
 }

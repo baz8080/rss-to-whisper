@@ -2,8 +2,12 @@ package com.rsstowhisper.external
 
 import java.io.IOException
 import java.lang.ProcessBuilder.Redirect
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+
+/** The VAD tool could not be run or said something unreadable, and will for every file until it is fixed. */
+class SpeechDetectorFailed(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
  * Where Silero VAD hears speech in a file, from whisper.cpp's
@@ -16,26 +20,47 @@ open class SpeechDetector(
     private val model: String,
 ) {
     open fun speech(audioPath: Path): List<TimeWindow> {
-        val process =
-            ProcessBuilder(binary, "-np", "-vm", model, "-f", audioPath.toString())
-                .redirectError(Redirect.DISCARD)
-                .start()
-        val output = process.inputStream.bufferedReader().readText()
-        if (!process.waitFor(TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
-            process.destroyForcibly()
-            throw IOException("$binary did not finish on $audioPath within $TIMEOUT_MINUTES minutes")
+        // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
+        val out = Files.createTempFile("vad-", ".txt")
+        try {
+            val process =
+                try {
+                    ProcessBuilder(binary, "-np", "-vm", model, "-f", audioPath.toString())
+                        .redirectOutput(out.toFile())
+                        .redirectError(Redirect.DISCARD)
+                        .start()
+                } catch (e: IOException) {
+                    throw SpeechDetectorFailed("Cannot run $binary: ${e.message}", e)
+                }
+            if (!process.waitFor(TIMEOUT_MINUTES, TimeUnit.MINUTES)) {
+                process.destroyForcibly()
+                throw SpeechDetectorFailed("$binary did not finish on $audioPath within $TIMEOUT_MINUTES minutes")
+            }
+            if (process.exitValue() != 0) throw SpeechDetectorFailed("$binary exited ${process.exitValue()} on $audioPath")
+            return parse(Files.readString(out))
+        } finally {
+            Files.deleteIfExists(out)
         }
-        if (process.exitValue() != 0) throw IOException("$binary exited ${process.exitValue()} on $audioPath")
-        return parse(output)
     }
 
     companion object {
         private const val TIMEOUT_MINUTES = 10L
 
+        private val DETECTED = Regex("""Detected (\d+) speech segments""")
         private val SEGMENT = Regex("""start = ([0-9.]+), end = ([0-9.]+)""")
 
-        /** The tool prints centiseconds. */
-        fun parse(output: String): List<TimeWindow> =
-            SEGMENT.findAll(output).map { TimeWindow(it.groupValues[1].toDouble() / 100, it.groupValues[2].toDouble() / 100) }.toList()
+        /**
+         * The tool prints centiseconds. Its own count must match what was read: it exits 0 with
+         * nothing printed on a bad argument, and nothing heard would otherwise mean silence throughout.
+         */
+        fun parse(output: String): List<TimeWindow> {
+            val spans =
+                SEGMENT.findAll(output).map { TimeWindow(it.groupValues[1].toDouble() / 100, it.groupValues[2].toDouble() / 100) }.toList()
+            val detected = DETECTED.find(output)?.groupValues?.get(1)?.toInt()
+            if (detected != spans.size) {
+                throw SpeechDetectorFailed("The VAD tool reported ${detected ?: "no count of"} speech segments and printed ${spans.size}")
+            }
+            return spans
+        }
     }
 }

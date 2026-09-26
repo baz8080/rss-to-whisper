@@ -12,6 +12,8 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.SpeechDetector
+import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.feed.FeedService
@@ -179,6 +181,21 @@ internal class FakeTranscriber(
     }
 }
 
+/** Hears speech in [spans] in every file, or fails the way a missing binary does. */
+internal class FakeSpeechDetector(
+    private val spans: List<TimeWindow>,
+    private val fails: Boolean = false,
+) : SpeechDetector("whisper-vad-speech-segments", "silero.bin") {
+    var calls = 0
+        private set
+
+    override fun speech(audioPath: Path): List<TimeWindow> {
+        calls++
+        if (fails) throw SpeechDetectorFailed("Cannot run whisper-vad-speech-segments: No such file or directory")
+        return spans
+    }
+}
+
 internal fun makeEntry(
     title: String?,
     audioUrl: String? = "https://cdn/ep.mp3",
@@ -244,6 +261,7 @@ internal fun buildPipeline(
     /** Supply one when the test needs a reference to it before the pipeline exists. */
     feedService: FakeFeedService? = null,
     audioDir: Path? = null,
+    speechDetector: SpeechDetector? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
@@ -274,6 +292,7 @@ internal fun buildPipeline(
             config = config,
             feedService = feedSvc,
             transcriber = txSvc,
+            speechDetector = speechDetector,
         )
     return Triple(pipeline, txSvc, feedSvc)
 }

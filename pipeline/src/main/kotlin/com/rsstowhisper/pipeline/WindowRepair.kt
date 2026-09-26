@@ -5,7 +5,7 @@ import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
 
-/** Re-decoding only the stretches of an episode whose cues are loops or stretch-copies. */
+/** Re-decoding only the stretches of an episode whose cues are defects: loops, copies and prompt leaks. */
 internal object WindowRepair {
     /**
      * Cues taken either side of a defect. The outer one anchors the splice and is
@@ -159,11 +159,11 @@ internal object WindowRepair {
     private const val ANCHOR_SLACK_SECONDS = 2.0
 
     /**
-     * The new decode of [range], cut at the good cues either side of the defects,
-     * which are kept exactly as they were. Each edge is found by the anchor cue's
-     * own words in the new decode near their old time, and only by time when the
-     * words are not there: whisper starts a window cold, so its first words are
-     * the least trustworthy, and the anchor cue already holds them.
+     * The new decode of [range], cut at the anchor cues at its ends, which are kept
+     * exactly as they were. Each edge is found by the anchor cue's own words in the
+     * new decode near their old time, and only by time when the words are not there:
+     * whisper starts a window cold, so its first words are the least trustworthy,
+     * and the anchor cue already holds them.
      */
     fun anchor(
         base: WhisperTranscription,
@@ -182,45 +182,44 @@ internal object WindowRepair {
         val content = words.indices.filter { normalised[it].isNotEmpty() }
         val contentText = content.map { normalised[it] }
 
+        fun anchorWords(cue: Int) = baseWords[cue].orEmpty().filter { normalise(it.text).isNotEmpty() }
+
+        fun leftMatch(): Int? {
+            val cue = base.cues[left ?: return null]
+            val tail = anchorWords(left).takeLast(ANCHOR_WORDS).map { normalise(it.text) }
+            return matches(contentText, tail).lastOrNull { at ->
+                words[content[at + tail.size - 1]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
+            }?.let { content[it + tail.size - 1] }
+        }
+
+        fun rightMatch(from: Int): Int? {
+            val cue = base.cues[right ?: return null]
+            val head = anchorWords(right).take(ANCHOR_WORDS).map { normalise(it.text) }
+            return matches(contentText, head).firstOrNull { at ->
+                content[at] >= from && words[content[at]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
+            }?.let { content[it] }
+        }
+
+        // An edge found by text says how far the decode's clock is off, and the other
+        // edge is judged in that corrected time: a window can start a second or two out.
+        val textLeft = leftMatch()
+        val shift =
+            textLeft?.let { anchorWords(left!!).last().end - words[it].end }
+                ?: rightMatch(0)?.let { anchorWords(right!!).first().start - words[it].start }
+                ?: 0.0
+
         var from = 0
         var anchorLeft = "none"
         var newLeft: Double? = null
         var oldLeft: Double? = null
         if (left != null) {
-            val cue = base.cues[left]
-            val anchorWords = baseWords[left].orEmpty().filter { normalise(it.text).isNotEmpty() }.takeLast(ANCHOR_WORDS)
-            val tail = anchorWords.map { normalise(it.text) }
-            val match =
-                matches(contentText, tail).lastOrNull { at ->
-                    words[content[at + tail.size - 1]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
-                }
-            if (match != null) {
-                from = content[match + tail.size - 1] + 1
-                newLeft = words[from - 1].end
-                oldLeft = anchorWords.last().end
+            if (textLeft != null) {
+                from = textLeft + 1
+                newLeft = words[textLeft].end
+                oldLeft = anchorWords(left).last().end
                 anchorLeft = "text"
             } else {
-                // The decode renders the anchor its own way, and can time the next
-                // sentence's opening words inside it. Its words are walked over the
-                // anchor's in order and dropped while they resemble them; the first
-                // that resembles nothing is where the new content starts.
-                val anchor = baseWords[left].orEmpty().map { normalise(it.text) }.filter { it.isNotEmpty() }
-                var next = 0
-                var last = -1
-                for (at in content) {
-                    if (words[at].start >= cue.end + OVERLAP_SLACK_SECONDS) break
-                    val hit =
-                        (next until minOf(next + ANCHOR_LOOKAHEAD, anchor.size))
-                            .firstOrNull { similar(anchor[it], normalised[at]) } ?: break
-                    next = hit + 1
-                    last = at
-                }
-                from =
-                    if (last >= 0) {
-                        last + 1
-                    } else {
-                        words.indexOfFirst { it.start >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
-                    }
+                from = walkLeft(words, normalised, content, base.cues[left], anchorWords(left).map { normalise(it.text) }, shift)
                 anchorLeft = "time"
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
@@ -232,37 +231,14 @@ internal object WindowRepair {
         var newRight: Double? = null
         var oldRight: Double? = null
         if (right != null) {
-            val cue = base.cues[right]
-            val anchorWords = baseWords[right].orEmpty().filter { normalise(it.text).isNotEmpty() }.take(ANCHOR_WORDS)
-            val head = anchorWords.map { normalise(it.text) }
-            val match =
-                matches(contentText, head).firstOrNull { at ->
-                    content[at] >= from && words[content[at]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
-                }
-            if (match != null) {
-                until = content[match]
+            val textRight = rightMatch(from)
+            if (textRight != null) {
+                until = textRight
                 newRight = words[until].start
-                oldRight = anchorWords.first().start
+                oldRight = anchorWords(right).first().start
                 anchorRight = "text"
             } else {
-                // The same from the other end, past any words whisper ran on with beyond the window.
-                val anchor = baseWords[right].orEmpty().map { normalise(it.text) }.filter { it.isNotEmpty() }
-                var next = anchor.size - 1
-                var first: Int? = null
-                for (at in content.reversed()) {
-                    if (at < from || words[at].end <= cue.start - OVERLAP_SLACK_SECONDS) break
-                    val hit =
-                        (next downTo maxOf(0, next - ANCHOR_LOOKAHEAD + 1))
-                            .firstOrNull { it >= 0 && similar(anchor[it], normalised[at]) }
-                    if (hit == null) {
-                        if (first == null && words[at].start >= cue.end - OVERLAP_SLACK_SECONDS) continue
-                        break
-                    }
-                    next = hit - 1
-                    first = at
-                    if (next < 0) break
-                }
-                until = first ?: words.indexOfFirst { it.start >= cue.start - 0.1 }.let { if (it < 0) words.size else maxOf(it, from) }
+                until = walkRight(words, normalised, content, base.cues[right], anchorWords(right).map { normalise(it.text) }, shift, from)
                 anchorRight = "time"
             }
         }
@@ -301,6 +277,9 @@ internal object WindowRepair {
                 }
             cues += Cue(start, maxOf(start, end), text)
         }
+        // Words clamped onto an anchor's edge leave a cue of no length there; they belong with the cue beside them.
+        if (cues.size > 1 && floor != null && cues.first().let { it.start == floor && it.end <= it.start }) merge(cues, out, 0)
+        if (cues.size > 1 && ceiling != null && cues.last().let { it.end == ceiling && it.end <= it.start }) merge(cues, out, cues.size - 2)
         return Replacement(
             range = inner,
             cues = cues,
@@ -310,6 +289,110 @@ internal object WindowRepair {
             gapLeft = if (floor != null && kept.isNotEmpty()) kept.first().start - floor else null,
             gapRight = if (ceiling != null && kept.isNotEmpty()) ceiling - kept.last().end else null,
         )
+    }
+
+    /**
+     * Where new content starts when the anchor's closing words were not found as text:
+     * the decode's words are walked over the anchor's in order while they resemble them.
+     * The decode renders the anchor its own way, and can time the next sentence's
+     * opening words inside it, so what follows the walk is kept whatever its time.
+     */
+    private fun walkLeft(
+        words: List<Word>,
+        normalised: List<String>,
+        content: List<Int>,
+        cue: Cue,
+        anchor: List<String>,
+        shift: Double,
+    ): Int {
+        fun hit(
+            next: Int,
+            at: Int,
+        ) = (next until minOf(next + ANCHOR_LOOKAHEAD, anchor.size)).firstOrNull { similar(anchor[it], normalised[at]) }
+
+        fun inAnchor(at: Int) = words[at].start + shift < cue.end + OVERLAP_SLACK_SECONDS
+        var next = 0
+        var last = -1
+        var i = 0
+        while (i < content.size && inAnchor(content[i])) {
+            var at = content[i]
+            var found = hit(next, at)
+            // One word the anchor does not have, a filler most often, when the next one carries on with it.
+            if (found == null && i + 1 < content.size && inAnchor(content[i + 1])) {
+                hit(next, content[i + 1])?.let {
+                    found = it
+                    at = content[++i]
+                }
+            }
+            if (found == null) {
+                // The anchor's closing word, rendered another way.
+                if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end) last = at
+                break
+            }
+            next = found!! + 1
+            last = at
+            i++
+        }
+        if (last >= 0) return last + 1
+        return words.indexOfFirst { it.start + shift >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+    }
+
+    /** [walkLeft] from the other end, past any words whisper ran on with beyond the window. */
+    private fun walkRight(
+        words: List<Word>,
+        normalised: List<String>,
+        content: List<Int>,
+        cue: Cue,
+        anchor: List<String>,
+        shift: Double,
+        from: Int,
+    ): Int {
+        fun hit(
+            next: Int,
+            at: Int,
+        ) = (next downTo maxOf(0, next - ANCHOR_LOOKAHEAD + 1)).firstOrNull { it >= 0 && similar(anchor[it], normalised[at]) }
+
+        val order = content.filter { it >= from }.reversed()
+
+        fun inAnchor(at: Int) = words[at].end + shift > cue.start - OVERLAP_SLACK_SECONDS
+        var next = anchor.size - 1
+        var first: Int? = null
+        var i = 0
+        while (i < order.size && inAnchor(order[i])) {
+            var at = order[i]
+            var found = hit(next, at)
+            if (found == null && first != null && i + 1 < order.size && inAnchor(order[i + 1])) {
+                hit(next, order[i + 1])?.let {
+                    found = it
+                    at = order[++i]
+                }
+            }
+            if (found == null) {
+                if (first == null && words[at].start + shift >= cue.end - OVERLAP_SLACK_SECONDS) {
+                    i++
+                    continue
+                }
+                if (first != null && next == 0 && words[at].end + shift > cue.start) first = at
+                break
+            }
+            next = found!! - 1
+            first = at
+            if (next < 0) break
+            i++
+        }
+        return first ?: words.indexOfFirst { it.start + shift >= cue.start - 0.1 }.let { if (it < 0) words.size else maxOf(it, from) }
+    }
+
+    /** Joins cue [at] + 1 onto cue [at], renumbering the words after it. */
+    private fun merge(
+        cues: MutableList<Cue>,
+        words: MutableList<Word>,
+        at: Int,
+    ) {
+        val (a, b) = cues[at] to cues[at + 1]
+        cues[at] = Cue(minOf(a.start, b.start), maxOf(a.end, b.end), a.text + b.text)
+        cues.removeAt(at + 1)
+        words.replaceAll { if (it.segment > at) it.copy(segment = it.segment - 1) else it }
     }
 
     /**
@@ -414,6 +497,40 @@ internal object WindowRepair {
         return Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
     }
 
+    /** A cue shorter than [MIN_SPEECH_SECONDS] is judged over that much time around it: it cannot hold more speech than its length. */
+    private fun overSpeech(
+        cue: Cue,
+        speech: List<TimeWindow>,
+    ): Boolean {
+        val pad = maxOf(0.0, MIN_SPEECH_SECONDS - (cue.end - cue.start)) / 2
+        val span = cue.end - cue.start + 2 * pad
+        return heard(cue.start - pad, cue.end + pad, speech) >= minOf(MIN_SPEECH_SECONDS, span / 2)
+    }
+
+    /** The base's own words in [range]'s good cues, standing in for VAD: speech a repair must not drop. */
+    fun spokenIn(
+        base: WhisperTranscription,
+        range: IntRange,
+        defects: Set<Int>,
+    ): List<TimeWindow> = base.words.filter { it.segment in range && it.segment !in defects }.map { TimeWindow(it.start, it.end) }
+
+    /**
+     * Whether VAD heard speech under most of the base's good cues. It hears nothing
+     * when it has failed quietly, and a transcript is mostly speech.
+     */
+    fun plausible(
+        base: WhisperTranscription,
+        defects: Set<Int>,
+        speech: List<TimeWindow>,
+    ): Boolean {
+        val spoken = base.words.map { it.segment }.toSet()
+        val cues = base.cues.indices.filter { it !in defects && it in spoken }.map { base.cues[it] }
+        if (cues.size < MIN_CUES_TO_JUDGE_VAD) return true
+        return cues.count { heard(it.start, it.end, speech) < MIN_SPEECH_SECONDS } * 2 <= cues.size
+    }
+
+    private const val MIN_CUES_TO_JUDGE_VAD = 5
+
     /** Whether the base cues in [range] lie over non-speech, which is what makes removing them a repair. */
     fun silent(
         base: WhisperTranscription,
@@ -433,7 +550,7 @@ internal object WindowRepair {
         val cues = mutableListOf<Cue>()
         val words = mutableListOf<Word>()
         for ((index, cue) in replacement.cues.withIndex()) {
-            if (heard(cue.start, cue.end, speech) >= MIN_SPEECH_SECONDS) {
+            if (overSpeech(cue, speech)) {
                 val (fitted, fittedWords) = fitToSpeech(cue, bySegment[index].orEmpty(), speech)
                 words += fittedWords.map { it.copy(segment = cues.size) }
                 cues += fitted
@@ -533,15 +650,23 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
-    /** Defects left inside [replacement] once spliced, judged in context: a stretch-copy needs the cues before it. */
+    /**
+     * Defects left inside [replacement] once spliced, judged in context: a stretch-copy needs
+     * the cues before it. A prompt sentence not among the base's good cues there counts at any
+     * length: fitted onto speech it is shorter than a leak, and is still the prompt, not the speech.
+     */
     fun defectsAfter(
         base: WhisperTranscription,
         replacement: Replacement,
         promptSentences: Set<String> = emptySet(),
+        defects: Set<Int> = emptySet(),
     ): Int {
         val spliced = splice(base, listOf(replacement))
         val first = replacement.range.first
         val inside = first until first + replacement.cues.size
-        return defectCues(spliced.cues, promptSentences).count { it in inside }
+        val said = replacement.range.filter { it !in defects }.map { base.cues[it].text.trim().lowercase() }.toSet()
+        val leaks =
+            inside.filter { spliced.cues[it].text.trim().lowercase().let { text -> text in promptSentences && text !in said } }
+        return (defectCues(spliced.cues, promptSentences) + leaks).count { it in inside }
     }
 }

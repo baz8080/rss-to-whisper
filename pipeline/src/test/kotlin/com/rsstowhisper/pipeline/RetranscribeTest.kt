@@ -6,6 +6,7 @@ import com.rsstowhisper.external.TranscriberUnavailable
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -664,5 +665,78 @@ class RetranscribeTest {
 
         assertFalse(pipeline.retranscribe(RetranscribeRequest(ids = listOf("deadbeef"))))
         assertTrue(txSvc.calls.isEmpty())
+    }
+
+    // ---------- the paired write ----------
+
+    @Test
+    fun `a decode whose pair would not check is not written over the one on disk`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val arrow = whisperJson(Triple(0.0, 3.0, "Then File --> Export."), Triple(3.0, 6.0, "And save it again, carefully."))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(arrow))
+
+        val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))) }
+
+        assertTrue(log.any { "the pair it would write disagrees" in it })
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz")))
+        assertEquals(emptyList(), stagingFiles(dir))
+    }
+
+    @Test
+    fun `a transcript rewritten while this run decoded is left as the other run wrote it`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val theirs =
+            mapper.writeValueAsString(
+                mapOf("episode_transcript" to "WEBVTT\n\n", "whisper_run" to mapOf("run_id" to "theirs", "words" to 0)),
+            )
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(healthyJson()),
+                onTranscribe = { Files.writeString(dir.resolve("transcript.json"), theirs) },
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertEquals(theirs, Files.readString(dir.resolve("transcript.json")))
+        assertFalse(Files.exists(dir.resolve("words.jsonl.gz")))
+    }
+
+    @Test
+    fun `a pair lock left by a run that died is cleared`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val lock = Files.createFile(dir.resolve(PodcastPipeline.PAIR_LOCK_FILENAME))
+        Files.setLastModifiedTime(lock, FileTime.from(Instant.now().minusSeconds(600)))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        assertTrue(pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))))
+
+        assertTrue("We looked at the data again" in readTranscript(dir)["episode_transcript"].toString())
+        assertFalse(Files.exists(lock))
+    }
+
+    @Test
+    fun `a pair another run is swapping is left to it`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val before = Files.readString(dir.resolve("transcript.json"))
+        Files.createFile(dir.resolve(PodcastPipeline.PAIR_LOCK_FILENAME))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))) }
+
+        assertTrue(log.any { "being written by another run" in it })
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 }

@@ -68,8 +68,8 @@ write either file. `--verify-pairs` lists every episode whose pair disagrees, an
 
 `--repair-windows` with any re-transcription target re-decodes only the windows around
 loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues
-either side. `vad_binary`/`vad_model` in `pods.yaml` (optional) let it drop cues over
-non-speech and refuse attempts that lose speech.
+either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`
+(optional) let it drop cues over non-speech and judge lost speech by what VAD hears.
 
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.

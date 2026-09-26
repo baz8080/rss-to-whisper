@@ -182,9 +182,14 @@ internal object WindowRepair {
         defects: Set<Int>,
     ): List<IntRange> {
         val ranges = mutableListOf<IntRange>()
+
+        // A stack of crammed cues at an edge is whisper's copy of the window's text: never an anchor, never left beside it.
+        fun edge(at: Int) = at in cues.indices && crammed(cues[at])
         for (i in defects.sorted()) {
-            val first = maxOf(0, i - MARGIN_CUES)
-            val last = minOf(cues.size - 1, i + MARGIN_CUES)
+            var first = maxOf(0, i - MARGIN_CUES)
+            var last = minOf(cues.size - 1, i + MARGIN_CUES)
+            while (first > 0 && (edge(first) || edge(first - 1))) first--
+            while (last < cues.size - 1 && (edge(last) || edge(last + 1))) last++
             val previous = ranges.lastOrNull()
             if (previous != null && first <= previous.last + 1) {
                 ranges[ranges.size - 1] = previous.first..maxOf(previous.last, last)
@@ -277,6 +282,11 @@ internal object WindowRepair {
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
             while (from < words.size && normalised[from].isEmpty()) from++
+            val opening = content.firstOrNull { it >= from }
+            if (opening != null && repeats(words, opening, anchorWords(left).last(), opensSegment = true)) {
+                from = opening + 1
+                while (from < words.size && normalised[from].isEmpty()) from++
+            }
         }
 
         var until = words.size
@@ -294,6 +304,8 @@ internal object WindowRepair {
                 until = walkRight(words, normalised, content, base.cues[right], anchorWords(right).map { normalise(it.text) }, shift, from)
                 anchorRight = "time"
             }
+            val closing = content.lastOrNull { it in from until until }
+            if (closing != null && repeats(words, closing, anchorWords(right).first(), opensSegment = false)) until = closing
         }
 
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
@@ -594,7 +606,17 @@ internal object WindowRepair {
         if (to1 <= to0) return cue to words
         val map = { t: Double -> to0 + (t - first) * (to1 - to0) / (last - first) }
         val moved = words.map { it.copy(start = map(it.start), end = map(it.end)) }
-        return Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
+        if (!crams(moved)) return Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
+        // Squeezing them on would cram the words already there: what whisper smeared over the music ahead of them goes.
+        val kept = words.filter { it.end > onset - MAX_WORDS_OUTSIDE_SPEECH_SECONDS }
+        if (!early || kept.isEmpty() || kept.size == words.size) return cue to words
+        return fitToSpeech(Cue(kept.first().start, cue.end, kept.joinToString("") { it.text }), kept, speech)
+    }
+
+    /** Any [MIN_WORDS_FOR_RATE] spoken words in less time than anyone says them. */
+    private fun crams(words: List<Word>): Boolean {
+        val starts = words.filter { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }.map { it.start }
+        return starts.windowed(MIN_WORDS_FOR_RATE).any { it.last() - it.first() < (MIN_WORDS_FOR_RATE - 1) / MAX_WORDS_PER_SECOND }
     }
 
     /** A cue shorter than [MIN_SPEECH_SECONDS] is judged over that much time around it: it cannot hold more speech than its length. */
@@ -678,6 +700,25 @@ internal object WindowRepair {
 
     /** Anchor words a garbled rendering may skip past and still be counted as the anchor. */
     private const val ANCHOR_LOOKAHEAD = 3
+
+    /**
+     * whisper can end a segment on a word and open the next on it again ("fully dexterous" / "dexters come"). The word at
+     * [at], first or last of its segment, is the anchor's own [word] once more when it is like it and not a short one.
+     */
+    private fun repeats(
+        words: List<Word>,
+        at: Int,
+        word: Word,
+        opensSegment: Boolean,
+    ): Boolean {
+        val own = normalise(words[at].text)
+        val theirs = normalise(word.text)
+        if (minOf(own.length, theirs.length) < MIN_REPEATED_WORD_LETTERS || !similar(own, theirs)) return false
+        val spoken = words.indices.filter { words[it].segment == words[at].segment && normalise(words[it].text).isNotEmpty() }
+        return at == if (opensSegment) spoken.first() else spoken.last()
+    }
+
+    private const val MIN_REPEATED_WORD_LETTERS = 4
 
     /** The same word as whisper might render it twice: equal, one a prefix of the other, or a letter or two off. */
     private fun similar(
@@ -775,6 +816,8 @@ internal object WindowRepair {
         val inside = first until first + replacement.cues.size
         val said = replacement.range.filter { it !in defects }.map { Prompt.wordsOf(base.cues[it].text) }.toSet()
         val leaks = inside.filter { prompt.voices(spliced.cues[it].text) && Prompt.wordsOf(spliced.cues[it].text) !in said }
-        return (defectCues(spliced.cues, prompt) + leaks).count { it in inside }
+        // At its own 30 s boundaries a window decode crams in paraphrases of what it just said.
+        val crammed = inside.filter { crammed(spliced.cues[it]) }
+        return (defectCues(spliced.cues, prompt) + leaks + crammed).count { it in inside }
     }
 }

@@ -438,6 +438,92 @@ class WindowRepairTest {
         assertEquals(55.4, fitted.words.last().end, 0.01)
     }
 
+    /** Measured: a line invented over an instrumental intro, squeezed onto the song, crammed its first real line into 0.3 s. */
+    @Test
+    fun `words smeared over music ahead of words already on the speech are dropped, not crammed onto it`() {
+        val invented = listOf(" Gather", " around", " now", " you're", " in", " for", " a", " story")
+        val sung = listOf(" Old", " tales", " of", " lore", " all", " in", " search", " of", " a", " glory")
+        val words =
+            invented.mapIndexed { i, t -> Word(t, 0.1 + i * 1.3, 1.3 + i * 1.3, 0.9, 0) } +
+                sung.mapIndexed { i, t -> Word(t, 12.0 + i * 0.3, 12.3 + i * 0.3, 0.9, 0) }
+        val replacement =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(0.1, 16.2, (invented + sung).joinToString(""))),
+                words.dropLast(1) + words.last().copy(end = 16.2),
+            )
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(13.19, 13.76), TimeWindow(14.2, 15.0)))
+
+        assertEquals(sung.joinToString(""), fitted.cues.single().text)
+        assertEquals(13.19, fitted.cues.single().start, 0.01)
+        assertTrue(fitted.words.zipWithNext().all { (a, b) -> b.start - a.start >= 0.05 })
+    }
+
+    @Test
+    fun `a crammed cue a window decode brings is a defect`() {
+        val base = transcription(looping())
+        val cues =
+            listOf(
+                Cue(6.0, 17.9, " Today we are talking about the telescope."),
+                Cue(17.9, 17.95, " what's going on in the universe, but also what's going on"),
+            )
+        val replacement = WindowRepair.Replacement(2..5, cues, transcription(cues).words)
+
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement))
+    }
+
+    /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
+    @Test
+    fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {
+        val cues =
+            looping().take(8) +
+                listOf(
+                    Cue(24.0, 24.0, " And then we found something odd. Nobody expected that part."),
+                    Cue(24.0, 27.0, " It changed everything for us."),
+                    Cue(27.0, 30.0, " The end came soon after that."),
+                )
+
+        assertEquals(listOf(0..9), WindowRepair.windows(cues, WindowRepair.defectCues(cues)))
+    }
+
+    /** Measured: "…fully dexterous" ended one decode segment and "dexters come and rescue you" opened the next, the anchor. */
+    @Test
+    fun `a word the decode repeats across its segment break into the right anchor is not kept`() {
+        val cues =
+            looping().take(6) +
+                listOf(
+                    Cue(18.0, 21.0, " dexters come and rescue you."),
+                    Cue(21.0, 24.0, " Nobody expected that part at all."),
+                )
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 17.5, " Your crewmates are fully dexterous"),
+                Cue(17.5, 21.0, " dexters come and rescue you."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" Your crewmates are fully", replacement.cues.last().text)
+    }
+
+    @Test
+    fun `a word the decode repeats from the left anchor across its segment break is not kept`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Carefully, today we talk about the telescope."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" today we talk about the telescope.", replacement.cues.first().text)
+    }
+
     /** Barry heard "AI might be the" missing: whisper timed them inside the anchor cue, and a time cut dropped them. */
     @Test
     fun `words timed over an anchor that the anchor does not account for are kept`() {

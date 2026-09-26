@@ -736,4 +736,20 @@ class WindowRepairTest {
 
         assertEquals(" The", replacement.words.first().text)
     }
+
+    @Test
+    fun `the closing word of an anchor cut mid-sentence is taken for the anchor's when it ends inside it`() {
+        val cues = looping().toMutableList().also { it[1] = Cue(3.0, 6.0, " We looked at the data again, and") }
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, an"),
+                Cue(6.0, 18.0, " today we are talking about the telescope."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" today", replacement.words.first().text)
+    }
 }

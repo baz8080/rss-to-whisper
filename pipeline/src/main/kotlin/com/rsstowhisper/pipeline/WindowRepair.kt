@@ -329,8 +329,14 @@ internal object WindowRepair {
                 }
             }
             if (found == null) {
-                // The anchor's closing word, rendered another way, ends its sentence as the anchor does.
-                if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end && endsSentence(words, at)) last = at
+                // The anchor's closing word, rendered another way: it ends a sentence if the anchor does, or ends inside it.
+                val closes =
+                    if (cue.text.trimEnd().lastOrNull() in SENTENCE_ENDS) {
+                        endsSentence(words, at)
+                    } else {
+                        words[at].end + shift <= cue.end + OVERLAP_SLACK_SECONDS
+                    }
+                if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end && closes) last = at
                 break
             }
             next = found!! + 1
@@ -376,7 +382,13 @@ internal object WindowRepair {
                     i++
                     continue
                 }
-                if (first != null && next == 0 && words[at].end + shift > cue.start && (at == 0 || endsSentence(words, at - 1))) first = at
+                val opens =
+                    if (cue.text.trimStart().firstOrNull()?.isUpperCase() == true) {
+                        at == 0 || endsSentence(words, at - 1)
+                    } else {
+                        words[at].start + shift >= cue.start - OVERLAP_SLACK_SECONDS
+                    }
+                if (first != null && next == 0 && words[at].end + shift > cue.start && opens) first = at
                 break
             }
             next = found!! - 1

@@ -473,6 +473,16 @@ class WindowRepairTest {
         assertEquals(1, WindowRepair.defectsAfter(base, replacement))
     }
 
+    /** Measured: "but also how peer", four words in 0.14 s at the decode's 30 s boundary. */
+    @Test
+    fun `a crammed cue of a few words a window decode brings is a defect`() {
+        val base = transcription(looping())
+        val cues = listOf(Cue(6.0, 17.86, " Today we are talking about the telescope."), Cue(17.86, 18.0, " but also how peer"))
+        val replacement = WindowRepair.Replacement(2..5, cues, transcription(cues).words)
+
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement))
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

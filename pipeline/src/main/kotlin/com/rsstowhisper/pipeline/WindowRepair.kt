@@ -80,13 +80,16 @@ internal object WindowRepair {
         return defects
     }
 
-    /** More words than anyone says in the time: [MIN_WORDS_FOR_RATE] or more at over [MAX_WORDS_PER_SECOND]. */
+    /** More words than anyone says in the time: [MIN_CRAMMED_WORDS] or more at over [MAX_WORDS_PER_SECOND]. */
     private fun crammed(cue: Cue): Boolean {
         val words = Prompt.wordsOf(cue.text).size
-        return words >= MIN_WORDS_FOR_RATE && cue.end - cue.start < words / MAX_WORDS_PER_SECOND
+        return words >= MIN_CRAMMED_WORDS && cue.end - cue.start < words / MAX_WORDS_PER_SECOND
     }
 
     private const val MAX_WORDS_PER_SECOND = 20.0
+
+    /** Only ever judged beside a defect, at a window's edge or in a new decode: "but also how peer" in 0.14 s. */
+    private const val MIN_CRAMMED_WORDS = 3
 
     /**
      * A cue of this many words in no time. Alone it is too common to call: over

@@ -220,8 +220,10 @@ internal object WindowRepair {
         for (i in defects.sorted()) {
             var first = maxOf(0, i - MARGIN_CUES)
             var last = minOf(cues.size - 1, i + MARGIN_CUES)
-            while (first > 0 && (edge(first) || edge(first - 1) || echoed(first, first - 1))) first--
-            while (last < cues.size - 1 && (edge(last) || edge(last + 1) || echoed(last, last + 1))) last++
+            val floor = maxOf(0, first - MAX_EDGE_GROWTH)
+            val ceiling = minOf(cues.size - 1, last + MAX_EDGE_GROWTH)
+            while (first > floor && (edge(first) || edge(first - 1) || echoed(first, first - 1))) first--
+            while (last < ceiling && (edge(last) || edge(last + 1) || echoed(last, last + 1))) last++
             val previous = ranges.lastOrNull()
             if (previous != null && first <= previous.last + 1) {
                 ranges[ranges.size - 1] = previous.first..maxOf(previous.last, last)
@@ -231,6 +233,9 @@ internal object WindowRepair {
         }
         return ranges
     }
+
+    /** A long stack of crammed cues is not worth decoding minutes of audio for, four times over. */
+    private const val MAX_EDGE_GROWTH = 8
 
     fun window(
         cues: List<Cue>,
@@ -273,7 +278,7 @@ internal object WindowRepair {
         fun leftMatch(): Int? {
             val cue = base.cues[left ?: return null]
             val tail = anchorWords(left).takeLast(ANCHOR_WORDS).map { normalise(it.text) }
-            val end = anchorWords(left).last().end
+            val end = anchorWords(left).lastOrNull()?.end ?: return null
             return matches(contentText, tail).map { content[it + tail.size - 1] }
                 .filter { words[it].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS) }
                 .minByOrNull { abs(words[it].end - end) }
@@ -282,7 +287,7 @@ internal object WindowRepair {
         fun rightMatch(from: Int): Int? {
             val cue = base.cues[right ?: return null]
             val head = anchorWords(right).take(ANCHOR_WORDS).map { normalise(it.text) }
-            val start = anchorWords(right).first().start
+            val start = anchorWords(right).firstOrNull()?.start ?: return null
             return matches(contentText, head).map { content[it] }
                 .filter { it >= from && words[it].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS) }
                 .minByOrNull { abs(words[it].start - start) }
@@ -638,11 +643,14 @@ internal object WindowRepair {
         if (to1 <= to0) return cue to words
         val map = { t: Double -> to0 + (t - first) * (to1 - to0) / (last - first) }
         val moved = words.map { it.copy(start = map(it.start), end = map(it.end)) }
-        if (!crams(moved)) return Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
-        // Squeezing them on would cram the words already there: what whisper smeared over the music ahead of them goes.
-        val kept = words.filter { it.end > onset - MAX_WORDS_OUTSIDE_SPEECH_SECONDS }
-        if (!early || kept.isEmpty() || kept.size == words.size) return cue to words
-        return fitToSpeech(Cue(kept.first().start, cue.end, kept.joinToString("") { it.text }), kept, speech)
+        val fitted = Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
+        if (!crams(moved)) return fitted
+        // Squeezing them on would cram the words already there: what whisper smeared over the music either side goes.
+        val from = if (early) words.indexOfFirst { it.end > onset - MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else 0
+        val to = if (late) words.indexOfLast { it.start < offset + MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else words.lastIndex
+        if (from < 0 || to < from || to - from + 1 == words.size) return fitted
+        val kept = words.subList(from, to + 1)
+        return fitToSpeech(Cue(kept.first().start, kept.last().end, kept.joinToString("") { it.text }), kept, speech)
     }
 
     /** Any [MIN_WORDS_FOR_RATE] spoken words in less time than anyone says them. */
@@ -734,9 +742,8 @@ internal object WindowRepair {
     private const val ANCHOR_LOOKAHEAD = 3
 
     /**
-     * The decode's spoken words beside an anchor that are the anchor's own edge words again ("fully dexterous" /
-     * "dexters come", "I'm Frisian." / "I'm Frisian Cain."): whisper repeating them across a break, or rendering the
-     * anchor's a little differently. [beside] is the decode's words after the left anchor, or before the right one.
+     * The decode's words beside an anchor that are the anchor's edge words again ("fully dexterous" / "dexters come"):
+     * a repeat across a break or a re-rendering. Everyday words ("star" / "Stars", "you know") repeat in real speech.
      */
     private fun repeated(
         words: List<Word>,
@@ -750,17 +757,18 @@ internal object WindowRepair {
             val mine = if (closesAnchor) own.take(k) else own.takeLast(k)
             val said = mine.map { group -> normalise(group.joinToString("") { words[it].text }) }
             val edge = if (closesAnchor) theirs.takeLast(k) else theirs.take(k)
-            // One word is let off a letter or two, as the anchor's rendering of it may be; a short one never is.
-            val same =
-                if (k == 1) {
-                    minOf(said[0].length, edge[0].length) >= MIN_REPEATED_WORD_LETTERS && similar(said[0], edge[0])
-                } else {
-                    said == edge
-                }
+            if (said.none { it.length >= MIN_REPEATED_WORD_LETTERS }) continue
+            val same = if (k == 1) said[0] == edge[0] || similar(said[0], edge[0]) && !prefixed(said[0], edge[0]) else said == edge
             if (same) return mine.flatten()
         }
         return emptyList()
     }
+
+    /** One word the other with a few letters added: "star" and "stars" are different words, not a re-rendering. */
+    private fun prefixed(
+        a: String,
+        b: String,
+    ) = a.startsWith(b) || b.startsWith(a)
 
     /** Tokens grouped into the words they spell, punctuation left out: whisper splits "dexterous" as "de", "xter", "ous". */
     private fun spoken(tokens: List<Word>): List<List<Int>> {
@@ -774,7 +782,7 @@ internal object WindowRepair {
     }
 
     private const val MAX_REPEATED_WORDS = 4
-    private const val MIN_REPEATED_WORD_LETTERS = 4
+    private const val MIN_REPEATED_WORD_LETTERS = 7
 
     /** The same word as whisper might render it twice: equal, one a prefix of the other, or a letter or two off. */
     private fun similar(
@@ -857,12 +865,16 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
-    /** The window's own defects, counting its crammed cues as [defectsAfter] counts a decode's, so the two compare. */
+    /** The window's own defects, counting crammed cues a replacement can change as [defectsAfter] does, so the two compare. */
     fun defectsBefore(
         base: WhisperTranscription,
         range: IntRange,
         defects: Set<Int>,
-    ): Int = range.count { it in defects || crammed(base.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
+    ): Int {
+        val left = range.first.takeIf { it !in defects }
+        val right = range.last.takeIf { it !in defects && it != left }
+        return range.count { it in defects || it != left && it != right && crammed(base.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
+    }
 
     /**
      * Defects left inside [replacement] once spliced, judged in context. A prompt sentence the base's good cues

@@ -1512,7 +1512,8 @@ class PodcastPipeline(
         if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
         logger.info(
             "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
-                "${defects.size} defective cues before, ${WindowRepair.defectCues(repaired.cues, prompt).size} after",
+                "${repairs.sumOf { it["defects_before"] as Int }} defective cues before, " +
+                "${repairs.sumOf { it["defects_after"] as Int }} after",
         )
         return true
     }
@@ -1527,10 +1528,8 @@ class PodcastPipeline(
     )
 
     /**
-     * Every attempt at one window, keeping the one that leaves it with fewest defects and no speech lost. An attempt
-     * whose new words reach seconds into an anchor says that anchor is not what was said there, and is refused.
-     * Between equals, the one whose words sit closest to the speech VAD hears wins: a prompted decode can skip two
-     * sentences and smear its next words across them, where the unprompted one transcribes them.
+     * Every attempt at one window, keeping the one with fewest defects, no speech lost, and between equals words closest
+     * to the speech VAD hears. One whose words reach seconds into an anchor disputes that anchor, and is refused.
      */
     private fun tryWindow(
         base: WhisperTranscription,

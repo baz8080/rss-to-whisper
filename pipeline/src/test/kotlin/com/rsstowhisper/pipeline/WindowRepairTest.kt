@@ -518,6 +518,69 @@ class WindowRepairTest {
         assertEquals(defects.size + 1, WindowRepair.defectsBefore(base, 0..8, defects))
     }
 
+    @Test
+    fun `an anchor with no words, a music marker, falls back to time`() {
+        val cues = looping().take(6) + listOf(Cue(18.0, 21.0, " ♪"), Cue(21.0, 24.0, " Nobody expected that part at all."))
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Today we are talking about the telescope."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals("time", replacement.anchorRight)
+        assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
+    }
+
+    @Test
+    fun `a crammed anchor, which no decode replaces, does not count before`() {
+        val cues = looping().take(7) + listOf(Cue(21.0, 21.0, " Right, right."), Cue(21.0, 24.0, " Nobody expected that part at all."))
+        val base = transcription(cues)
+        val defects = WindowRepair.defectCues(cues)
+
+        assertEquals(defects.size, WindowRepair.defectsBefore(base, 0..7, defects))
+    }
+
+    @Test
+    fun `an everyday word before the right anchor that it opens with is kept`() {
+        val cues =
+            looping().take(6) +
+                listOf(
+                    Cue(18.0, 21.0, " Stars form when clouds collapse."),
+                    Cue(21.0, 24.0, " Nobody expected that part at all."),
+                )
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Today we are looking at the star"),
+                Cue(18.0, 21.0, " Stars form when clouds collapse."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" Today we are looking at the star", replacement.cues.last().text)
+    }
+
+    @Test
+    fun `a short phrase the speaker repeats after the left anchor is kept`() {
+        val cues =
+            looping().take(1) + listOf(Cue(3.0, 6.0, " We looked at it again, you know.")) + looping().drop(2)
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at it again, you know."),
+                Cue(6.0, 18.0, " You know, the thing is the telescope."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" You know, the thing is the telescope.", replacement.cues.first().text)
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

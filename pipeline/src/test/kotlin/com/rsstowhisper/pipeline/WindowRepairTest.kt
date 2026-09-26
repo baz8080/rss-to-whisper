@@ -706,4 +706,34 @@ class WindowRepairTest {
         assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
         assertTrue(replacement.cues.all { it.start >= 6.0 && it.end <= 18.0 })
     }
+
+    @Test
+    fun `a filler inside the right anchor's rendering is walked past`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Today we are talking about the telescope."),
+                Cue(18.0, 21.0, " And, uh, then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
+    }
+
+    @Test
+    fun `a new sentence starting inside the anchor is not taken for its missing last word`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 5.9, " We looked at the data again,"),
+                Cue(5.9, 18.0, " The telescope is what we are talking about."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" The", replacement.words.first().text)
+    }
 }

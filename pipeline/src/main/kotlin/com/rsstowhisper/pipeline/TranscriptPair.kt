@@ -7,6 +7,7 @@ import com.rsstowhisper.external.WhisperRun
 import com.rsstowhisper.external.WhisperTranscription
 import java.io.EOFException
 import java.io.IOException
+import java.nio.charset.CharacterCodingException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.GZIPInputStream
@@ -34,6 +35,8 @@ internal object TranscriptPair {
                 mapper.readTree(Files.readString(episodeDir.resolve(PodcastPipeline.TRANSCRIPT_FILENAME)))
             } catch (e: JsonProcessingException) {
                 return Diverged("transcript.json is not JSON (${e.originalMessage})")
+            } catch (e: CharacterCodingException) {
+                return Diverged("transcript.json is not UTF-8 (${e.message})")
             } catch (e: IOException) {
                 return Unreadable("transcript.json cannot be read (${e.message})")
             }

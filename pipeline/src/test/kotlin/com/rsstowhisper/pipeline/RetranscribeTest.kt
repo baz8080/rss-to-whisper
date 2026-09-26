@@ -800,4 +800,19 @@ class RetranscribeTest {
 
         assertTrue("We looked at the data again" in readTranscript(dir)["episode_transcript"].toString())
     }
+
+    @Test
+    fun `a pair lock is judged stale by the clock of the run that wrote it`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val lock = dir.resolve(PodcastPipeline.PAIR_LOCK_FILENAME)
+        Files.writeString(lock, "${Instant.now().minusSeconds(600).toEpochMilli()} 1 dead-run")
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        assertTrue(pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))))
+
+        assertTrue("We looked at the data again" in readTranscript(dir)["episode_transcript"].toString())
+        assertFalse(Files.exists(lock))
+    }
 }

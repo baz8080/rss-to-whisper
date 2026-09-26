@@ -164,11 +164,8 @@ internal object WindowRepair {
     private const val ANCHOR_SLACK_SECONDS = 2.0
 
     /**
-     * The new decode of [range], cut at the anchor cues at its ends, which are kept
-     * exactly as they were. Each edge is found by the anchor cue's own words in the
-     * new decode near their old time, and only by time when the words are not there:
-     * whisper starts a window cold, so its first words are the least trustworthy,
-     * and the anchor cue already holds them.
+     * The new decode of [range], cut at its anchor cues, kept verbatim. Each edge is found by the anchor's own words,
+     * and only by time without them: whisper starts a window cold, so its first words are the least trustworthy.
      */
     fun anchor(
         base: WhisperTranscription,
@@ -301,10 +298,8 @@ internal object WindowRepair {
     }
 
     /**
-     * Where new content starts when the anchor's closing words were not found as text:
-     * the decode's words are walked over the anchor's in order while they resemble them.
-     * The decode renders the anchor its own way, and can time the next sentence's
-     * opening words inside it, so what follows the walk is kept whatever its time.
+     * Where new content starts when the anchor's closing words are not there as text: the decode's words
+     * walked over the anchor's while they resemble them. Whatever follows is kept, even timed inside the anchor.
      */
     private fun walkLeft(
         words: List<Word>,
@@ -334,8 +329,8 @@ internal object WindowRepair {
                 }
             }
             if (found == null) {
-                // The anchor's closing word, rendered another way.
-                if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end) last = at
+                // The anchor's closing word, rendered another way, ends its sentence as the anchor does.
+                if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end && endsSentence(words, at)) last = at
                 break
             }
             next = found!! + 1
@@ -381,7 +376,7 @@ internal object WindowRepair {
                     i++
                     continue
                 }
-                if (first != null && next == 0 && words[at].end + shift > cue.start) first = at
+                if (first != null && next == 0 && words[at].end + shift > cue.start && (at == 0 || endsSentence(words, at - 1))) first = at
                 break
             }
             next = found!! - 1
@@ -391,6 +386,15 @@ internal object WindowRepair {
         }
         return first ?: words.indexOfFirst { it.start + shift >= cue.start - 0.1 }.let { if (it < 0) words.size else maxOf(it, from) }
     }
+
+    /** Whether [at] closes a sentence, by its own punctuation or a mark whisper sent as a word of its own. */
+    private fun endsSentence(
+        words: List<Word>,
+        at: Int,
+    ): Boolean = words[at].text.trimEnd().lastOrNull() in SENTENCE_ENDS || words.getOrNull(at + 1)?.text?.trim() in SENTENCE_END_WORDS
+
+    private val SENTENCE_ENDS = setOf('.', '!', '?')
+    private val SENTENCE_END_WORDS = setOf(".", "!", "?")
 
     /** Joins cue [at] + 1 onto cue [at], renumbering the words after it. */
     private fun merge(
@@ -660,9 +664,8 @@ internal object WindowRepair {
     }
 
     /**
-     * Defects left inside [replacement] once spliced, judged in context: a stretch-copy needs
-     * the cues before it. A prompt sentence not among the base's good cues there counts at any
-     * length: fitted onto speech it is shorter than a leak, and is still the prompt, not the speech.
+     * Defects left inside [replacement] once spliced, judged in context. A prompt sentence the base's good cues
+     * there did not say counts at any length: fitted onto speech it is shorter than a leak, and still the prompt.
      */
     fun defectsAfter(
         base: WhisperTranscription,

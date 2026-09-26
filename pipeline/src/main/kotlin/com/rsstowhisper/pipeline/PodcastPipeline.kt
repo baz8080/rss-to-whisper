@@ -36,12 +36,14 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.ExecutorService
@@ -586,7 +588,10 @@ class PodcastPipeline(
                     // An Error on the prefetch thread arrives wrapped, and must still end the run.
                     val cause = (e as? ExecutionException)?.cause ?: e
                     if (cause is Error) throw cause
-                    if (cause is WordTimesMisplaced) throw cause
+                    if (cause is WordTimesMisplaced) {
+                        counts.failed++
+                        throw cause
+                    }
                     logger.error("Couldn't process episode entry: ${entry.title}", cause)
                     counts.failed++
                 }
@@ -983,11 +988,8 @@ class PodcastPipeline(
     }
 
     /**
-     * The only writer of `transcript.json` and `words.jsonl.gz`: both come from
-     * [transcription], carry its run id, and are staged and checked in full before
-     * either reaches its real name. A replace names the run it read in [replacing],
-     * null for a transcript with none, and is refused if the pair changed since.
-     * False when the pair on disk is not that decode's.
+     * The only writer of `transcript.json` and `words.jsonl.gz`, staged and checked before either lands. A replace
+     * names the run it read in [replacing] and is refused if that changed. False when the pair on disk is not this one.
      */
     private fun writeTranscriptArtifacts(
         episodeDirPath: Path,
@@ -1060,9 +1062,8 @@ class PodcastPipeline(
     }
 
     /**
-     * Words first, over the old ones, then the transcript: interrupted between the two,
-     * the old transcript sits beside words stamped with another run, which every check
-     * calls diverged. A failure puts the old words back, so the old pair survives it.
+     * Words first, then the transcript: interrupted between them, the old transcript sits beside another run's
+     * words, which every check calls diverged. A failure puts the old words back.
      */
     private fun swapPair(
         episodeDirPath: Path,
@@ -1096,33 +1097,54 @@ class PodcastPipeline(
         }
     }
 
-    /**
-     * Only one writer swaps an episode's pair at a time. The swap takes milliseconds,
-     * so a lock older than [STALE_LOCK_SECONDS] was left by a run that died holding it.
-     * Null when another writer kept it throughout.
-     */
+    /** One writer swaps an episode's pair at a time. Null when another writer kept the lock throughout. */
     private fun <T> withPairLock(
         episodeDirPath: Path,
         label: String,
         block: () -> T,
     ): T? {
         val lock = episodeDirPath.resolve(PAIR_LOCK_FILENAME)
+        val token = "${Instant.now().toEpochMilli()} ${ProcessHandle.current().pid()} ${UUID.randomUUID()}"
         repeat(LOCK_TRIES) {
             try {
-                Files.createFile(lock)
+                Files.writeString(lock, token, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
             } catch (_: FileAlreadyExistsException) {
-                val age = runCatching { Instant.now().epochSecond - Files.getLastModifiedTime(lock).toInstant().epochSecond }.getOrNull()
-                if (age != null && age > STALE_LOCK_SECONDS) runCatching { Files.deleteIfExists(lock) } else Thread.sleep(LOCK_WAIT_MILLIS)
+                if (!clearIfStale(lock)) Thread.sleep(LOCK_WAIT_MILLIS)
                 return@repeat
             }
             try {
                 return block()
             } finally {
-                runCatching { Files.deleteIfExists(lock) }
+                runCatching { if (Files.readString(lock) == token) Files.delete(lock) }
             }
         }
         logger.warn("$label is being written by another run; leaving it to that one")
         return null
+    }
+
+    /**
+     * A swap takes milliseconds, so a lock older than [STALE_LOCK_SECONDS] by its writer's own clock was left by a
+     * run that died. Moved aside rather than deleted, so of two waiters only one takes it, and only the lock it judged.
+     */
+    private fun clearIfStale(lock: Path): Boolean {
+        val held = runCatching { Files.readString(lock) }.getOrNull() ?: return false
+        val since =
+            held.substringBefore(' ').toLongOrNull()
+                // Empty: its writer died between creating it and writing to it.
+                ?: runCatching { Files.getLastModifiedTime(lock).toMillis() }.getOrNull()
+                ?: return false
+        if (Instant.now().toEpochMilli() - since < STALE_LOCK_SECONDS * 1000) return false
+        val aside = lock.resolveSibling("$PAIR_LOCK_FILENAME.${ProcessHandle.current().pid()}.stale")
+        try {
+            Files.move(lock, aside, StandardCopyOption.ATOMIC_MOVE)
+        } catch (_: Exception) {
+            return false
+        }
+        if (runCatching { Files.readString(aside) }.getOrNull() != held) {
+            runCatching { Files.move(aside, lock, StandardCopyOption.ATOMIC_MOVE) }
+        }
+        runCatching { Files.deleteIfExists(aside) }
+        return true
     }
 
     private fun runIdOf(transcript: Map<String, Any?>): String? = (transcript[WhisperRun.FIELD] as? Map<*, *>)?.get("run_id") as? String

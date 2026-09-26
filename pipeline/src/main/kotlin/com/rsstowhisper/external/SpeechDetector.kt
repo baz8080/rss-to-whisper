@@ -19,7 +19,16 @@ open class SpeechDetector(
     private val binary: String,
     private val model: String,
 ) {
-    open fun speech(audioPath: Path): List<TimeWindow> {
+    open fun speech(audioPath: Path): List<TimeWindow> =
+        try {
+            detect(audioPath)
+        } catch (e: SpeechDetectorFailed) {
+            throw e
+        } catch (e: IOException) {
+            throw SpeechDetectorFailed("Cannot run $binary on $audioPath: ${e.message}", e)
+        }
+
+    private fun detect(audioPath: Path): List<TimeWindow> {
         // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
         val out = Files.createTempFile("vad-", ".txt")
         try {

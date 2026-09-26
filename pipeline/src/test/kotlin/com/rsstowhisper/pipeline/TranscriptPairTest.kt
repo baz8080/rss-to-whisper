@@ -339,4 +339,14 @@ class TranscriptPairTest {
             Files.setPosixFilePermissions(show, PosixFilePermissions.fromString("rwxr-xr-x"))
         }
     }
+
+    @Test
+    fun `a transcript that is not UTF-8 is diverged, not unreadable`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episodeDir(tempDir, vtt, listOf(word(" One", 0)))
+        Files.write(dir.resolve("transcript.json"), byteArrayOf(0x7b, 0x22, 0xe9.toByte(), 0x22, 0x7d))
+
+        assertIs<TranscriptPair.Diverged>(TranscriptPair.check(dir))
+    }
 }

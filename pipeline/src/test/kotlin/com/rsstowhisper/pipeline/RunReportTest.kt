@@ -257,4 +257,19 @@ class RunReportTest {
         assertEquals(0, show["transcribed"])
         assertEquals(1, show["failed"])
     }
+
+    @Test
+    fun `an episode that stopped the run for misplaced word times is counted as failed`(
+        @TempDir tempDir: Path,
+    ) {
+        val vadServer =
+            """{"segments":[{"start":0.0,"end":1.0,"text":" Hello.","words":[""" +
+                """{"word":" Hello.","start":50.0,"end":51.0,"probability":0.9}]}]}"""
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(PodcastConfig(name = "Show", url = "https://feed")), makeFeed(makeEntry("One")), vtt = vadServer)
+
+        pipeline.run()
+
+        assertEquals(1, podcast(readReport(tempDir), "Show")["failed"])
+    }
 }

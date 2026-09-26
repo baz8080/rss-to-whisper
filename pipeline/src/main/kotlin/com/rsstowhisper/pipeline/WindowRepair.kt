@@ -185,11 +185,21 @@ internal object WindowRepair {
 
         // A stack of crammed cues at an edge is whisper's copy of the window's text: never an anchor, never left beside it.
         fun edge(at: Int) = at in cues.indices && crammed(cues[at])
+
+        // So is a cue the next one opens with again, or the one before ends with: whisper repeating itself across a break.
+        fun echoed(
+            at: Int,
+            by: Int,
+        ): Boolean {
+            val own = Prompt.wordsOf(cues[at].text)
+            val theirs = Prompt.wordsOf(cues[by].text)
+            return own.size >= 2 && theirs.size > own.size && (if (by > at) theirs.take(own.size) else theirs.takeLast(own.size)) == own
+        }
         for (i in defects.sorted()) {
             var first = maxOf(0, i - MARGIN_CUES)
             var last = minOf(cues.size - 1, i + MARGIN_CUES)
-            while (first > 0 && (edge(first) || edge(first - 1))) first--
-            while (last < cues.size - 1 && (edge(last) || edge(last + 1))) last++
+            while (first > 0 && (edge(first) || edge(first - 1) || echoed(first, first - 1))) first--
+            while (last < cues.size - 1 && (edge(last) || edge(last + 1) || echoed(last, last + 1))) last++
             val previous = ranges.lastOrNull()
             if (previous != null && first <= previous.last + 1) {
                 ranges[ranges.size - 1] = previous.first..maxOf(previous.last, last)
@@ -282,9 +292,20 @@ internal object WindowRepair {
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
             while (from < words.size && normalised[from].isEmpty()) from++
-            val opening = content.firstOrNull { it >= from }
-            if (opening != null && repeats(words, opening, anchorWords(left).last(), opensSegment = true)) {
-                from = opening + 1
+            val again =
+                content.firstOrNull { it >= from }?.let {
+                    repeated(
+                        words,
+                        it,
+                        anchorWords(left).map {
+                                w ->
+                            normalise(w.text)
+                        },
+                        true,
+                    )
+                }
+            if (!again.isNullOrEmpty()) {
+                from = again.last() + 1
                 while (from < words.size && normalised[from].isEmpty()) from++
             }
         }
@@ -304,8 +325,19 @@ internal object WindowRepair {
                 until = walkRight(words, normalised, content, base.cues[right], anchorWords(right).map { normalise(it.text) }, shift, from)
                 anchorRight = "time"
             }
-            val closing = content.lastOrNull { it in from until until }
-            if (closing != null && repeats(words, closing, anchorWords(right).first(), opensSegment = false)) until = closing
+            val again =
+                content.lastOrNull { it in from until until }?.let {
+                    repeated(
+                        words,
+                        it,
+                        anchorWords(right).map {
+                                w ->
+                            normalise(w.text)
+                        },
+                        false,
+                    )
+                }
+            if (!again.isNullOrEmpty()) until = again.first()
         }
 
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
@@ -702,22 +734,34 @@ internal object WindowRepair {
     private const val ANCHOR_LOOKAHEAD = 3
 
     /**
-     * whisper can end a segment on a word and open the next on it again ("fully dexterous" / "dexters come"). The word at
-     * [at], first or last of its segment, is the anchor's own [word] once more when it is like it and not a short one.
+     * whisper can end a segment and open the next on the same words ("fully dexterous" / "dexters come", "I'm Frisian." /
+     * "I'm Frisian Cain."). The spoken words at the end, or start, of [at]'s segment that are the anchor's [edge] again.
      */
-    private fun repeats(
+    private fun repeated(
         words: List<Word>,
         at: Int,
-        word: Word,
+        edge: List<String>,
         opensSegment: Boolean,
-    ): Boolean {
-        val own = normalise(words[at].text)
-        val theirs = normalise(word.text)
-        if (minOf(own.length, theirs.length) < MIN_REPEATED_WORD_LETTERS || !similar(own, theirs)) return false
+    ): List<Int> {
         val spoken = words.indices.filter { words[it].segment == words[at].segment && normalise(words[it].text).isNotEmpty() }
-        return at == if (opensSegment) spoken.first() else spoken.last()
+        if (at != if (opensSegment) spoken.first() else spoken.last()) return emptyList()
+        for (k in minOf(MAX_REPEATED_WORDS, spoken.size, edge.size) downTo 1) {
+            val own = if (opensSegment) spoken.take(k) else spoken.takeLast(k)
+            val said = own.map { normalise(words[it].text) }
+            val theirs = if (opensSegment) edge.takeLast(k) else edge.take(k)
+            // One word is let off a letter or two, as the anchor's rendering of it may be; a short one never is.
+            val same =
+                if (k == 1) {
+                    minOf(said[0].length, theirs[0].length) >= MIN_REPEATED_WORD_LETTERS && similar(said[0], theirs[0])
+                } else {
+                    said == theirs
+                }
+            if (same) return own
+        }
+        return emptyList()
     }
 
+    private const val MAX_REPEATED_WORDS = 4
     private const val MIN_REPEATED_WORD_LETTERS = 4
 
     /** The same word as whisper might render it twice: equal, one a prefix of the other, or a letter or two off. */

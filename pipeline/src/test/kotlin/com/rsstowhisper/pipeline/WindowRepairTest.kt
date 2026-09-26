@@ -524,6 +524,42 @@ class WindowRepairTest {
         assertEquals(" today we talk about the telescope.", replacement.cues.first().text)
     }
 
+    /** Measured: "I'm Frisian." at a 30 s boundary, then "I'm Frisian Cain. I'm the publisher…", kept as the window's anchor. */
+    @Test
+    fun `a window grows over an edge cue the next one repeats, so it is not the anchor`() {
+        val cues =
+            looping().take(7) +
+                listOf(
+                    Cue(21.0, 21.6, " I'm Frisian."),
+                    Cue(21.6, 26.0, " I'm Frisian Cain. I'm the publisher."),
+                    Cue(26.0, 29.0, " It changed everything for us."),
+                )
+
+        assertEquals(listOf(0..8), WindowRepair.windows(cues, WindowRepair.defectCues(cues)))
+    }
+
+    @Test
+    fun `words the decode repeats across its segment break into the right anchor are not kept`() {
+        val cues =
+            looping().take(6) +
+                listOf(
+                    Cue(18.0, 21.0, " I'm Frisian Cain, the publisher."),
+                    Cue(21.0, 24.0, " Nobody expected that part at all."),
+                )
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 16.0, " Today we talk about the telescope."),
+                Cue(16.0, 18.0, " I'm Frisian."),
+                Cue(18.0, 21.0, " I'm Frisian Cain, the publisher."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(listOf(" Today we talk about the telescope."), replacement.cues.map { it.text })
+    }
+
     /** Barry heard "AI might be the" missing: whisper timed them inside the anchor cue, and a time cut dropped them. */
     @Test
     fun `words timed over an anchor that the anchor does not account for are kept`() {

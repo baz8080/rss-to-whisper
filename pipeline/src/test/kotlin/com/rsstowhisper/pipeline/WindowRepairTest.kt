@@ -688,4 +688,21 @@ class WindowRepairTest {
         assertEquals(0, txSvc.calls.size)
         assertTrue(log.any { "no word timings to splice into" in it })
     }
+
+    @Test
+    fun `words the decode timed past the right anchor's start are not kept before it`() {
+        val base = transcription(looping())
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 17.0, " Today we are talking about the telescope."),
+                Cue(21.0, 21.0, " but how we know"),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(listOf(" Today we are talking about the telescope."), replacement.cues.map { it.text })
+        assertTrue(replacement.cues.all { it.start >= 6.0 && it.end <= 18.0 })
+    }
 }

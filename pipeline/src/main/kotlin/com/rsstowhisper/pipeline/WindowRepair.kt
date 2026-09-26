@@ -244,19 +244,13 @@ internal object WindowRepair {
         }
 
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
-        val kept =
-            (
-                if (from < until) {
-                    words.subList(
-                        from,
-                        until,
-                    )
-                } else {
-                    emptyList()
-                }
-            ).map { it.copy(start = clock(it.start), end = clock(it.end)) }
         val floor = left?.let { base.cues[it].end }
         val ceiling = right?.let { base.cues[it].start }
+        // Words timed well into the right anchor are the decode running on past it: the anchor already holds that time.
+        val kept =
+            (if (from < until) words.subList(from, until) else emptyList())
+                .map { it.copy(start = clock(it.start), end = clock(it.end)) }
+                .filter { ceiling == null || it.start < ceiling + OVERLAP_SLACK_SECONDS }
         val cues = mutableListOf<Cue>()
         val out = mutableListOf<Word>()
         for ((segment, segmentWords) in kept.groupBy { it.segment }.toSortedMap()) {
@@ -265,8 +259,14 @@ internal object WindowRepair {
             val text = if (whole) original.text else segmentWords.joinToString("") { it.text }
             var start = if (whole) clock(original.start) else segmentWords.first().start
             var end = if (whole) clock(original.end) else segmentWords.last().end
-            if (floor != null) start = maxOf(start, floor)
-            if (ceiling != null) end = minOf(end, ceiling)
+            if (floor != null) {
+                start = maxOf(start, floor)
+                end = maxOf(end, floor)
+            }
+            if (ceiling != null) {
+                start = minOf(start, ceiling)
+                end = minOf(end, ceiling)
+            }
             // Words kept from over an anchor's span belong after it, not inside it.
             out +=
                 segmentWords.map {
@@ -279,7 +279,13 @@ internal object WindowRepair {
         }
         // Words clamped onto an anchor's edge leave a cue of no length there; they belong with the cue beside them.
         if (cues.size > 1 && floor != null && cues.first().let { it.start == floor && it.end <= it.start }) merge(cues, out, 0)
-        if (cues.size > 1 && ceiling != null && cues.last().let { it.end == ceiling && it.end <= it.start }) merge(cues, out, cues.size - 2)
+        if (cues.size > 1 && ceiling != null && cues.last().let { it.start == ceiling && it.end <= it.start }) {
+            merge(
+                cues,
+                out,
+                cues.size - 2,
+            )
+        }
         return Replacement(
             range = inner,
             cues = cues,

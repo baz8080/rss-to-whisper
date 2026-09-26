@@ -12,6 +12,9 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.SpeechDetector
+import com.rsstowhisper.external.SpeechDetectorFailed
+import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.feed.FeedService
 import org.slf4j.LoggerFactory
@@ -87,6 +90,9 @@ internal val WORDLESS_JSON =
         """{"id":0,"start":0.0,"end":3.0,"text":" A line, with no word times.","words":[]}""" +
         "]}"
 
+/** Named per process, as the pipeline names it; a test blocks a write by occupying it. */
+internal fun stagedWordsName(): String = "words.jsonl.gz.${ProcessHandle.current().pid()}.new"
+
 internal val FAKE_MP3_BYTES = "fake-mp3-bytes".toByteArray()
 
 internal open class FakeFeedService(
@@ -142,6 +148,12 @@ internal class FakeTranscriber(
     /** The per-podcast prompt each call carried, null where the default applies. */
     val prompts = mutableListOf<String?>()
 
+    /** Whether each call conditioned on earlier text, in call order. */
+    val conditioned = mutableListOf<Boolean>()
+
+    /** The stretch of audio each call asked for, null for the whole file. */
+    val windows = mutableListOf<TimeWindow?>()
+
     var pings = 0
         private set
 
@@ -149,11 +161,15 @@ internal class FakeTranscriber(
         audioPath: Path,
         language: String,
         prompt: String?,
+        conditioned: Boolean,
+        window: TimeWindow?,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
         languages.add(language)
         prompts.add(prompt)
+        this.conditioned.add(conditioned)
+        windows.add(window)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response
@@ -162,6 +178,21 @@ internal class FakeTranscriber(
     override fun ping(): Boolean {
         pings++
         return pingSucceeds
+    }
+}
+
+/** Hears speech in [spans] in every file, or fails the way a missing binary does. */
+internal class FakeSpeechDetector(
+    private val spans: List<TimeWindow>,
+    private val fails: Boolean = false,
+) : SpeechDetector("whisper-vad-speech-segments", "silero.bin") {
+    var calls = 0
+        private set
+
+    override fun speech(audioPath: Path): List<TimeWindow> {
+        calls++
+        if (fails) throw SpeechDetectorFailed("Cannot run whisper-vad-speech-segments: No such file or directory")
+        return spans
     }
 }
 
@@ -221,6 +252,7 @@ internal fun buildPipeline(
     orphanRecoveryLimit: Int = 0,
     language: String = Transcriber.DEFAULT_LANGUAGE,
     qualityRetry: Boolean = true,
+    decodeWithoutHistory: Boolean = false,
     dryRun: Boolean = false,
     transcriberFails: (() -> Nothing)? = null,
     onTranscribe: ((Path) -> Unit)? = null,
@@ -229,6 +261,7 @@ internal fun buildPipeline(
     /** Supply one when the test needs a reference to it before the pipeline exists. */
     feedService: FakeFeedService? = null,
     audioDir: Path? = null,
+    speechDetector: SpeechDetector? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
@@ -241,6 +274,7 @@ internal fun buildPipeline(
             orphanRecoveryLimit = orphanRecoveryLimit,
             language = language,
             qualityRetry = qualityRetry,
+            decodeWithoutHistory = decodeWithoutHistory,
             dryRun = dryRun,
             podcasts = podcasts,
         )
@@ -258,6 +292,7 @@ internal fun buildPipeline(
             config = config,
             feedService = feedSvc,
             transcriber = txSvc,
+            speechDetector = speechDetector,
         )
     return Triple(pipeline, txSvc, feedSvc)
 }

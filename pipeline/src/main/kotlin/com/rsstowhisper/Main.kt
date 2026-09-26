@@ -2,6 +2,7 @@ package com.rsstowhisper
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.LoggerContext
+import ch.qos.logback.core.ConsoleAppender
 import com.rsstowhisper.audio.audioChapterJson
 import com.rsstowhisper.audio.audioChapterReport
 import com.rsstowhisper.audio.surveyAudioChapters
@@ -66,6 +67,9 @@ fun main(argv: Array<String>) {
             exitProcess(1)
         }
 
+    // Its stdout is the list --retranscribe-list reads back, so everything else goes to stderr.
+    if (args.verifyPairs || args.listDefects) logToStderr()
+
     if (config.verbose) {
         val loggerContext = LoggerFactory.getILoggerFactory() as LoggerContext
         loggerContext.getLogger("com.rsstowhisper").level = Level.DEBUG
@@ -74,17 +78,37 @@ fun main(argv: Array<String>) {
     val logPath = installErrorLog(config.dataDirectory)
     val tally = installRunTally()
 
+    val (listedPaths, listedIds) =
+        args.retranscribeList?.let { file ->
+            try {
+                RetranscribeRequest.parseList(Files.readAllLines(Path.of(file)))
+            } catch (e: Exception) {
+                System.err.println("Cannot read --retranscribe-list $file: ${e.message}")
+                exitProcess(1)
+            }
+        } ?: (emptyList<String>() to emptyList())
+    if (args.retranscribeList != null && listedPaths.isEmpty() && listedIds.isEmpty()) {
+        // Otherwise an empty list would fall through to following the feeds.
+        System.err.println("--retranscribe-list ${args.retranscribeList} names no episodes")
+        exitProcess(1)
+    }
+
     val pipeline = PodcastPipeline(config)
     val ok =
         try {
-            if (args.isRetranscribe) {
+            if (args.verifyPairs) {
+                pipeline.verifyPairs()
+            } else if (args.listDefects) {
+                pipeline.listDefects()
+            } else if (args.isRetranscribe) {
                 pipeline.retranscribe(
                     RetranscribeRequest(
-                        paths = args.retranscribePaths,
-                        ids = args.retranscribeIds,
+                        paths = args.retranscribePaths + listedPaths,
+                        ids = args.retranscribeIds + listedIds,
                         flagged = args.retranscribeFlagged,
                         limit = args.retranscribeLimit,
                         force = args.retranscribeForce,
+                        repairWindows = args.repairWindows,
                     ),
                 )
             } else {
@@ -93,12 +117,21 @@ fun main(argv: Array<String>) {
         } finally {
             // A run that died still has to say so: silence is the one outcome
             // indistinguishable from a run that never launched.
-            println(tally.summary(logPath))
+            (if (args.verifyPairs || args.listDefects) System.err else System.out).println(tally.summary(logPath))
             // Without the log path -- it is a local filesystem path, and the
             // notification may land on a public topic.
             config.notifyUrl?.takeIf { it.isNotBlank() }?.let { Notifier().notify(it, tally.summary(null)) }
         }
     if (!ok) {
         exitProcess(1)
+    }
+}
+
+private fun logToStderr() {
+    val root = (LoggerFactory.getILoggerFactory() as LoggerContext).getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME)
+    root.iteratorForAppenders().asSequence().filterIsInstance<ConsoleAppender<*>>().forEach {
+        it.stop()
+        it.target = "System.err"
+        it.start()
     }
 }

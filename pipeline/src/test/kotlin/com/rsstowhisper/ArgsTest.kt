@@ -198,4 +198,31 @@ class ArgsTest {
         val ex = assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--retranscribe-force")) }
         assertTrue(ex.message!!.contains("--retranscribe-force"), ex.message!!)
     }
+
+    @Test
+    fun `a list file is a re-transcription target that force can apply to`() {
+        val args = parseArgs(arrayOf("--retranscribe-list", "todo.txt", "--retranscribe-force"))
+
+        assertEquals("todo.txt", args.retranscribeList)
+        assertTrue(args.isRetranscribe)
+        assertTrue(args.retranscribeForce)
+    }
+
+    @Test
+    fun `list-defects only reads`() {
+        assertTrue(parseArgs(arrayOf("--list-defects")).listDefects)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--retranscribe-id", "abcd1234")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--verify-pairs")) }
+    }
+
+    @Test
+    fun `verify-pairs is its own run`() {
+        assertTrue(parseArgs(arrayOf("--verify-pairs")).verifyPairs)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--verify-pairs", "--retranscribe-id", "abcd1234")) }
+    }
+
+    @Test
+    fun `the whisper model is a free-text label`() {
+        assertEquals("ggml-large-v3", parseArgs(arrayOf("--whisper-model", "ggml-large-v3")).whisperModel)
+    }
 }

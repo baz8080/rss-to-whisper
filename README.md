@@ -543,6 +543,7 @@ below supply the three required values.
 | `--data-dir <path>` | `PIPELINE_DATA_DIRECTORY` |
 | `--audio-dir <path>` | `PIPELINE_AUDIO_DIRECTORY` |
 | `--whisper-url <url>` | `PIPELINE_WHISPER_SERVER_URL` |
+| `--whisper-model <name>` | `PIPELINE_WHISPER_MODEL`, or `whisper_model` in `pods.yaml` |
 | `--verbose` / `--no-verbose` | `PIPELINE_VERBOSE` |
 | `--recover-orphans` / `--no-recover-orphans` | `recover_orphans` in `pods.yaml` |
 | `--orphan-limit <n>` | `orphan_recovery_limit` in `pods.yaml` |
@@ -550,7 +551,9 @@ below supply the three required values.
 | `--dry-run` | No equivalent; see [Dry run](#dry-run) |
 | `--dump-feed-markup <url>`, `--dump-limit <n>` | No equivalent; see [What else a feed carries](#what-else-a-feed-carries) |
 | `--dump-audio-chapters <dir>` | No equivalent; see [Chapters inside the audio](#chapters-inside-the-audio) |
-| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
+| `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-list <file>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
+| `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
+| `--list-defects` | No equivalent; see [Repairing windows](#repairing-windows) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -743,6 +746,67 @@ constants. They live together at the top of
 `pipeline/src/main/kotlin/com/rsstowhisper/pipeline/TranscriptQuality.kt`, each with the
 number it came from.
 
+### Decoding without history
+
+`decode_without_history: true` in `pods.yaml` makes the first decode of every episode
+send `max_context=0`, so whisper conditions no window on the text before it. That text
+is what feeds repetition loops and stretch-copies. whisper.cpp skips the initial prompt
+along with the history, so no prompt is sent, and a decode that comes back flagged is
+retried with the prompt and the history; the better of the two is kept.
+
+Measured on the same audio, same model and server, 2026-09-25:
+
+| sample | request | clean | loops | stretch-copy | unpunctuated | words |
+| --- | --- | --- | --- | --- | --- | --- |
+| 24 random episodes | default | 18 | 5 | 1 | 0 | 1.00 |
+| | `max_context=0` | 23 | 0 | 0 | 1 | 1.01 |
+| 16 with stretch-copies or loops | default | 9 | 3 | 6 | 0 | 1.00 |
+| | `max_context=0` | 15 | 0 | 0 | 1 | 1.02 |
+
+The cost is punctuation: median marks per word fell from 0.140 to 0.114 without the
+prompt. It is off by default.
+
+### Repairing windows
+
+```bash
+./transcribe --repair-windows --retranscribe-list episodes.txt
+```
+
+Re-decodes only the stretches of each target around its defects, instead of the whole
+episode, and splices them into the pair on disk. A defect is a stretch-copy, a run of
+four or more identical cues, an echo or long copy of the cues before it, or a cue of 10 s
+or more that is nothing but a sentence of the initial prompt: over music or silence, a
+prompted decode voices the prompt.
+
+- **Windows** are the defective cues plus two good cues either side. whisper-server
+  decodes just that stretch (`offset_t`, `duration`); nothing is cut from the mp3.
+- **Anchors.** The outer good cue at each end is kept exactly as it was; the one against
+  the defect is re-decoded, since it is the cue most often damaged. The new decode is cut
+  after the last three words of the left anchor and before the first three of the right
+  one, found within 2 s of their old time. Otherwise the decode's words are walked over
+  the anchor's, past a word the anchor does not have, and only then cut by time, in the
+  clock the other anchor's words set. The new window's clock is mapped onto the old one
+  between the two anchors.
+- **Attempts.** Prompted, then without history (`max_context=0`), twice over: whisper can
+  skip speech on one decode and keep it on the next. A window is applied only if it comes
+  back with fewer defects than it had, counting any sentence of the prompt it now holds.
+- **Lost speech.** An attempt that leaves more than 2 s of speech without a word near it
+  is refused: whisper can skip a whole window and carry on, and the words either side
+  still match. Without VAD, the speech is the base's own words in the window's good cues.
+- **Silence.** With `vad_binary` and `vad_model` set in `pods.yaml`, Silero VAD
+  (whisper.cpp's `whisper-vad-speech-segments`) says where speech is instead. Cues the new
+  decode put over non-speech are dropped, keeping one `♪` where it marked music, and a
+  window may come back empty only where VAD hears nothing. A VAD that cannot run stops the
+  batch; one that hears nothing under most of an episode's cues is ignored for it. The
+  server's own VAD cannot be used for this: with `vad` on it applies `offset_t` to
+  VAD-compressed time.
+- Only a pair already from one decode is repaired. The result gets a new run id;
+  `whisper_run.base_run` is the pair it was spliced into and `whisper_run.repairs`
+  records each window, its anchors and gaps, and what was refused.
+
+`--list-defects` prints every episode the repair would find something in, with counts by kind,
+as a list that works with `--retranscribe-list`. It only reads.
+
 ### Re-transcribing an episode
 
 Redoing an episode used to mean deleting its `transcript.json` by hand. With the quality
@@ -752,7 +816,13 @@ gate recording flags, the loop closes:
 ./transcribe --retranscribe-flagged --retranscribe-limit 50
 ./transcribe --retranscribe "Ask-a-Spaceman/2024-01-02-abcd1234-some-episode"
 ./transcribe --retranscribe-id abcd1234
+./transcribe --retranscribe-list episodes.txt
 ```
+
+`--retranscribe-list` takes one `<podcast>/<episode>` path or id per line. Blank lines and
+`#` comments are skipped and anything after a tab is ignored, so the output of
+`--verify-pairs` can be passed straight back in. It counts as naming its targets, so
+`--retranscribe-force` applies to it.
 
 A path is the episode's directory as it sits on disk, so it carries the escaped podcast
 name (`Ask-a-Spaceman`, not `Ask a Spaceman`) — every character that is not a letter or
@@ -822,7 +892,12 @@ replace, by the same measure the quality gate's retry uses — fewer flags, then
 punctuation, then word times. Whisper is not deterministic, so a redo can come back worse than what it
 overwrites, and that write is the only copy: re-transcribing can improve an episode or
 leave it alone, never cost it the better decode. A transcript written before the quality
-gate has no score to compare against, so it is simply replaced.
+gate has no score to compare against, so it is simply replaced. Nor is a transcript
+whose `words.jsonl.gz` came from another decode: its score describes one half of a pair
+neither half of which is usable, so it is replaced whatever it scores.
+
+After the batch every target is checked with the same test as `--verify-pairs`, written
+or not, and the run fails listing any whose pair still disagrees.
 
 A re-decode that comes back with no word timestamps at all is refused outright when the
 decode on disk had them — judged by its recorded score rather than by whether
@@ -1036,6 +1111,31 @@ writing `transcript.json` anyway would mark done an episode that will never get
 one. A decode that simply carries no word times, from a server that ignored
 `token_timestamps`, still writes its transcript; otherwise no episode could ever
 complete against such a server.
+
+Both files carry the decode's run id: `whisper_run.run_id` in `transcript.json`, and a
+`run` field on every line of `words.jsonl.gz` — per line rather than as a header row,
+since every existing reader takes each line to be a word. `whisper_run` also records
+when the decode ran, the server, the model (from `--whisper-model`, since whisper does
+not report it), every form field sent, the audio's SHA-256 and size, the pipeline's
+`git describe`, and how many words the sidecar holds. Both files are staged in full
+before either is moved into place, and the pair is checked on disk after every write.
+
+### Checking pairs
+
+```bash
+./transcribe --verify-pairs > diverged.txt
+```
+
+Reads every episode under the data directory and prints one `<podcast>/<episode>`, a
+tab, and the reason for each whose `transcript.json` and `words.jsonl.gz` did not come
+from one decode, exiting 1 if there are any. It never contacts whisper. Pairs with run
+ids are compared on them; older ones by whether each cue's words rebuild that cue, the
+test the web player applies before it trusts a sidecar. A transcript from before word
+timings, with no sidecar and no run id, is counted but not listed. A pair that could not
+be read just then is listed as "could not be checked" and also fails the check; nothing
+replaces a pair on the strength of a failed read. Logs go to stderr, so the list can be
+fed straight to `--retranscribe-list`. A data directory that is missing, or a directory
+that cannot be listed, fails the check rather than passing with nothing checked.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

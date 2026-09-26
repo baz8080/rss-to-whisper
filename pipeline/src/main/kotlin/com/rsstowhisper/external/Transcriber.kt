@@ -11,7 +11,15 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /** Nothing was decoded at all: the server could not be reached, or would not answer. */
-class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+open class TranscriberUnavailable(message: String, cause: Throwable? = null) : RuntimeException(message, cause)
+
+data class TimeWindow(val start: Double, val end: Double) {
+    val offsetMillis: Long get() = Math.round(start * 1000)
+    val durationMillis: Long get() = Math.round((end - start) * 1000)
+}
+
+/** The server answered with word times no transcript can use, and will for every decode until it is restarted. */
+class WordTimesMisplaced(message: String) : TranscriberUnavailable(message)
 
 open class Transcriber(
     private val serverUrl: String,
@@ -107,13 +115,9 @@ open class Transcriber(
         language: String = DEFAULT_LANGUAGE,
         /** Overrides [initialPrompt]; written in [language] by construction, so it is not matched. */
         prompt: String? = null,
+        conditioned: Boolean = true,
+        window: TimeWindow? = null,
     ): String {
-        // whisper.cpp looks the code up in a map keyed by lower case and never
-        // checks the result: an unmatched one returns -1, which its caller adds
-        // to the language token's base index, so "EN" selects the wrong token
-        // rather than failing. Only a hand-edited pods.yaml can produce one.
-        val code = language.lowercase()
-
         val bodyBuilder =
             MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
@@ -122,61 +126,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-                .addFormDataPart("language", code)
-                // verbose_json rather than vtt: per-word start/end are gated on
-                // token_timestamps, which is already on below, so the decode
-                // ALREADY computes these times and VTT discards them. A cue is
-                // the finest a span boundary can be placed, and 13.4% of the
-                // labelled advertisement airtime downstream currently sits in a
-                // cue too long to resolve. Word times take that to ~0.2s.
-                .addFormDataPart("response_format", "verbose_json")
-                // Explicit, and off. server.cpp:833 overrides only the fields a
-                // request actually sends, so omitting this silently inherits
-                // whatever the server was launched with -- which is how the
-                // corpus ended up with no record of its own VAD state.
-                //
-                // It has to be off: with VAD on, token timestamps stay in
-                // VAD-compressed time while segment timestamps are remapped to
-                // real time. Measured on one episode, the two drift apart from
-                // -1.79s at the start to -6.51s by the end, the gap being the
-                // silence VAD removed. Every word time would be early by a
-                // growing, episode-dependent, invisible amount.
-                .addFormDataPart("vad", "false")
-                // whisper.cpp only applies max_len when token_timestamps is on:
-                // the wrap call is nested inside `if (params.token_timestamps)`
-                // in whisper_full. Sending max_len alone is silently ignored.
-                .addFormDataPart("token_timestamps", "true")
-                .addFormDataPart("max_len", maxLen.toString())
-                // Cut on word boundaries rather than mid-token.
-                .addFormDataPart("split_on_word", "true")
-                .addFormDataPart("beam_size", beamSize.toString())
-
-        // The prompt rides only with the language it is written in. It biases
-        // VOCABULARY as well as style (see [initialPrompt]), so conditioning a
-        // French decode on English prose is exactly the contamination that
-        // comment exists to avoid -- and it would be carried into every window.
-        // For "auto" it is worse than useless: an English prompt skews whisper's
-        // own language detection toward English before it decodes anything, so
-        // the detection the setting exists to enable is what it would break.
-        // Never under "auto", whatever the caller passed: an initial prompt skews
-        // whisper's own language detection before it decodes anything.
-        val effectivePrompt =
-            when {
-                code == AUTO_LANGUAGE -> ""
-                prompt != null -> prompt
-                code == promptLanguage.lowercase() -> initialPrompt
-                else -> ""
-            }
-        if (effectivePrompt.isNotBlank()) {
-            bodyBuilder.addFormDataPart("prompt", effectivePrompt)
-            // Without this the prompt conditions only the FIRST window, so an
-            // episode that degrades part-way through still degrades -- which is
-            // exactly what a whole-episode failure looks like. 13/13 fixed with
-            // it, 12/13 without.
-            bodyBuilder.addFormDataPart("carry_initial_prompt", "true")
-        } else if (initialPrompt.isNotBlank() || prompt != null) {
-            logger.debug("Decoding as {}; no prompt is being sent", code)
-        }
+        requestFields(language, prompt, conditioned, window).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
 
         val requestBody = bodyBuilder.build()
 
@@ -215,6 +165,90 @@ open class Transcriber(
             body?.takeIf { text -> text.isNotBlank() }
                 ?: throw TranscriberUnavailable("Whisper server returned an empty body")
         }
+    }
+
+    /** Every form field [transcribe] sends besides the audio, in order. Recorded with each decode. */
+    open fun requestFields(
+        language: String = DEFAULT_LANGUAGE,
+        prompt: String? = null,
+        /**
+         * False decodes each window with no text before it. whisper.cpp then skips
+         * the initial prompt too (n_max_text_ctx gates both), so none is sent.
+         */
+        conditioned: Boolean = true,
+        /** Decode only this stretch of the file; whisper returns times from the file's start. */
+        window: TimeWindow? = null,
+    ): Map<String, String> {
+        // whisper.cpp looks the code up in a map keyed by lower case and never
+        // checks the result: an unmatched one returns -1, which its caller adds
+        // to the language token's base index, so "EN" selects the wrong token
+        // rather than failing. Only a hand-edited pods.yaml can produce one.
+        val code = language.lowercase()
+
+        val fields = linkedMapOf("language" to code)
+        // verbose_json rather than vtt: per-word start/end are gated on
+        // token_timestamps, which is already on below, so the decode
+        // ALREADY computes these times and VTT discards them. A cue is
+        // the finest a span boundary can be placed, and 13.4% of the
+        // labelled advertisement airtime downstream currently sits in a
+        // cue too long to resolve. Word times take that to ~0.2s.
+        fields["response_format"] = "verbose_json"
+        // Explicit, and off. server.cpp:833 overrides only the fields a
+        // request actually sends, so omitting this silently inherits
+        // whatever the server was launched with -- which is how the
+        // corpus ended up with no record of its own VAD state.
+        //
+        // It has to be off: with VAD on, token timestamps stay in
+        // VAD-compressed time while segment timestamps are remapped to
+        // real time. Measured on one episode, the two drift apart from
+        // -1.79s at the start to -6.51s by the end, the gap being the
+        // silence VAD removed. Every word time would be early by a
+        // growing, episode-dependent, invisible amount.
+        fields["vad"] = "false"
+        // whisper.cpp only applies max_len when token_timestamps is on:
+        // the wrap call is nested inside `if (params.token_timestamps)`
+        // in whisper_full. Sending max_len alone is silently ignored.
+        fields["token_timestamps"] = "true"
+        fields["max_len"] = maxLen.toString()
+        // Cut on word boundaries rather than mid-token.
+        fields["split_on_word"] = "true"
+        fields["beam_size"] = beamSize.toString()
+        if (window != null) {
+            fields["offset_t"] = window.offsetMillis.toString()
+            fields["duration"] = window.durationMillis.toString()
+        }
+        if (!conditioned) {
+            fields["max_context"] = "0"
+            return fields
+        }
+
+        // The prompt rides only with the language it is written in. It biases
+        // VOCABULARY as well as style (see [initialPrompt]), so conditioning a
+        // French decode on English prose is exactly the contamination that
+        // comment exists to avoid -- and it would be carried into every window.
+        // For "auto" it is worse than useless: an English prompt skews whisper's
+        // own language detection toward English before it decodes anything, so
+        // the detection the setting exists to enable is what it would break.
+        // Never under "auto", whatever the caller passed: an initial prompt skews
+        // whisper's own language detection before it decodes anything.
+        val effectivePrompt =
+            when {
+                code == AUTO_LANGUAGE -> ""
+                prompt != null -> prompt
+                code == promptLanguage.lowercase() -> initialPrompt
+                else -> ""
+            }
+        if (effectivePrompt.isNotBlank()) {
+            fields["prompt"] = effectivePrompt
+            // Without this the prompt conditions only the FIRST window, so an
+            // episode that degrades part-way through still degrades -- which is
+            // exactly what a whole-episode failure looks like. 13/13 fixed with
+            // it, 12/13 without.
+            fields["carry_initial_prompt"] = "true"
+        } else if (initialPrompt.isNotBlank() || prompt != null) {
+            logger.debug("Decoding as {}; no prompt is being sent", code)
+        }
+        return fields
     }
 
     /** Whether anything is listening, asked once before a run commits to it. Any answer counts. */

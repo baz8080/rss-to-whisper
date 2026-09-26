@@ -10,6 +10,8 @@ internal val USAGE =
                              unless --audio-dir is given
       --audio-dir <path>     Where the mp3s go                  (PIPELINE_AUDIO_DIRECTORY)
       --whisper-url <url>    Base URL of the whisper.cpp server (PIPELINE_WHISPER_SERVER_URL)
+      --whisper-model <name> The model that server loaded, recorded with each
+                             decode; whisper does not report it (PIPELINE_WHISPER_MODEL)
       --verbose              Enable debug logging               (PIPELINE_VERBOSE)
       --no-verbose           Force debug logging off
       --recover-orphans      Transcribe episodes that aged out of their feed (default)
@@ -36,6 +38,13 @@ internal val USAGE =
                              --dump-limit -- for a downstream consumer, not eyes
       --dump-limit <n>       How many entries --dump-feed-markup or
                              --dump-audio-chapters shows (default 10, 0 for all)
+      --verify-pairs         Check every episode's transcript.json and
+                             words.jsonl.gz came from one decode. Prints one
+                             <podcast>/<episode> and reason per offender, exits
+                             1 if there are any. Never contacts whisper
+      --list-defects         List every episode --repair-windows would find
+                             loops, copies, echoes or leaks in, with counts by
+                             kind; works as a --retranscribe-list. Reads only
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -43,12 +52,19 @@ internal val USAGE =
 
       --retranscribe <dir>       <podcast dir>/<episode dir>; repeatable
       --retranscribe-id <hex8>   The id in an episode directory name; repeatable
+      --retranscribe-list <file> One path or id per line; # comments and
+                                 anything after a tab are ignored, so
+                                 --verify-pairs output works as-is
       --retranscribe-flagged     Every episode with episode_quality flags. Reads
                                  every transcript.json, which is slow on a
                                  network volume
       --retranscribe-limit <n>   Cap --retranscribe-flagged; 0 means no limit
+      --repair-windows           Re-decode only the windows around loops and
+                                 stretch-copies of the targets above, and
+                                 splice them in; the rest of each episode is kept
       --retranscribe-force       Keep the new decode even if it scores worse.
-                                 Only with --retranscribe / --retranscribe-id,
+                                 Only with --retranscribe, --retranscribe-id or
+                                 --retranscribe-list,
                                  never with --retranscribe-flagged
 
     Options override .env, which overrides pods.yaml. Give a second instance its
@@ -61,6 +77,7 @@ internal data class Args(
     val dataDirectory: String? = null,
     val audioDirectory: String? = null,
     val whisperServerUrl: String? = null,
+    val whisperModel: String? = null,
     val verbose: Boolean? = null,
     val recoverOrphans: Boolean? = null,
     val orphanRecoveryLimit: Int? = null,
@@ -75,10 +92,14 @@ internal data class Args(
     val retranscribeFlagged: Boolean = false,
     val retranscribeLimit: Int = 0,
     val retranscribeForce: Boolean = false,
+    val retranscribeList: String? = null,
+    val verifyPairs: Boolean = false,
+    val listDefects: Boolean = false,
+    val repairWindows: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
-        get() = retranscribePaths.isNotEmpty() || retranscribeIds.isNotEmpty() || retranscribeFlagged
+        get() = retranscribePaths.isNotEmpty() || retranscribeIds.isNotEmpty() || retranscribeFlagged || retranscribeList != null
 }
 
 internal fun parseArgs(argv: Array<String>): Args {
@@ -92,6 +113,11 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--data-dir" -> args.copy(dataDirectory = valueFor(flag, argv, ++i))
                 "--audio-dir" -> args.copy(audioDirectory = valueFor(flag, argv, ++i))
                 "--whisper-url" -> args.copy(whisperServerUrl = valueFor(flag, argv, ++i))
+                "--whisper-model" -> args.copy(whisperModel = valueFor(flag, argv, ++i))
+                "--verify-pairs" -> args.copy(verifyPairs = true)
+                "--list-defects" -> args.copy(listDefects = true)
+                "--repair-windows" -> args.copy(repairWindows = true)
+                "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
                 "--recover-orphans" -> args.copy(recoverOrphans = true)
@@ -131,8 +157,22 @@ internal fun parseArgs(argv: Array<String>): Args {
     // Otherwise it is ignored by isRetranscribe and the run quietly follows the
     // feeds instead -- which is what a script whose target list came out empty
     // would do, having asked for the opposite.
-    if (args.retranscribeForce && args.retranscribePaths.isEmpty() && args.retranscribeIds.isEmpty()) {
-        error("--retranscribe-force needs a target: --retranscribe or --retranscribe-id")
+    if (args.retranscribeForce && args.retranscribePaths.isEmpty() && args.retranscribeIds.isEmpty() &&
+        args.retranscribeList == null
+    ) {
+        error("--retranscribe-force needs a target: --retranscribe, --retranscribe-id or --retranscribe-list")
+    }
+    if (args.repairWindows && !args.isRetranscribe) {
+        error("--repair-windows needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.repairWindows && args.retranscribeForce) {
+        error("--repair-windows keeps a window only when it comes back better, so --retranscribe-force does not apply")
+    }
+    if (args.verifyPairs && args.isRetranscribe) {
+        error("--verify-pairs cannot be combined with re-transcription; it runs after every batch anyway")
+    }
+    if (args.listDefects && (args.isRetranscribe || args.verifyPairs)) {
+        error("--list-defects only reads; run its output with --retranscribe-list and --repair-windows")
     }
     return args
 }

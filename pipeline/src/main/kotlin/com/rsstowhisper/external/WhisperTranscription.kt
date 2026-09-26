@@ -53,6 +53,8 @@ data class WhisperTranscription(
     val words: List<Word>,
     val lastCueEnd: Double? = null,
     val cues: List<Cue> = emptyList(),
+    /** Stamped on every word line and into transcript.json by the one writer of the pair. */
+    val run: WhisperRun? = null,
 ) {
     val isEmpty: Boolean get() = vtt.isBlank() || vtt.trim() == VTT_HEADER
 
@@ -69,6 +71,25 @@ data class WhisperTranscription(
                 .maxOrNull()
                 ?.toInt()
 
+    /**
+     * Share of cues whose words fall outside the cue's own time range. A server
+     * applying VAD leaves the words in VAD-compressed time while the cues are
+     * remapped to real time, so nearly every cue misses; no pair in the corpus
+     * decoded without VAD misses on any.
+     */
+    val misplacedWordShare: Double
+        get() {
+            val bySegment = words.groupBy { it.segment }
+            var checked = 0
+            var misplaced = 0
+            for ((segment, segmentWords) in bySegment) {
+                val cue = cues.getOrNull(segment) ?: continue
+                checked++
+                if (!wordsFitCue(cue.start, cue.end, segmentWords.first().start, segmentWords.last().end)) misplaced++
+            }
+            return if (checked == 0) 0.0 else misplaced.toDouble() / checked
+        }
+
     /** Newline-delimited JSON, gzipped. ~274 KB per episode before compression. */
     fun writeWords(path: Path) {
         val mapper = ObjectMapper()
@@ -82,6 +103,8 @@ data class WhisperTranscription(
                         node.put("e", w.end)
                         node.put("p", w.probability)
                         node.put("seg", w.segment)
+                        // Per line rather than a header row: every existing reader treats each line as a word.
+                        run?.let { node.put(WhisperRun.WORD_FIELD, it.runId) }
                         out.write(mapper.writeValueAsString(node))
                         out.newLine()
                     }
@@ -94,6 +117,21 @@ data class WhisperTranscription(
         const val VTT_HEADER = "WEBVTT"
         const val WORDS_FILENAME = "words.jsonl.gz"
 
+        /** Above this share of misplaced cues the word times are not in the cues' clock. */
+        const val MAX_MISPLACED_WORD_SHARE = 0.01
+
+        private const val WORD_TIME_SLACK_SECONDS = 1.0
+
+        fun wordsFitCue(
+            cueStart: Double,
+            cueEnd: Double,
+            firstWordStart: Double,
+            lastWordEnd: Double,
+        ): Boolean =
+            firstWordStart >= cueStart - WORD_TIME_SLACK_SECONDS &&
+                firstWordStart <= cueEnd + WORD_TIME_SLACK_SECONDS &&
+                lastWordEnd <= cueEnd + WORD_TIME_SLACK_SECONDS
+
         private val mapper = ObjectMapper()
 
         fun parse(json: String): WhisperTranscription {
@@ -101,23 +139,29 @@ data class WhisperTranscription(
             val segments = root.path("segments")
             if (!segments.isArray) return WhisperTranscription("$VTT_HEADER\n\n", emptyList())
 
-            val vtt = StringBuilder(VTT_HEADER).append("\n\n")
             val words = mutableListOf<Word>()
             val cues = mutableListOf<Cue>()
-            var lastCueEnd: Double? = null
             segments.forEachIndexed { index, segment ->
-                val start = segment.path("start").asDouble()
-                val end = segment.path("end").asDouble()
-                val text = segment.path("text").asText()
-                lastCueEnd = end
-                cues += Cue(start, end, text)
-                vtt.append(timestamp(start)).append(" --> ").append(timestamp(end)).append('\n')
-                vtt.append(text).append("\n\n")
+                cues += Cue(segment.path("start").asDouble(), segment.path("end").asDouble(), segment.path("text").asText())
                 segment.path("words").forEach { word ->
                     words += word.toWord(index) ?: return@forEach
                 }
             }
-            return WhisperTranscription(vtt.toString(), words, lastCueEnd, cues)
+            return of(cues, words)
+        }
+
+        /** The VTT rendered from [cues]; every word's segment is an index into them. */
+        fun of(
+            cues: List<Cue>,
+            words: List<Word>,
+            run: WhisperRun? = null,
+        ): WhisperTranscription {
+            val vtt = StringBuilder(VTT_HEADER).append("\n\n")
+            for (cue in cues) {
+                vtt.append(timestamp(cue.start)).append(" --> ").append(timestamp(cue.end)).append('\n')
+                vtt.append(cue.text).append("\n\n")
+            }
+            return WhisperTranscription(vtt.toString(), words, cues.lastOrNull()?.end, cues, run)
         }
 
         /**

@@ -40,7 +40,7 @@ internal object WindowRepair {
 
     fun defectCues(
         cues: List<Cue>,
-        promptSentences: Set<String> = emptySet(),
+        prompt: Prompt = Prompt.NONE,
     ): Set<Int> {
         val defects = TranscriptQuality.stretchCopyCues(cues).toMutableSet()
         var i = 0
@@ -58,12 +58,12 @@ internal object WindowRepair {
             i = j + 1
         }
         defects += echoes(cues) + longCopies(cues)
-        val prompt = cues.map { it.text.trim().lowercase() in promptSentences }
-        val leaks = cues.indices.filter { prompt[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
+        val voiced = cues.map { prompt.voices(it.text) }
+        val leaks = cues.indices.filter { voiced[it] && cues[it].end - cues[it].start >= MIN_PROMPT_LEAK_SECONDS }.toMutableSet()
         // A short copy beside a leak is the same leak, and must not be kept as an anchor.
         var grew = true
         while (grew) {
-            grew = leaks.addAll(leaks.flatMap { listOf(it - 1, it + 1) }.filter { it in cues.indices && prompt[it] })
+            grew = leaks.addAll(leaks.flatMap { listOf(it - 1, it + 1) }.filter { it in cues.indices && voiced[it] })
         }
         defects += leaks
         return defects
@@ -128,8 +128,35 @@ internal object WindowRepair {
 
     private val WHITESPACE = Regex("\\s+")
 
-    fun promptSentences(prompt: String?): Set<String> =
-        prompt.orEmpty().split(Regex("(?<=[.!?])\\s+")).map { it.trim().lowercase() }.filter { it.isNotEmpty() }.toSet()
+    /** The initial prompt, for telling a cue whisper voiced from it: its punctuation and case vary, and it may stop partway. */
+    class Prompt(text: String?) {
+        private val words = wordsOf(text.orEmpty())
+
+        /** A run of the prompt's words, in order, that is most of the cue: whisper can start or end on one of its own. */
+        fun voices(cue: String): Boolean {
+            val said = wordsOf(cue)
+            if (said.size < MIN_PROMPT_WORDS) return false
+            var longest = 0
+            var previous = IntArray(words.size + 1)
+            for (i in said.indices) {
+                val current = IntArray(words.size + 1)
+                for (j in words.indices) if (said[i] == words[j]) current[j + 1] = previous[j] + 1
+                longest = maxOf(longest, current.max())
+                previous = current
+            }
+            return longest >= MIN_PROMPT_WORDS && longest >= said.size * MIN_PROMPT_SHARE
+        }
+
+        companion object {
+            val NONE = Prompt(null)
+            private const val MIN_PROMPT_WORDS = 3
+            private const val MIN_PROMPT_SHARE = 0.8
+
+            internal fun wordsOf(text: String): List<String> =
+                text.lowercase().replace('\u2019', '\'').filter { it.isLetterOrDigit() || it == '\'' || it.isWhitespace() }
+                    .split(WHITESPACE).filter { it.isNotEmpty() }
+        }
+    }
 
     fun windows(
         cues: List<Cue>,
@@ -682,15 +709,14 @@ internal object WindowRepair {
     fun defectsAfter(
         base: WhisperTranscription,
         replacement: Replacement,
-        promptSentences: Set<String> = emptySet(),
+        prompt: Prompt = Prompt.NONE,
         defects: Set<Int> = emptySet(),
     ): Int {
         val spliced = splice(base, listOf(replacement))
         val first = replacement.range.first
         val inside = first until first + replacement.cues.size
-        val said = replacement.range.filter { it !in defects }.map { base.cues[it].text.trim().lowercase() }.toSet()
-        val leaks =
-            inside.filter { spliced.cues[it].text.trim().lowercase().let { text -> text in promptSentences && text !in said } }
-        return (defectCues(spliced.cues, promptSentences) + leaks).count { it in inside }
+        val said = replacement.range.filter { it !in defects }.map { Prompt.wordsOf(base.cues[it].text) }.toSet()
+        val leaks = inside.filter { prompt.voices(spliced.cues[it].text) && Prompt.wordsOf(spliced.cues[it].text) !in said }
+        return (defectCues(spliced.cues, prompt) + leaks).count { it in inside }
     }
 }

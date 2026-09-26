@@ -1417,8 +1417,8 @@ class PodcastPipeline(
         val cues = parsedCues.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
 
         val podcast = podcastFor(episodeDirPath)
-        val promptSentences = WindowRepair.promptSentences(podcast.initialPrompt ?: config.defaultPrompt)
-        val defects = WindowRepair.defectCues(cues, promptSentences)
+        val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
+        val defects = WindowRepair.defectCues(cues, prompt)
         if (defects.isEmpty()) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
@@ -1457,7 +1457,7 @@ class PodcastPipeline(
                     lostByAttempt += lost
                     continue
                 }
-                val after = WindowRepair.defectsAfter(base, replacement, promptSentences, defects)
+                val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
                 if (after < bestDefects) {
                     best = replacement
                     bestDefects = after
@@ -1516,7 +1516,7 @@ class PodcastPipeline(
         if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
         logger.info(
             "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
-                "${defects.size} defective cues before, ${WindowRepair.defectCues(repaired.cues, promptSentences).size} after",
+                "${defects.size} defective cues before, ${WindowRepair.defectCues(repaired.cues, prompt).size} after",
         )
         return true
     }

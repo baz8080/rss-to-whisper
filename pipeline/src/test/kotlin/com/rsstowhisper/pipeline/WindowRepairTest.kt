@@ -268,7 +268,7 @@ class WindowRepairTest {
 
     @Test
     fun `a long cue that is only a sentence of the prompt is a defect`() {
-        val prompt = WindowRepair.promptSentences("Hello, and welcome back. Let's get started.")
+        val prompt = WindowRepair.Prompt("Hello, and welcome back. Let's get started.")
         // The second is someone actually saying it: short, and not beside a leak.
         val cues =
             listOf(Cue(0.0, 30.0, " Let's get started."), Cue(30.0, 33.0, " Welcome, everyone."), Cue(33.0, 35.0, " Let's get started."))
@@ -307,7 +307,7 @@ class WindowRepairTest {
 
     @Test
     fun `a short copy of a prompt sentence beside a leak is part of it`() {
-        val prompt = WindowRepair.promptSentences("Let's get started.")
+        val prompt = WindowRepair.Prompt("Let's get started.")
         val cues =
             listOf(
                 Cue(0.0, 30.0, " Let's get started."),
@@ -751,5 +751,30 @@ class WindowRepairTest {
         val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
 
         assertEquals(" today", replacement.words.first().text)
+    }
+
+    @Test
+    fun `a prompt sentence voiced without its punctuation, or only in part, is a leak`() {
+        val prompt =
+            WindowRepair.Prompt(
+                "Hello, and welcome back to the show. Today we're going to talk about a few different things. Let's get started.",
+            )
+        val cues =
+            listOf(
+                Cue(0.0, 30.0, " Let's get started"),
+                Cue(30.0, 60.0, " and we're going to talk about a few different things"),
+                Cue(60.0, 75.0, " Astronomy Cast, episode 732."),
+            )
+
+        assertEquals(setOf(0, 1), WindowRepair.defectCues(cues, prompt))
+    }
+
+    @Test
+    fun `a leak without its full stop fitted onto speech still counts after a repair`() {
+        val base = transcription(leakThenTitle)
+        val replacement =
+            WindowRepair.Replacement(0..1, listOf(Cue(49.5, 54.96, " Let's get started")), listOf(Word(" Let's", 49.5, 51.0, 0.9, 0)))
+
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement, WindowRepair.Prompt("Let's get started."), setOf(0)))
     }
 }

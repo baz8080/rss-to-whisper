@@ -1127,7 +1127,11 @@ tab, and the reason for each whose `transcript.json` and `words.jsonl.gz` did no
 from one decode, exiting 1 if there are any. It never contacts whisper. Pairs with run
 ids are compared on them; older ones by whether each cue's words rebuild that cue, the
 test the web player applies before it trusts a sidecar. A transcript from before word
-timings, with no sidecar and no run id, is counted but not listed.
+timings, with no sidecar and no run id, is counted but not listed. A pair that could not
+be read just then is listed as "could not be checked" and also fails the check; nothing
+replaces a pair on the strength of a failed read. Logs go to stderr, so the list can be
+fed straight to `--retranscribe-list`. A data directory that is missing, or a directory
+that cannot be listed, fails the check rather than passing with nothing checked.
 
 The `<hex8>` in the directory name is `md5(entry.uri)` truncated to 8
 characters. It is part of a path, not a unique key: date and title slug

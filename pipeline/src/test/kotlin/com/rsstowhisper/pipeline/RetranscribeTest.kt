@@ -675,8 +675,11 @@ class RetranscribeTest {
     ) {
         val dir = episode(tempDir)
         val before = Files.readString(dir.resolve("transcript.json"))
-        val arrow = whisperJson(Triple(0.0, 3.0, "Then File --> Export."), Triple(3.0, 6.0, "And save it again, carefully."))
-        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(arrow))
+        // A server whose words are not its segment's text.
+        val mismatched =
+            """{"segments":[{"start":0.0,"end":3.0,"text":" Hello there, everyone.","words":[""" +
+                """{"word":" Goodbye","start":0.5,"end":1.0,"probability":0.9}]}]}"""
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(mismatched))
 
         val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"))) }
 
@@ -738,5 +741,63 @@ class RetranscribeTest {
 
         assertTrue(log.any { "being written by another run" in it })
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    @Test
+    fun `a pair that cannot be read is not re-transcribed`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        Files.createDirectory(dir.resolve("words.jsonl.gz"))
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue(txSvc.calls.isEmpty())
+        assertTrue("old transcript" in readTranscript(dir)["episode_transcript"].toString())
+    }
+
+    @Test
+    fun `an episode a repair emptied over silence is not decoded again`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                extra =
+                    mapOf(
+                        "episode_transcript" to "WEBVTT\n\n",
+                        "episode_quality" to qualityMap(listOf("no-speech"), 0.0, wordCount = 0),
+                        "whisper_run" to mapOf("run_id" to "r1", "words" to 0, "repairs" to listOf(mapOf("speech_checked" to true))),
+                    ),
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(whisperJson(Triple(0.0, 2.0, "Thank you."))),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue(txSvc.calls.isEmpty())
+        assertEquals("WEBVTT\n\n", readTranscript(dir)["episode_transcript"])
+    }
+
+    @Test
+    fun `a stored score from before stretch-copies were counted is counted from its transcript`(
+        @TempDir tempDir: Path,
+    ) {
+        val stretched =
+            "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\n And we were using fluorophores to label building blocks.\n\n" +
+                "00:00:04.000 --> 00:00:34.000\n using fluorophores to label building blocks.\n\n"
+        val dir =
+            episode(tempDir, extra = mapOf("episode_transcript" to stretched, "episode_quality" to qualityMap(emptyList(), 0.9)))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(healthyJson()))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}")))
+
+        assertTrue("We looked at the data again" in readTranscript(dir)["episode_transcript"].toString())
     }
 }

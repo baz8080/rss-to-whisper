@@ -169,19 +169,26 @@ internal object RetranscribeTargets {
         }
     }
 
-    /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. */
-    internal fun episodeDirs(dataDir: Path): List<Path> =
-        listDirectories(dataDir)
+    /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. [strict] throws on a directory it cannot list. */
+    internal fun episodeDirs(
+        dataDir: Path,
+        strict: Boolean = false,
+    ): List<Path> =
+        listDirectories(dataDir, strict)
             // logs/ sits beside the podcast directories and holds no episodes.
             .filter { it.name != "logs" }
-            .flatMap { listDirectories(it) }
+            .flatMap { listDirectories(it, strict) }
 
-    private fun listDirectories(path: Path): List<Path> =
+    private fun listDirectories(
+        path: Path,
+        strict: Boolean,
+    ): List<Path> =
         try {
             Files.list(path).use { stream ->
                 stream.filter { Files.isDirectory(it) }.toList().sortedBy { it.name }
             }
         } catch (e: Exception) {
+            if (strict) throw e
             logger.error("Could not list $path", e)
             emptyList()
         }

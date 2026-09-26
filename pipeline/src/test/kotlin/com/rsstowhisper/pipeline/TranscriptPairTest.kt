@@ -6,6 +6,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.OutputStreamWriter
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.zip.GZIPInputStream
 import java.util.zip.GZIPOutputStream
 import kotlin.test.Test
@@ -253,5 +254,89 @@ class TranscriptPairTest {
         assertFalse(ok)
         assertEquals(1, txSvc.calls.size)
         assertEquals(before, Files.readString(first.resolve("transcript.json")))
+    }
+
+    @Test
+    fun `an arrow in a cue's text does not start a cue`(
+        @TempDir tempDir: Path,
+    ) {
+        val arrow = "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\n Then File --> Export.\n\n00:00:03.000 --> 00:00:06.000\n Four five.\n\n"
+        val dir =
+            episodeDir(
+                tempDir,
+                arrow,
+                listOf(word(" Then", 0), word(" File", 0), word(" -->", 0), word(" Export.", 0), word(" Four", 1), word(" five.", 1)),
+            )
+
+        assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
+    }
+
+    /** A server sending one word per token splits a character across two, and each half arrives as U+FFFD. */
+    @Test
+    fun `a character split across two words still rebuilds its cue`(
+        @TempDir tempDir: Path,
+    ) {
+        val sign = "WEBVTT\n\n00:00:00.000 --> 00:00:03.000\n Transcript \u00a9 Emily.\n\n"
+        val dir = episodeDir(tempDir, sign, listOf(word(" Transcript", 0), word(" \uFFFD", 0), word("\uFFFD", 0), word(" Emily.", 0)))
+
+        assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
+    }
+
+    @Test
+    fun `a words file that cannot be read is unreadable, not diverged`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episodeDir(tempDir, vtt, null)
+        Files.createDirectory(dir.resolve("words.jsonl.gz"))
+
+        assertIs<TranscriptPair.Unreadable>(TranscriptPair.check(dir))
+    }
+
+    @Test
+    fun `a corrupt words file is diverged`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episodeDir(tempDir, vtt, null)
+        Files.writeString(dir.resolve("words.jsonl.gz"), "not gzip at all")
+
+        assertIs<TranscriptPair.Diverged>(TranscriptPair.check(dir))
+    }
+
+    @Test
+    fun `verify lists a pair it could not read and fails`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episodeDir(tempDir, vtt, null)
+        Files.createDirectory(dir.resolve("words.jsonl.gz"))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+        val out = StringBuilder()
+
+        assertFalse(pipeline.verifyPairs(out))
+        assertTrue(out.toString().startsWith("Show/${dir.fileName}\tcould not be checked"))
+    }
+
+    @Test
+    fun `verify of a data directory that is not there fails`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, _, _) = buildPipeline(tempDir.resolve("unmounted"), listOf(podcast), feed = null)
+
+        assertFalse(pipeline.verifyPairs(StringBuilder()))
+    }
+
+    @Test
+    fun `verify of a podcast directory it cannot list fails`(
+        @TempDir tempDir: Path,
+    ) {
+        episodeDir(tempDir, vtt, listOf(word(" One", 0)))
+        val show = tempDir.resolve("Show")
+        Files.setPosixFilePermissions(show, emptySet())
+        try {
+            val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+
+            assertFalse(pipeline.verifyPairs(StringBuilder()))
+        } finally {
+            Files.setPosixFilePermissions(show, PosixFilePermissions.fromString("rwxr-xr-x"))
+        }
     }
 }

@@ -1,12 +1,16 @@
 package com.rsstowhisper.pipeline
 
+import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.external.WhisperRun
 import com.rsstowhisper.external.WhisperTranscription
+import java.io.EOFException
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.zip.GZIPInputStream
+import java.util.zip.ZipException
 
 /** Whether an episode's `transcript.json` and `words.jsonl.gz` describe the same decode. */
 internal object TranscriptPair {
@@ -19,14 +23,19 @@ internal object TranscriptPair {
 
     data class Diverged(val reason: String) : Verdict
 
+    /** The files could not be read just now, which says nothing about whether they agree. */
+    data class Unreadable(val reason: String) : Verdict
+
     private val mapper = ObjectMapper()
 
     fun check(episodeDir: Path): Verdict {
         val transcript =
             try {
                 mapper.readTree(Files.readString(episodeDir.resolve(PodcastPipeline.TRANSCRIPT_FILENAME)))
-            } catch (e: Exception) {
-                return Diverged("transcript.json cannot be read (${e.message})")
+            } catch (e: JsonProcessingException) {
+                return Diverged("transcript.json is not JSON (${e.originalMessage})")
+            } catch (e: IOException) {
+                return Unreadable("transcript.json cannot be read (${e.message})")
             }
         return check(transcript, episodeDir.resolve(WhisperTranscription.WORDS_FILENAME))
     }
@@ -39,6 +48,8 @@ internal object TranscriptPair {
         val runId = run.path("run_id").textValue()
         val expectedWords = run.path("words").takeIf { it.isNumber }?.asInt()
 
+        // Neither exists nor absent: a network volume that could not answer.
+        if (!Files.exists(wordsPath) && !Files.notExists(wordsPath)) return Unreadable("words.jsonl.gz cannot be found or ruled out")
         if (!Files.exists(wordsPath)) {
             return when {
                 runId == null -> Unpaired
@@ -52,8 +63,14 @@ internal object TranscriptPair {
                 GZIPInputStream(Files.newInputStream(wordsPath)).bufferedReader().useLines { lines ->
                     lines.filter { it.isNotBlank() }.map { mapper.readTree(it) }.toList()
                 }
-            } catch (e: Exception) {
-                return Diverged("words.jsonl.gz cannot be read (${e.message})")
+            } catch (e: ZipException) {
+                return Diverged("words.jsonl.gz is corrupt (${e.message})")
+            } catch (e: EOFException) {
+                return Diverged("words.jsonl.gz is truncated (${e.message})")
+            } catch (e: JsonProcessingException) {
+                return Diverged("words.jsonl.gz has a line that is not JSON (${e.originalMessage})")
+            } catch (e: IOException) {
+                return Unreadable("words.jsonl.gz cannot be read (${e.message})")
             }
 
         val wordRuns = words.mapNotNullTo(HashSet()) { it.path(WhisperRun.WORD_FIELD).textValue() }
@@ -129,10 +146,11 @@ internal object TranscriptPair {
             times = null
         }
         for (line in vtt.lineSequence()) {
+            val timing = TIMING.find(line)
             when {
-                "-->" in line -> {
+                timing != null -> {
                     flush()
-                    times = line.split("-->").map { seconds(it.trim()) } + listOf(null, null)
+                    times = timing.groupValues.drop(1).map { seconds(it) }
                     text = StringBuilder()
                 }
                 line.isBlank() -> flush()
@@ -153,7 +171,14 @@ internal object TranscriptPair {
         return h * 3600.0 + m * 60 + s
     }
 
-    private fun letters(text: String): String = text.filterNot { it.isWhitespace() }
+    /** Cue text can hold an arrow of its own, so only a line that starts with a stamp opens a cue. */
+    private val TIMING = Regex("""^\s*([0-9:.]+)\s*-->\s*([0-9:.]+)""")
+
+    /**
+     * Whitespace aside, and U+FFFD: a server that sends one word per token splits a
+     * character across two, and each half arrives as a replacement character.
+     */
+    private fun letters(text: String): String = text.filterNot { it.isWhitespace() || it == '\uFFFD' }
 
     private fun isSubsequence(
         needle: String,

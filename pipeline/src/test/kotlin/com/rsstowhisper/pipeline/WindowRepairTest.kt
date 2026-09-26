@@ -97,7 +97,7 @@ class WindowRepairTest {
 
         assertEquals("time" to "text", replacement.anchorLeft to replacement.anchorRight)
         assertEquals(listOf(" Welcome to the show, today the telescope."), replacement.cues.map { it.text })
-        assertEquals(0.0, replacement.gapLeft)
+        assertEquals(0.0, WindowRepair.gaps(base, 1..6, replacement).first)
     }
 
     @Test
@@ -116,7 +116,7 @@ class WindowRepairTest {
         assertEquals("text", replacement.anchorRight)
         assertEquals(listOf(" Welcome to the show."), replacement.cues.map { it.text })
         assertTrue(replacement.cues.single().start >= 6.0 && replacement.cues.single().end <= 18.0)
-        assertTrue(replacement.gapRight!! > 0)
+        assertTrue(WindowRepair.gaps(base, 1..6, replacement).second!! > 0)
     }
 
     @Test
@@ -183,6 +183,7 @@ class WindowRepairTest {
         assertEquals(1, repairs.size())
         assertEquals(4, repairs[0].path("defects_before").asInt())
         assertEquals(0, repairs[0].path("defects_after").asInt())
+        assertEquals("0", repairs[0].path("request").path("offset_t").asText())
     }
 
     @Test

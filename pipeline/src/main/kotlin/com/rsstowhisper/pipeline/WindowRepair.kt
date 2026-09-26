@@ -14,21 +14,26 @@ internal object WindowRepair {
      */
     private const val MARGIN_CUES = 2
 
-    /**
-     * [range] is the base cues this replaces; [anchors] says how each edge was
-     * found ("text", "time", or "none" at the episode's edge), and the gaps are
-     * the seconds between an anchor and the first new word, where speech could
-     * have been lost.
-     */
+    /** [range] is the base cues this replaces; the anchors say how each edge was found: "text", "time", or "none" at the episode's edge. */
     data class Replacement(
         val range: IntRange,
         val cues: List<Cue>,
         val words: List<Word>,
         val anchorLeft: String = "none",
         val anchorRight: String = "none",
-        val gapLeft: Double? = null,
-        val gapRight: Double? = null,
     )
+
+    /** Seconds between each anchor of [window] and the nearest new word, where speech could have been lost; null without that anchor. */
+    fun gaps(
+        base: WhisperTranscription,
+        window: IntRange,
+        replacement: Replacement,
+    ): Pair<Double?, Double?> {
+        val left = (replacement.range.first - 1).takeIf { it >= window.first }?.let { base.cues[it].end }
+        val right = (replacement.range.last + 1).takeIf { it <= window.last }?.let { base.cues[it].start }
+        val first = replacement.words.firstOrNull() ?: return null to null
+        return left?.let { first.start - it } to right?.let { it - replacement.words.last().end }
+    }
 
     /** A cue that is nothing but one of the prompt's sentences, held this long, is whisper voicing the prompt over non-speech. */
     private const val MIN_PROMPT_LEAK_SECONDS = 10.0
@@ -292,8 +297,6 @@ internal object WindowRepair {
             words = out,
             anchorLeft = anchorLeft,
             anchorRight = anchorRight,
-            gapLeft = if (floor != null && kept.isNotEmpty()) kept.first().start - floor else null,
-            gapRight = if (ceiling != null && kept.isNotEmpty()) ceiling - kept.last().end else null,
         )
     }
 

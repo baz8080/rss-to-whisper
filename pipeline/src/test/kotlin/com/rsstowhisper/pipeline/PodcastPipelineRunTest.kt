@@ -897,4 +897,23 @@ class PodcastPipelineRunTest {
         return com.fasterxml.jackson.databind.ObjectMapper()
             .readValue(Files.readString(episodeDir.resolve("transcript.json")), Map::class.java) as Map<String, Any?>
     }
+
+    @Test
+    fun `a server that misplaces word times stops a feed run at the first episode`(
+        @TempDir tempDir: Path,
+    ) {
+        val vadServer =
+            """{"segments":[{"start":0.0,"end":1.0,"text":" Hello.","words":[""" +
+                """{"word":" Hello.","start":50.0,"end":51.0,"probability":0.9}]}]}"""
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("One"), makeEntry("Two")),
+                vtt = vadServer,
+            )
+
+        assertFalse(pipeline.run())
+        assertEquals(1, txSvc.calls.size)
+    }
 }

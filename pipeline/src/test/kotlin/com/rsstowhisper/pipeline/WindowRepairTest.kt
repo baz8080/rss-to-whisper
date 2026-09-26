@@ -777,4 +777,48 @@ class WindowRepairTest {
 
         assertEquals(1, WindowRepair.defectsAfter(base, replacement, WindowRepair.Prompt("Let's get started."), setOf(0)))
     }
+
+    @Test
+    fun `an anchor the decode disputes is re-decoded with the window`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 10.0, " This is one of those things where there's lots."),
+                Cue(10.0, 12.0, " And then it happened."),
+            ) + (0 until 4).map { Cue(12.0 + it * 3, 15.0 + it * 3, loopText) } +
+                listOf(
+                    Cue(24.0, 27.0, " Nobody expected that part at all."),
+                    Cue(27.0, 30.0, " It changed everything for us."),
+                    Cue(30.0, 33.0, " The end."),
+                )
+        val dir = episode(tempDir, cues)
+        val rest =
+            arrayOf(
+                Cue(10.0, 12.0, " And then it happened."),
+                Cue(12.0, 24.0, " Today we are talking about the telescope."),
+                Cue(24.0, 27.0, " Nobody expected that part at all."),
+                Cue(27.0, 30.0, " It changed everything for us."),
+            )
+        val disputing = serverJson(Cue(6.0, 10.0, " This is the data set we looked through."), *rest)
+        val widened =
+            serverJson(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 10.0, " The data set was looked through."),
+                *rest,
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = List(4) { disputing } + widened)
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
+        val vtt = json.path("episode_transcript").asText()
+        assertEquals(5, txSvc.calls.size)
+        assertTrue("The data set was looked through." in vtt)
+        assertFalse("where there's lots" in vtt)
+        assertEquals(1, json.path("whisper_run").path("repairs")[0].path("widened").asInt())
+    }
 }

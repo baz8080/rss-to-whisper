@@ -1439,50 +1439,46 @@ class PodcastPipeline(
         val language = podcast.language ?: config.language
         val replacements = mutableListOf<WindowRepair.Replacement>()
         val repairs = mutableListOf<Map<String, Any?>>()
-        for (range in WindowRepair.windows(cues, defects)) {
+        val windows = WindowRepair.windows(cues, defects)
+        var previousLast = 0
+        for ((n, initial) in windows.withIndex()) {
+            // Widening may share an anchor with the windows either side, never reach into what they replace.
+            val lowest = previousLast
+            val highest = windows.getOrNull(n + 1)?.first ?: cues.lastIndex
+            var range = initial
+            var widened = 0
+            var tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
+            while (tried.best == null && widened < MAX_WIDENINGS) {
+                val first = if (tried.disputedLeft && range.first - 1 >= lowest) range.first - 1 else range.first
+                val last = if (tried.disputedRight && range.last + 1 <= highest) range.last + 1 else range.last
+                if (first == range.first && last == range.last) break
+                range = first..last
+                widened++
+                tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
+            }
+            previousLast = range.last
+            val best = tried.best
             val window = WindowRepair.window(cues, range)
             val before = defects.count { it in range }
-            var best: WindowRepair.Replacement? = null
-            var bestDefects = before
-            var bestConditioned = true
-            val lostByAttempt = mutableListOf<Double>()
-            for (conditioned in REPAIR_ATTEMPTS) {
-                val decoded = decode(audioPath, podcast, conditioned, window)
-                val anchored = WindowRepair.anchor(base, decoded, range, defects)
-                val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
-                // Nothing said is a repair only where VAD confirms nothing is said.
-                if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
-                val lost = WindowRepair.lostSpeech(base, replacement, speech ?: WindowRepair.spokenIn(base, replacement.range, defects))
-                if (lost > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
-                    lostByAttempt += lost
-                    continue
-                }
-                val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
-                if (after < bestDefects) {
-                    best = replacement
-                    bestDefects = after
-                    bestConditioned = conditioned
-                }
-                if (bestDefects == 0) break
-            }
             repairs +=
                 mapOf(
                     "start" to window.start,
                     "end" to window.end,
                     "cues" to listOf(range.first, range.last),
+                    "widened" to widened,
                     "defects_before" to before,
-                    "defects_after" to if (best != null) bestDefects else before,
-                    "conditioned" to if (best != null) bestConditioned else null,
+                    "defects_after" to if (best != null) tried.bestDefects else before,
+                    "conditioned" to if (best != null) tried.bestConditioned else null,
                     "applied" to (best != null),
                     "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
                     "anchor_left" to best?.anchorLeft,
                     "anchor_right" to best?.anchorRight,
                     "gap_left_s" to best?.let { WindowRepair.gaps(base, range, it).first },
                     "gap_right_s" to best?.let { WindowRepair.gaps(base, range, it).second },
-                    "request" to best?.let { transcriber.requestFields(language, podcast.initialPrompt, bestConditioned, window) },
+                    "request" to best?.let { transcriber.requestFields(language, podcast.initialPrompt, tried.bestConditioned, window) },
                     "speech_checked" to (speech != null),
                     "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
-                    "refused_for_lost_speech_s" to lostByAttempt.map { Math.round(it * 10) / 10.0 },
+                    "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
                 )
             best?.let { replacements += it }
         }
@@ -1521,6 +1517,61 @@ class PodcastPipeline(
         return true
     }
 
+    private class Tried(
+        val best: WindowRepair.Replacement?,
+        val bestDefects: Int,
+        val bestConditioned: Boolean,
+        val lost: List<Double>,
+        val disputedLeft: Boolean,
+        val disputedRight: Boolean,
+    )
+
+    /**
+     * Every attempt at one window, keeping the one that leaves it with fewest defects and no speech lost. An attempt
+     * whose new words reach seconds into an anchor says that anchor is not what was said there, and is refused.
+     */
+    private fun tryWindow(
+        base: WhisperTranscription,
+        audioPath: Path,
+        podcast: PodcastConfig,
+        range: IntRange,
+        defects: Set<Int>,
+        speech: List<TimeWindow>?,
+        prompt: WindowRepair.Prompt,
+    ): Tried {
+        val window = WindowRepair.window(base.cues, range)
+        var best: WindowRepair.Replacement? = null
+        var bestDefects = defects.count { it in range }
+        var bestConditioned = true
+        val lost = mutableListOf<Double>()
+        var disputedLeft = false
+        var disputedRight = false
+        for (conditioned in REPAIR_ATTEMPTS) {
+            val anchored = WindowRepair.anchor(base, decode(audioPath, podcast, conditioned, window), range, defects)
+            if (anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS) {
+                disputedLeft = disputedLeft || anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS
+                disputedRight = disputedRight || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS
+                continue
+            }
+            val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
+            // Nothing said is a repair only where VAD confirms nothing is said.
+            if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
+            val missed = WindowRepair.lostSpeech(base, replacement, speech ?: WindowRepair.spokenIn(base, replacement.range, defects))
+            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
+                lost += missed
+                continue
+            }
+            val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
+            if (after < bestDefects) {
+                best = replacement
+                bestDefects = after
+                bestConditioned = conditioned
+            }
+            if (bestDefects == 0) break
+        }
+        return Tried(best, bestDefects, bestConditioned, lost, disputedLeft, disputedRight)
+    }
+
     private fun readWords(path: Path): List<Word> =
         GZIPInputStream(Files.newInputStream(path)).bufferedReader().useLines { lines ->
             lines.filter { it.isNotBlank() }.map { line ->
@@ -1557,6 +1608,9 @@ class PodcastPipeline(
          * none on the other. A window decode takes seconds, so the retries are cheap.
          */
         private val REPAIR_ATTEMPTS = listOf(true, false, true, false)
+
+        /** How many cues a window may grow by, one per side each time, when an attempt disputes its anchors. */
+        private const val MAX_WIDENINGS = 2
         internal const val AUDIO_FILENAME = "audio.mp3"
 
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */

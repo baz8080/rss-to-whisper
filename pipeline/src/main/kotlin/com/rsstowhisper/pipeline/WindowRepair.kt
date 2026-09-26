@@ -21,7 +21,13 @@ internal object WindowRepair {
         val words: List<Word>,
         val anchorLeft: String = "none",
         val anchorRight: String = "none",
+        /** Seconds the new words reach into each anchor's own time, before they are clamped out of it. */
+        val intoLeft: Double = 0.0,
+        val intoRight: Double = 0.0,
     )
+
+    /** More than this, and the decode heard something other than the anchor where the anchor is. */
+    const val MAX_INTO_ANCHOR_SECONDS = 2.0
 
     /** Seconds between each anchor of [window] and the nearest new word, where speech could have been lost; null without that anchor. */
     fun gaps(
@@ -275,11 +281,21 @@ internal object WindowRepair {
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
         val floor = left?.let { base.cues[it].end }
         val ceiling = right?.let { base.cues[it].start }
+        val clocked =
+            (
+                if (from < until) {
+                    words.subList(
+                        from,
+                        until,
+                    )
+                } else {
+                    emptyList()
+                }
+            ).map { it.copy(start = clock(it.start), end = clock(it.end)) }
+        val intoLeft = floor?.let { f -> clocked.maxOfOrNull { f - it.start } }?.coerceAtLeast(0.0) ?: 0.0
+        val intoRight = ceiling?.let { c -> clocked.maxOfOrNull { it.start - c } }?.coerceAtLeast(0.0) ?: 0.0
         // Words timed well into the right anchor are the decode running on past it: the anchor already holds that time.
-        val kept =
-            (if (from < until) words.subList(from, until) else emptyList())
-                .map { it.copy(start = clock(it.start), end = clock(it.end)) }
-                .filter { ceiling == null || it.start < ceiling + OVERLAP_SLACK_SECONDS }
+        val kept = clocked.filter { ceiling == null || it.start < ceiling + OVERLAP_SLACK_SECONDS }
         val cues = mutableListOf<Cue>()
         val out = mutableListOf<Word>()
         for ((segment, segmentWords) in kept.groupBy { it.segment }.toSortedMap()) {
@@ -321,6 +337,8 @@ internal object WindowRepair {
             words = out,
             anchorLeft = anchorLeft,
             anchorRight = anchorRight,
+            intoLeft = intoLeft,
+            intoRight = intoRight,
         )
     }
 

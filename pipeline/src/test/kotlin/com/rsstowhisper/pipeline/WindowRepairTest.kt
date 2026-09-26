@@ -821,4 +821,19 @@ class WindowRepairTest {
         assertFalse("where there's lots" in vtt)
         assertEquals(1, json.path("whisper_run").path("repairs")[0].path("widened").asInt())
     }
+
+    @Test
+    fun `a crammed cue and a prompt sentence with a word of whisper's own beside a leak are part of it`() {
+        val prompt = WindowRepair.Prompt("Hello, and welcome back to the show. Let's get started.")
+        val cues =
+            listOf(
+                Cue(678.72, 682.86, " It has properties, and we've only just recently discovered that it's a thing."),
+                Cue(682.96, 683.06, " And because of that, we're going to talk a little bit more about it."),
+                Cue(683.06, 683.06, " So let's get started."),
+                Cue(683.08, 713.06, " So let's get started."),
+                Cue(743.04, 748.28, " So that space itself is an emergent phenomenon."),
+            )
+
+        assertEquals(setOf(1, 2, 3), WindowRepair.defectCues(cues, prompt))
+    }
 }

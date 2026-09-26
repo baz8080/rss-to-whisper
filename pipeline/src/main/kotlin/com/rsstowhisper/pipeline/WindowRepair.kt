@@ -72,8 +72,20 @@ internal object WindowRepair {
             grew = leaks.addAll(leaks.flatMap { listOf(it - 1, it + 1) }.filter { it in cues.indices && voiced[it] })
         }
         defects += leaks
+        // A cue of many words in no time beside a defect is part of it, and must not be kept as an anchor.
+        val crammed = cues.indices.filter { crammed(cues[it]) }.toSet()
+        grew = true
+        while (grew) grew = defects.addAll(defects.flatMap { listOf(it - 1, it + 1) }.filter { it in crammed })
         return defects
     }
+
+    /** More words than anyone says in the time: [MIN_WORDS_FOR_RATE] or more at over [MAX_WORDS_PER_SECOND]. */
+    private fun crammed(cue: Cue): Boolean {
+        val words = Prompt.wordsOf(cue.text).size
+        return words >= MIN_WORDS_FOR_RATE && cue.end - cue.start < words / MAX_WORDS_PER_SECOND
+    }
+
+    private const val MAX_WORDS_PER_SECOND = 20.0
 
     /**
      * A cue of this many words in no time. Alone it is too common to call: over
@@ -138,7 +150,7 @@ internal object WindowRepair {
     class Prompt(text: String?) {
         private val words = wordsOf(text.orEmpty())
 
-        /** A run of the prompt's words, in order, that is most of the cue: whisper can start or end on one of its own. */
+        /** A run of the prompt's words, in order, that is all but one word or most of the cue: whisper adds its own. */
         fun voices(cue: String): Boolean {
             val said = wordsOf(cue)
             if (said.size < MIN_PROMPT_WORDS) return false
@@ -150,7 +162,7 @@ internal object WindowRepair {
                 longest = maxOf(longest, current.max())
                 previous = current
             }
-            return longest >= MIN_PROMPT_WORDS && longest >= said.size * MIN_PROMPT_SHARE
+            return longest >= MIN_PROMPT_WORDS && (longest >= said.size * MIN_PROMPT_SHARE || said.size - longest <= 1)
         }
 
         companion object {

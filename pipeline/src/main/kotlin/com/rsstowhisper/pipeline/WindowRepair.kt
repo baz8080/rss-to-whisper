@@ -857,6 +857,13 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
+    /** The window's own defects, counting its crammed cues as [defectsAfter] counts a decode's, so the two compare. */
+    fun defectsBefore(
+        base: WhisperTranscription,
+        range: IntRange,
+        defects: Set<Int>,
+    ): Int = range.count { it in defects || crammed(base.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
+
     /**
      * Defects left inside [replacement] once spliced, judged in context. A prompt sentence the base's good cues
      * there did not say counts at any length: fitted onto speech it is shorter than a leak, and still the prompt.

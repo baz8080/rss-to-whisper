@@ -1459,7 +1459,7 @@ class PodcastPipeline(
             previousLast = range.last
             val best = tried.best
             val window = WindowRepair.window(cues, range)
-            val before = defects.count { it in range }
+            val before = WindowRepair.defectsBefore(base, range, defects)
             repairs +=
                 mapOf(
                     "start" to window.start,
@@ -1543,7 +1543,7 @@ class PodcastPipeline(
     ): Tried {
         val window = WindowRepair.window(base.cues, range)
         var best: WindowRepair.Replacement? = null
-        var bestDefects = defects.count { it in range }
+        var bestDefects = WindowRepair.defectsBefore(base, range, defects)
         var bestConditioned = true
         var bestThin = Double.MAX_VALUE
         val lost = mutableListOf<Double>()

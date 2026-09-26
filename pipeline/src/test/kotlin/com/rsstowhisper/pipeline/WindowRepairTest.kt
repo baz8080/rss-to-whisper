@@ -503,6 +503,21 @@ class WindowRepairTest {
         assertEquals(1, WindowRepair.defectsAfter(base, replacement))
     }
 
+    /** Measured: every decode of a window with a leak and its own crammed line left one two-word scrap, and all were refused. */
+    @Test
+    fun `a window's own crammed cues count before, as a decode's count after`() {
+        val cues =
+            looping().take(7) +
+                listOf(
+                    Cue(21.0, 21.2, " not only what's going on in the universe, but also what's going on in the universe."),
+                    Cue(21.2, 24.0, " Nobody expected that part at all."),
+                )
+        val base = transcription(cues)
+        val defects = WindowRepair.defectCues(cues)
+
+        assertEquals(defects.size + 1, WindowRepair.defectsBefore(base, 0..8, defects))
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

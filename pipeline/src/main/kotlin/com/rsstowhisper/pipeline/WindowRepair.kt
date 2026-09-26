@@ -647,9 +647,13 @@ internal object WindowRepair {
         val fitted = Cue(if (early) onset else cue.start, if (late) offset else cue.end, cue.text) to moved
         if (!crams(moved)) return fitted
         // Squeezing them on would cram the words already there: what whisper smeared over the music either side goes.
-        val from = if (early) words.indexOfFirst { it.end > onset - MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else 0
-        val to = if (late) words.indexOfLast { it.start < offset + MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else words.lastIndex
-        if (from < 0 || to < from || to - from + 1 == words.size) return fitted
+        var from = if (early) words.indexOfFirst { it.end > onset - MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else 0
+        var to = if (late) words.indexOfLast { it.start < offset + MAX_WORDS_OUTSIDE_SPEECH_SECONDS } else words.lastIndex
+        if (from < 0 || to < from) return fitted
+        // Whole words only: a token without its leading space continues the word before it.
+        while (from > 0 && !words[from].text.startsWith(" ")) from--
+        while (to < words.lastIndex && !words[to + 1].text.startsWith(" ")) to++
+        if (to - from + 1 == words.size) return fitted
         val kept = words.subList(from, to + 1)
         return fitToSpeech(Cue(kept.first().start, kept.last().end, kept.joinToString("") { it.text }), kept, speech)
     }
@@ -668,6 +672,9 @@ internal object WindowRepair {
                 .filter { it.end - it.start >= MIN_SILENCE_SECONDS && it.start > cue.start && it.end < cue.end }
                 .firstOrNull { g -> words.count { it.start > g.start && it.start < g.end && normalise(it.text).isNotEmpty() } >= 2 }
                 ?: return null
+        // Words before the gap at a speaking pace are on their own speech, not smeared: they stay.
+        val ahead = words.count { it.start < gap.start && it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
+        if (ahead > (gap.start - words.first().start) * MAX_SMEARED_WORDS_PER_SECOND) return null
         val to = minOf(cue.end, heard.last().end)
         val spoken = words.count { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
         if ((to - gap.end) * MAX_SPEAKING_WORDS_PER_SECOND < spoken) return null
@@ -680,6 +687,7 @@ internal object WindowRepair {
 
     private const val MIN_SILENCE_SECONDS = 1.5
     private const val MAX_SPEAKING_WORDS_PER_SECOND = 6.0
+    private const val MAX_SMEARED_WORDS_PER_SECOND = 1.5
 
     /** Any [MIN_WORDS_FOR_RATE] spoken words in less time than anyone says them. */
     private fun crams(words: List<Word>): Boolean {
@@ -786,7 +794,13 @@ internal object WindowRepair {
             val said = mine.map { group -> normalise(group.joinToString("") { words[it].text }) }
             val edge = if (closesAnchor) theirs.takeLast(k) else theirs.take(k)
             if (said.none { it.length >= MIN_REPEATED_WORD_LETTERS }) continue
-            val same = if (k == 1) said[0] == edge[0] || similar(said[0], edge[0]) && !prefixed(said[0], edge[0]) else said == edge
+            val same =
+                if (k == 1) {
+                    val alike = said[0] == edge[0] || similar(said[0], edge[0]) && !prefixed(said[0], edge[0])
+                    edge[0].length >= MIN_REPEATED_WORD_LETTERS && alike
+                } else {
+                    said == edge
+                }
             if (same) return mine.flatten()
         }
         return emptyList()

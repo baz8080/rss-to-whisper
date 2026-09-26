@@ -595,6 +595,35 @@ class WindowRepairTest {
         assertTrue(fitted.words.all { it.start >= 33.95 - 0.01 })
     }
 
+    @Test
+    fun `words at a speaking pace before a silence in the cue stay on their speech`() {
+        val ahead = (0 until 8).map { Word(" word", 10.0 + it / 3.0, 10.3 + it / 3.0, 0.9, 0) }
+        val words =
+            ahead + listOf(Word(" and", 14.5, 15.0, 0.9, 0), Word(" um", 15.5, 16.0, 0.9, 0)) +
+                (0 until 6).map { Word(" more", 17.0 + it * 0.5, 17.4 + it * 0.5, 0.9, 0) }
+        val replacement = WindowRepair.Replacement(0..1, listOf(Cue(10.0, 20.0, words.joinToString("") { it.text })), words)
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(9.5, 14.0), TimeWindow(17.0, 21.0)))
+
+        assertEquals(10.0, fitted.words.first().start, 0.01)
+    }
+
+    @Test
+    fun `a long word before a short anchor word it resembles is kept`() {
+        val cues = looping().take(6) + listOf(Cue(18.0, 21.0, " stared at the sky."), Cue(21.0, 24.0, " Nobody expected that part at all."))
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " Then the whole thing started"),
+                Cue(18.0, 21.0, " stared at the sky."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" Then the whole thing started", replacement.cues.last().text)
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

@@ -836,4 +836,19 @@ class WindowRepairTest {
 
         assertEquals(setOf(1, 2, 3), WindowRepair.defectCues(cues, prompt))
     }
+
+    @Test
+    fun `a lone short sound before the speech is not where smeared words are moved to`() {
+        val replacement =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(23.0, 39.35, " I got stung.")),
+                listOf(Word(" I", 23.0, 24.0, 0.9, 0), Word(" got", 24.0, 25.0, 0.9, 0), Word(" stung.", 25.0, 26.0, 0.9, 0)),
+            )
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(27.55, 28.38), TimeWindow(38.82, 43.81)))
+
+        assertEquals(38.82, fitted.words.first().start, 0.01)
+        assertEquals(38.82, fitted.cues.single().start, 0.01)
+    }
 }

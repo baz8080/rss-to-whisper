@@ -562,7 +562,9 @@ internal object WindowRepair {
         speech: List<TimeWindow>,
     ): Pair<Cue, List<Word>> {
         if (words.isEmpty()) return cue to words
-        val inside = speech.filter { it.end > cue.start && it.start < cue.end }
+        val heard = speech.filter { it.end > cue.start && it.start < cue.end }
+        // A short sound alone, a jingle's hit, says nothing about where the words are.
+        val inside = heard.filterNot { isolatedBlip(it, heard) }.ifEmpty { heard }
         if (inside.isEmpty()) return cue to words
         val onset = maxOf(cue.start, inside.first().start)
         val offset = minOf(cue.end, inside.last().end)
@@ -572,7 +574,8 @@ internal object WindowRepair {
         val late = last - offset > MAX_WORDS_OUTSIDE_SPEECH_SECONDS
         if (!early && !late || last <= first) return cue to words
         val to0 = if (early) onset else first
-        val to1 = if (late) offset else last
+        // Words that all end before the speech starts have only the speech to go to.
+        val to1 = if (late || last <= to0) offset else last
         if (to1 <= to0) return cue to words
         val map = { t: Double -> to0 + (t - first) * (to1 - to0) / (last - first) }
         val moved = words.map { it.copy(start = map(it.start), end = map(it.end)) }
@@ -612,6 +615,16 @@ internal object WindowRepair {
     }
 
     private const val MIN_CUES_TO_JUDGE_VAD = 5
+
+    private fun isolatedBlip(
+        span: TimeWindow,
+        spans: List<TimeWindow>,
+    ): Boolean =
+        span.end - span.start < MAX_BLIP_SECONDS &&
+            spans.none { it != span && it.end > span.start - BLIP_ISOLATION_SECONDS && it.start < span.end + BLIP_ISOLATION_SECONDS }
+
+    private const val MAX_BLIP_SECONDS = 1.0
+    private const val BLIP_ISOLATION_SECONDS = 3.0
 
     /** Whether the base cues in [range] lie over non-speech, which is what makes removing them a repair. */
     fun silent(

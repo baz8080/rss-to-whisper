@@ -630,6 +630,7 @@ internal object WindowRepair {
         // A short sound alone, a jingle's hit, says nothing about where the words are.
         val inside = heard.filterNot { isolatedBlip(it, heard) }.ifEmpty { heard }
         if (inside.isEmpty()) return cue to words
+        overSilence(cue, words, inside)?.let { return it }
         val onset = maxOf(cue.start, inside.first().start)
         val offset = minOf(cue.end, inside.last().end)
         val first = words.first().start
@@ -652,6 +653,33 @@ internal object WindowRepair {
         val kept = words.subList(from, to + 1)
         return fitToSpeech(Cue(kept.first().start, kept.last().end, kept.joinToString("") { it.text }), kept, speech)
     }
+
+    /**
+     * Words timed inside a silence in the cue were smeared ahead of the speech after it, and all go onto that speech
+     * if it can hold them at a speaking pace ("It's the size of a squash court" spread across a 4 s gap).
+     */
+    private fun overSilence(
+        cue: Cue,
+        words: List<Word>,
+        heard: List<TimeWindow>,
+    ): Pair<Cue, List<Word>>? {
+        val gap =
+            heard.zipWithNext().map { (a, b) -> TimeWindow(a.end, b.start) }
+                .filter { it.end - it.start >= MIN_SILENCE_SECONDS && it.start > cue.start && it.end < cue.end }
+                .firstOrNull { g -> words.count { it.start > g.start && it.start < g.end && normalise(it.text).isNotEmpty() } >= 2 }
+                ?: return null
+        val to = minOf(cue.end, heard.last().end)
+        val spoken = words.count { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
+        if ((to - gap.end) * MAX_SPEAKING_WORDS_PER_SECOND < spoken) return null
+        val first = words.first().start
+        val last = words.last().end
+        if (last <= first) return null
+        val map = { t: Double -> gap.end + (t - first) * (to - gap.end) / (last - first) }
+        return Cue(gap.end, to, cue.text) to words.map { it.copy(start = map(it.start), end = map(it.end)) }
+    }
+
+    private const val MIN_SILENCE_SECONDS = 1.5
+    private const val MAX_SPEAKING_WORDS_PER_SECOND = 6.0
 
     /** Any [MIN_WORDS_FOR_RATE] spoken words in less time than anyone says them. */
     private fun crams(words: List<Word>): Boolean {

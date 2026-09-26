@@ -581,6 +581,20 @@ class WindowRepairTest {
         assertEquals(" You know, the thing is the telescope.", replacement.cues.first().text)
     }
 
+    /** Measured: "It's the size of a squash court." spread 27.55–35.62 s across VAD's silence at 30.08–33.95 s; heard from 34 s. */
+    @Test
+    fun `words smeared across a silence inside a cue are moved onto the speech after it`() {
+        val times = listOf(27.55, 28.69, 29.67, 30.98, 31.64, 31.97, 34.05)
+        val tokens = listOf(" It's", " the", " size", " of", " a", " squash", " court.")
+        val words = tokens.mapIndexed { i, t -> Word(t, times[i], if (i + 1 < times.size) times[i + 1] else 35.62, 0.9, 0) }
+        val replacement = WindowRepair.Replacement(0..1, listOf(Cue(27.38, 35.62, tokens.joinToString(""))), words)
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(26.08, 30.08), TimeWindow(33.95, 51.1)))
+
+        assertEquals(33.95, fitted.cues.single().start, 0.01)
+        assertTrue(fitted.words.all { it.start >= 33.95 - 0.01 })
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

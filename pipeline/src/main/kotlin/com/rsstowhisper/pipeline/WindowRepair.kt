@@ -4,6 +4,7 @@ import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
+import kotlin.math.abs
 
 /** Re-decoding only the stretches of an episode whose cues are defects: loops, copies and prompt leaks. */
 internal object WindowRepair {
@@ -231,20 +232,23 @@ internal object WindowRepair {
 
         fun anchorWords(cue: Int) = baseWords[cue].orEmpty().filter { normalise(it.text).isNotEmpty() }
 
+        // Nearest the anchor's own time: a short anchor ("Never?") can also be a word of the sentence before it.
         fun leftMatch(): Int? {
             val cue = base.cues[left ?: return null]
             val tail = anchorWords(left).takeLast(ANCHOR_WORDS).map { normalise(it.text) }
-            return matches(contentText, tail).lastOrNull { at ->
-                words[content[at + tail.size - 1]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
-            }?.let { content[it + tail.size - 1] }
+            val end = anchorWords(left).last().end
+            return matches(contentText, tail).map { content[it + tail.size - 1] }
+                .filter { words[it].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS) }
+                .minByOrNull { abs(words[it].end - end) }
         }
 
         fun rightMatch(from: Int): Int? {
             val cue = base.cues[right ?: return null]
             val head = anchorWords(right).take(ANCHOR_WORDS).map { normalise(it.text) }
-            return matches(contentText, head).firstOrNull { at ->
-                content[at] >= from && words[content[at]].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS)
-            }?.let { content[it] }
+            val start = anchorWords(right).first().start
+            return matches(contentText, head).map { content[it] }
+                .filter { it >= from && words[it].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS) }
+                .minByOrNull { abs(words[it].start - start) }
         }
 
         // An edge found by text says how far the decode's clock is off, and the other

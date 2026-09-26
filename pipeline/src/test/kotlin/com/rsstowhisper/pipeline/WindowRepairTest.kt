@@ -119,6 +119,31 @@ class WindowRepairTest {
         assertTrue(WindowRepair.gaps(base, 1..6, replacement).second!! > 0)
     }
 
+    /** Measured: "…Drake's recordings never go out of print. Never?" was cut at the first "never". */
+    @Test
+    fun `a one-word anchor is found at its own time, not at the same word just before it`() {
+        val cues =
+            looping().take(6) +
+                listOf(
+                    Cue(18.0, 21.0, " And then we found something odd."),
+                    Cue(21.0, 22.0, " Never?"),
+                    Cue(22.0, 25.0, " It changed everything for us."),
+                )
+        val base = transcription(cues)
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.5, " Boyd sells his stake in Island Records."),
+                Cue(18.5, 21.0, " His recordings never go out of print."),
+                Cue(21.0, 22.0, " Never?"),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..7, setOf(2, 3, 4, 5))
+
+        assertEquals("text" to "text", replacement.anchorLeft to replacement.anchorRight)
+        assertEquals(" His recordings never go out of print.", replacement.cues.last().text)
+    }
+
     @Test
     fun `a splice renumbers the words after it`() {
         val base = transcription(looping())

@@ -727,7 +727,7 @@ internal object WindowRepair {
         words: List<Word>,
         onset: Double,
     ): Pair<Cue, List<Word>>? {
-        val on = words.indexOfFirst { it.start >= onset }
+        val on = words.indexOfFirst { it.start >= onset && it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
         if (on <= 0) return null
         val ahead = words.subList(0, on)
         val onSpeech = words.subList(on, words.size).count { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }

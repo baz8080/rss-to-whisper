@@ -641,10 +641,11 @@ class WindowRepairTest {
     /** Measured: "Okay, so you're a baseball coach" smeared over the theme, then the sentence on the speech from 110.7 s. */
     @Test
     fun `words smeared ahead of the speech go into the room before the words already on it`() {
-        val ahead = listOf(" Okay," to 92.7, " so" to 96.0, " you're" to 97.8, " a" to 100.9, " baseball" to 101.5, " coach," to 106.4)
+        val ahead =
+            listOf(" Okay," to 92.7, " so" to 96.0, " you're" to 97.8, " a" to 100.9, " baseball" to 101.5, " coach" to 106.4, "," to 109.4)
         val on = listOf(" and", " you've", " just", " got", " a", " new", " player", " on", " your", " team")
         val words =
-            ahead.mapIndexed { i, (t, s) -> Word(t, s, if (i + 1 < ahead.size) ahead[i + 1].second else 109.4, 0.9, 0) } +
+            ahead.mapIndexed { i, (t, s) -> Word(t, s, if (i + 1 < ahead.size) ahead[i + 1].second else 109.6, 0.9, 0) } +
                 on.mapIndexed { i, t -> Word(t, 110.7 + i * 0.25, 110.95 + i * 0.25, 0.9, 0) }
         val replacement = WindowRepair.Replacement(0..1, listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
 

@@ -663,6 +663,7 @@ internal object WindowRepair {
         val early = onset - first > MAX_WORDS_OUTSIDE_SPEECH_SECONDS
         val late = last - offset > MAX_WORDS_OUTSIDE_SPEECH_SECONDS
         if (!early && !late || last <= first) return cue to words
+        if (early && !late) aheadOfSpeech(cue, words, onset)?.let { return it }
         val to0 = if (early) onset else first
         // Words that all end before the speech starts have only the speech to go to.
         val to1 = if (late || last <= to0) offset else last
@@ -713,6 +714,34 @@ internal object WindowRepair {
     private const val MIN_SILENCE_SECONDS = 1.5
     private const val MAX_SPEAKING_WORDS_PER_SECOND = 6.0
     private const val MAX_SMEARED_WORDS_PER_SECOND = 1.5
+
+    /** Slower than this, words "on" the speech are smeared too, and the whole cue is fitted. */
+    private const val MAX_SECONDS_PER_WORD = 1.0
+
+    /**
+     * Only the words timed before the speech move, into the time before the first word already on it at a speaking pace,
+     * if they fit at one too: squeezing the whole cue would cram the words whisper timed right.
+     */
+    private fun aheadOfSpeech(
+        cue: Cue,
+        words: List<Word>,
+        onset: Double,
+    ): Pair<Cue, List<Word>>? {
+        val on = words.indexOfFirst { it.start >= onset }
+        if (on <= 0) return null
+        val ahead = words.subList(0, on)
+        val onSpeech = words.subList(on, words.size).count { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
+        if (words.last().end - words[on].start > onSpeech * MAX_SECONDS_PER_WORD) return null
+        val room = words[on].start - onset
+        val spoken = ahead.count { it.text.startsWith(" ") && normalise(it.text).isNotEmpty() }
+        if (room * MAX_SPEAKING_WORDS_PER_SECOND < spoken) return null
+        val first = ahead.first().start
+        val last = ahead.last().end
+        if (last <= first) return null
+        val map = { t: Double -> onset + (t - first) * room / (last - first) }
+        val moved = ahead.map { it.copy(start = map(it.start), end = map(it.end)) } + words.subList(on, words.size)
+        return Cue(onset, cue.end, cue.text) to moved
+    }
 
     /** Any [MIN_WORDS_FOR_RATE] spoken words in less time than anyone says them. */
     private fun crams(words: List<Word>): Boolean {

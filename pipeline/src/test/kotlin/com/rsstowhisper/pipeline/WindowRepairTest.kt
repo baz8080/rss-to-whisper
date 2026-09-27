@@ -638,6 +638,23 @@ class WindowRepairTest {
         assertEquals(" Then the whole thing started", replacement.cues.last().text)
     }
 
+    /** Measured: "Okay, so you're a baseball coach" smeared over the theme, then the sentence on the speech from 110.7 s. */
+    @Test
+    fun `words smeared ahead of the speech go into the room before the words already on it`() {
+        val ahead = listOf(" Okay," to 92.7, " so" to 96.0, " you're" to 97.8, " a" to 100.9, " baseball" to 101.5, " coach," to 106.4)
+        val on = listOf(" and", " you've", " just", " got", " a", " new", " player", " on", " your", " team")
+        val words =
+            ahead.mapIndexed { i, (t, s) -> Word(t, s, if (i + 1 < ahead.size) ahead[i + 1].second else 109.4, 0.9, 0) } +
+                on.mapIndexed { i, t -> Word(t, 110.7 + i * 0.25, 110.95 + i * 0.25, 0.9, 0) }
+        val replacement = WindowRepair.Replacement(0..1, listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(108.7, 115.3)))
+
+        assertEquals(words.joinToString("") { it.text }, fitted.cues.single().text)
+        assertEquals(108.7, fitted.words.first().start, 0.01)
+        assertEquals(110.7, fitted.words.first { it.text == " and" }.start, 0.01)
+    }
+
     /** Measured: a stack of zero-length copies beside a window survived it, and the title it had decoded appeared twice. */
     @Test
     fun `a window grows over a stack of crammed cues at its edge, so none is its anchor`() {

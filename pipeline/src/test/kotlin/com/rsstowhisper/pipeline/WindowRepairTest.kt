@@ -58,6 +58,62 @@ class WindowRepairTest {
         assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
     }
 
+    /** Measured: 99pi 2023-03-29 The Panopticon Effect, 36:51.5. */
+    @Test
+    fun `a stock sign-off held as long as a leak is a defect, and a spoken one is not`() {
+        val cues =
+            listOf(
+                Cue(2181.54, 2186.66, " Every past episode of 99pi at 99pi.org."),
+                Cue(2211.48, 2241.46, " See you next time."),
+                Cue(2241.5, 2243.0, " See you next time."),
+            )
+
+        assertEquals(setOf(1), WindowRepair.defectCues(cues))
+        assertEquals(1, WindowRepair.defectKinds(cues)["stock"])
+    }
+
+    /** Measured: Blindboy 2018-04-24 Marble Charles, 1:20:50. */
+    @Test
+    fun `the credit whisper also writes as Transcribed by ESO is stock`() {
+        val cues = listOf(Cue(4806.9, 4808.4, " I want to see a crayfish."), Cue(4850.6, 4866.6, " Transcribed by ESO. Translated by"))
+
+        assertEquals(setOf(1), WindowRepair.defectCues(cues))
+    }
+
+    @Test
+    fun `a stock sign-off over silence is repaired away`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 9.0, " And then we found something odd."),
+                Cue(9.0, 39.0, " See you next time."),
+            )
+        val dir = episode(tempDir, cues)
+        val again =
+            serverJson(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 9.0, " And then we found something odd."),
+                Cue(9.0, 39.0, " See you next time."),
+            )
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(again),
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 9.0))),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertFalse("See you next time" in vtt)
+        assertTrue("And then we found something odd." in vtt)
+    }
+
     /** Measured: Spacetime 2025-10-29, 1:26.6. The anchor spells "Spacetime" in three tokens, the decode in two words. */
     @Test
     fun `an anchor word whisper split into tokens is matched whole, and not left half in the window`() {
@@ -411,7 +467,7 @@ class WindowRepairTest {
 
         assertTrue(pipeline.listDefects(out))
 
-        assertEquals("Show/${dir.fileName}\tdefects=4\twindows=1\tloop=4\tstretch=0\techo=0\tcopy=0\tleak=0\n", out.toString())
+        assertEquals("Show/${dir.fileName}\tdefects=4\twindows=1\tloop=4\tstretch=0\techo=0\tcopy=0\tleak=0\tstock=0\n", out.toString())
         assertEquals(0, txSvc.calls.size)
     }
 

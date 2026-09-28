@@ -50,7 +50,7 @@ internal object WindowRepair {
         prompt: Prompt = Prompt.NONE,
     ): Set<Int> {
         val defects = TranscriptQuality.stretchCopyCues(cues).toMutableSet()
-        defects += loops(cues) + echoes(cues) + longCopies(cues) + leaks(cues, prompt)
+        defects += loops(cues) + echoes(cues) + longCopies(cues) + leaks(cues, prompt) + stock(cues)
         // A cue of many words in no time beside a defect is part of it, and must not be kept as an anchor.
         val crammed = cues.indices.filter { crammed(cues[it]) }.toSet()
         var grew = true
@@ -69,6 +69,7 @@ internal object WindowRepair {
             "echo" to echoes(cues).size,
             "copy" to longCopies(cues).size,
             "leak" to leaks(cues, prompt).size,
+            "stock" to stock(cues).size,
         )
 
     /** Runs of identical cues, with the cue either side that holds the loop's first or last lap. */
@@ -160,6 +161,10 @@ internal object WindowRepair {
         return leaks
     }
 
+    /** A subtitle credit or sign-off held as long as a leak: whisper's, over music or silence. The repair's VAD checks keep a real one. */
+    private fun stock(cues: List<Cue>): Set<Int> =
+        cues.indices.filter { i -> cues[i].end - cues[i].start >= MIN_PROMPT_LEAK_SECONDS && STOCK.any { it.voices(cues[i].text) } }.toSet()
+
     /** More words than anyone says in the time: [least] or more at over [MAX_WORDS_PER_SECOND]. */
     private fun crammed(
         cue: Cue,
@@ -185,6 +190,7 @@ internal object WindowRepair {
             "Thank you for watching.",
             "Transcription by CastingWords",
             "Transcription by ESO. Translation by",
+            "Transcribed by ESO, translated by",
             "Transcript Emily Beynon",
             "BF-WATCH TV 2021",
         ).map { Prompt(it) }

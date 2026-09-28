@@ -88,8 +88,63 @@ internal object WindowRepair {
             }
             i = j + 1
         }
+        loops += cycles(cues)
+        loops += cues.indices.filter { loopsWithin(cues[it]) }
         return loops
     }
+
+    /** A few cues repeated in turn: "We're going to talk about | the | whiskey | sour." eight times over. */
+    private fun cycles(cues: List<Cue>): Set<Int> {
+        val keys = cues.map { Prompt.wordsOf(it.text) }
+        val cycles = mutableSetOf<Int>()
+        for (period in 2..MAX_CYCLE_CUES) {
+            var i = period
+            while (i < cues.size) {
+                var j = i
+                while (j < cues.size && keys[j].isNotEmpty() && keys[j] == keys[j - period]) j++
+                val lap = keys.subList(i - period, i)
+                if (j - i >= (TranscriptQuality.MAX_REPEATED_CUE_RUN - 1) * period && lap.toSet().size == period &&
+                    lap.sumOf { it.size } >= MIN_CYCLE_WORDS
+                ) {
+                    cycles.addAll(i - period until j)
+                    i = j
+                } else {
+                    i++
+                }
+            }
+        }
+        return cycles
+    }
+
+    /** One cue repeating a phrase faster than anyone speaks: "a paid-for woman. You're visited by a paid-for woman." in 0.9 s. */
+    private fun loopsWithin(cue: Cue): Boolean {
+        val words = Prompt.wordsOf(cue.text)
+        if (words.size / maxOf(cue.end - cue.start, MIN_LOOP_SECONDS) < MIN_LOOPING_WORDS_PER_SECOND) return false
+        for (phrase in MIN_LOOP_PHRASE_WORDS..MAX_LOOP_PHRASE_WORDS) {
+            var run = 0
+            for (i in phrase until words.size) {
+                run = if (words[i] == words[i - phrase]) run + 1 else 0
+                if (run + phrase >= phrase * MIN_LOOP_LAPS && !repeats(words.subList(i + 1 - phrase, i + 1))) return true
+            }
+        }
+        return false
+    }
+
+    /** "ha ha ha ha" is a one-word laugh, not a four-word phrase. */
+    private fun repeats(phrase: List<String>): Boolean =
+        (1 until phrase.size).any { d -> (d until phrase.size).all { phrase[it] == phrase[it - d] } }
+
+    private const val MAX_CYCLE_CUES = 4
+
+    /** "Yeah. | No." four times is a conversation; a cycle this long is not. */
+    private const val MIN_CYCLE_WORDS = 4
+
+    /** Shorter phrases, or slower, are mostly real: "no, no, no", "back and forth, back and forth". */
+    private const val MIN_LOOP_PHRASE_WORDS = 4
+    private const val MAX_LOOP_PHRASE_WORDS = 12
+    private const val MIN_LOOP_LAPS = 2.5
+    private const val MIN_LOOPING_WORDS_PER_SECOND = 10.0
+    private const val MIN_LOOP_SECONDS = 0.05
 
     private fun leaks(
         cues: List<Cue>,
@@ -985,7 +1040,7 @@ internal object WindowRepair {
         val spliced = splice(base, listOf(replacement))
         val first = replacement.range.first
         val inside = first until first + replacement.cues.size
-        val said = replacement.range.filter { it !in defects }.map { Prompt.wordsOf(base.cues[it].text) }.toSet()
+        val said = saidBy(base, replacement, defects)
         val leaks = inside.filter { prompt.voices(spliced.cues[it].text) && Prompt.wordsOf(spliced.cues[it].text) !in said }
         // At its own 30 s boundaries a window decode crams in paraphrases of what it just said.
         val crammed = inside.filter { crammed(spliced.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
@@ -996,4 +1051,23 @@ internal object WindowRepair {
             }
         return (defectCues(spliced.cues, prompt) + leaks + crammed + stock).count { it in inside }
     }
+
+    /** A decode that holds a prompt sentence as long as a leak, where the base's good cues didn't say it: never better, however few its other defects. */
+    fun voicesPrompt(
+        base: WhisperTranscription,
+        replacement: Replacement,
+        prompt: Prompt,
+        defects: Set<Int> = emptySet(),
+    ): Boolean {
+        val said = saidBy(base, replacement, defects)
+        return replacement.cues.any {
+            it.end - it.start >= MIN_PROMPT_LEAK_SECONDS && prompt.voices(it.text) && Prompt.wordsOf(it.text) !in said
+        }
+    }
+
+    private fun saidBy(
+        base: WhisperTranscription,
+        replacement: Replacement,
+        defects: Set<Int>,
+    ): Set<List<String>> = replacement.range.filter { it !in defects }.map { Prompt.wordsOf(base.cues[it].text) }.toSet()
 }

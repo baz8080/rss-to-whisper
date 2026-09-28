@@ -1608,6 +1608,7 @@ class PodcastPipeline(
             val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
             // Nothing said is a repair only where VAD confirms nothing is said.
             if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
+            if (WindowRepair.voicesPrompt(base, replacement, prompt, defects)) continue
             val spoken = speech ?: WindowRepair.spokenIn(base, replacement.range, defects)
             val missed = WindowRepair.lostSpeech(base, replacement, spoken)
             if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {

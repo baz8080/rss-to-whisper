@@ -57,6 +57,72 @@ class WindowRepairTest {
         assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
     }
 
+    /** Measured: Blindboy Soda Jerk, 2740–2752 s. */
+    @Test
+    fun `a few cues repeated in turn are a loop`() {
+        val lap = listOf(" We're going to talk about", " the", " whiskey", " sour.")
+        val cues =
+            listOf(Cue(0.0, 3.0, " So that is where the story begins.")) +
+                (0 until 16).map { Cue(3.0 + it * 0.2, 3.2 + it * 0.2, lap[it % 4]) } +
+                listOf(Cue(6.5, 9.0, " And then we found something odd."))
+
+        assertEquals((1..16).toSet(), WindowRepair.defectCues(cues))
+    }
+
+    @Test
+    fun `two speakers trading short lines are not a loop`() {
+        val cues =
+            listOf(Cue(0.0, 3.0, " So that is where the story begins.")) +
+                (0 until 8).map {
+                    Cue(3.0 + it, 4.0 + it, if (it % 2 == 0) " Yeah." else " No.")
+                }
+
+        assertEquals(emptySet<Int>(), WindowRepair.defectCues(cues))
+    }
+
+    /** Measured: Planetary Radio 2019-10-11, 294.0 s. */
+    @Test
+    fun `a phrase repeated inside one cue faster than anyone speaks is a loop`() {
+        val cues =
+            listOf(
+                Cue(290.1, 294.0, " staffer or a member of Congress, you're visited by a paid-for"),
+                Cue(294.0, 294.9, " woman. You're visited by a paid-for woman. You're visited by a paid-for woman. You're visited by a"),
+                Cue(294.9, 300.2, " lobbyist. I'm not a lobbyist."),
+            )
+
+        assertEquals(setOf(1), WindowRepair.defectCues(cues))
+    }
+
+    /** Measured: Citation Needed 2020-06-03, 266.2 s. */
+    @Test
+    fun `a fast laugh is not a looped phrase`() {
+        val cues = listOf(Cue(266.2, 269.1, " Ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha ha"))
+
+        assertEquals(emptySet<Int>(), WindowRepair.defectCues(cues))
+    }
+
+    @Test
+    fun `a short prompt sentence that could be speech is scored, not refused`() {
+        val base = transcription(looping())
+        val replacement =
+            WindowRepair.Replacement(
+                2..5,
+                listOf(Cue(6.0, 8.0, " Let's get started."), Cue(8.0, 18.0, " The WISE data set was looked through again.")),
+                listOf(Word(" Let's", 6.0, 7.0, 0.9, 0), Word(" The", 8.0, 9.0, 0.9, 1)),
+            )
+        val prompt = WindowRepair.Prompt("Let's get started.")
+
+        assertFalse(WindowRepair.voicesPrompt(base, replacement, prompt, setOf(2, 3, 4, 5)))
+        assertEquals(1, WindowRepair.defectsAfter(base, replacement, prompt, setOf(2, 3, 4, 5)))
+    }
+
+    @Test
+    fun `a phrase repeated at a speaking pace is speech`() {
+        val cues = listOf(Cue(1214.7, 1221.0, " He got picked up, taken in a boat, back and forth, back and forth, back and forth, and"))
+
+        assertEquals(emptySet<Int>(), WindowRepair.defectCues(cues))
+    }
+
     private fun decodedWindow(vararg cues: Cue): WhisperTranscription = transcription(cues.toList())
 
     @Test
@@ -271,6 +337,27 @@ class WindowRepairTest {
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
         assertEquals(listOf(true, false, true, false), txSvc.conditioned)
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    /** Measured: Rest is History 262 traded six loop cues for 27 s of the prompt. */
+    @Test
+    fun `a decode that voices the prompt is refused however few defects it has`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val leaking =
+            serverJson(
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(6.0, 18.0, " we're going to talk about a few different things, and I think you'll enjoy it."),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(leaking))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
+
+        assertEquals(4, txSvc.calls.size)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 

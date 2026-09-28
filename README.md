@@ -67,6 +67,18 @@ Do not pass `--convert` (it shells out to `ffmpeg` on the server host — MP3s a
 uploaded as-is and decoded internally), and do not pass `-nt`, which would
 suppress the timestamps the pipeline exists to capture.
 
+### Known-good version
+
+The corpus was transcribed and repaired against whisper.cpp **v1.9.2** (`306c88f4`), serving
+`ggml-large-v3` from two builds: Metal with the CoreML encoder on Apple Silicon, and CUDA on Linux. This is not a requirement.
+It is the version whose behaviour the repair's thresholds were tuned against.
+
+Upgrading past v1.9.3 changes one thing the repair relies on. v1.9.4 re-seeds the sampler on every
+request ([whisper.cpp#4025](https://github.com/ggml-org/whisper.cpp/pull/4025)), so a server gives
+the same output for the same request, even when it falls back to sampling. `--repair-windows`
+retries each window with the same two requests twice, and gets its second chances only because an
+older server's output drifts between calls. On v1.9.4 those retries would repeat themselves.
+
 ### Choosing a model
 
 whisper.cpp uses its own GGML model format (`.bin` files), **not** the OpenAI

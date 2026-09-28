@@ -208,7 +208,12 @@ class PodcastPipeline(
         for (target in targets) {
             val attempted =
                 try {
-                    val written = if (request.repairWindows) repairEpisode(target) else retranscribeEpisode(target, request.force)
+                    val written =
+                        if (request.repairWindows || request.repairGaps) {
+                            repairEpisode(target, request.repairWindows, request.repairGaps)
+                        } else {
+                            retranscribeEpisode(target, request.force)
+                        }
                     if (written) done++
                     true
                 } catch (e: WordTimesMisplaced) {
@@ -1450,7 +1455,11 @@ class PodcastPipeline(
      * attempt that leaves each window with fewer defects than it had and no speech lost.
      * Only a pair already from one decode is repaired: the splice keeps its words.
      */
-    private fun repairEpisode(episodeDirPath: Path): Boolean {
+    private fun repairEpisode(
+        episodeDirPath: Path,
+        fixDefects: Boolean = true,
+        fillGaps: Boolean = false,
+    ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
@@ -1489,7 +1498,7 @@ class PodcastPipeline(
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
         val defects = WindowRepair.defectCues(cues, prompt)
-        if (defects.isEmpty()) {
+        if (defects.isEmpty() && !fillGaps) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
         }
@@ -1506,10 +1515,16 @@ class PodcastPipeline(
                 }
             }
 
+        if (fillGaps && speech == null) {
+            logger.warn("Cannot fill gaps in $label: gap repair needs vad_binary and vad_model, and VAD that hears its speech")
+            if (!fixDefects || defects.isEmpty()) return false
+        }
+
         val language = podcast.language ?: config.language
         val replacements = mutableListOf<WindowRepair.Replacement>()
         val repairs = mutableListOf<Map<String, Any?>>()
-        val windows = WindowRepair.windows(cues, defects)
+        val windows = if (fixDefects) WindowRepair.windows(cues, defects) else emptyList()
+        val windowed = mutableListOf<IntRange>()
         var previousLast = 0
         for ((n, initial) in windows.withIndex()) {
             // Widening may share an anchor with the windows either side, never reach into what they replace.
@@ -1527,6 +1542,7 @@ class PodcastPipeline(
                 tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
             }
             previousLast = range.last
+            windowed += range
             val best = tried.best
             val window = WindowRepair.window(cues, range)
             val before = WindowRepair.defectsBefore(base, range, defects)
@@ -1556,6 +1572,37 @@ class PodcastPipeline(
                     "refused_for_dropped_cue" to tried.droppedCue,
                 )
             best?.let { replacements += WindowRepair.fitStretched(it) }
+        }
+        if (fillGaps && speech != null) {
+            for (range in WindowRepair.gapWindows(base, speech)) {
+                if (windowed.any { it.first <= range.last && range.first <= it.last }) continue
+                val filled = tryGap(base, audioPath, podcast, range, speech, prompt)
+                val best = filled.best
+                repairs +=
+                    mapOf(
+                        "kind" to "gap",
+                        "start" to base.cues[range.first].end,
+                        "end" to base.cues[range.last].start,
+                        "cues" to listOf(range.first, range.last),
+                        "chunks" to filled.chunks.map { listOf(it.start, it.end) },
+                        "uncovered_before_s" to Math.round(filled.before * 10) / 10.0,
+                        "uncovered_after_s" to Math.round(filled.after * 10) / 10.0,
+                        "defects_before" to 0,
+                        "defects_after" to 0,
+                        "conditioned" to if (best != null) filled.conditioned else null,
+                        "retry" to filled.retry.takeIf { best != null && it.isNotEmpty() },
+                        "applied" to (best != null),
+                        "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
+                        "anchor_left" to best?.anchorLeft,
+                        "anchor_right" to best?.anchorRight,
+                        "request" to
+                            best?.let {
+                                val first = filled.chunks.first()
+                                transcriber.requestFields(language, podcast.initialPrompt, filled.conditioned, first, filled.retry)
+                            },
+                    )
+                best?.let { replacements += WindowRepair.fitStretched(it) }
+            }
         }
         if (replacements.isEmpty()) {
             logger.warn("No window of $label came back better than it was; keeping it")
@@ -1588,9 +1635,62 @@ class PodcastPipeline(
         logger.info(
             "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
                 "${repairs.sumOf { it["defects_before"] as Int }} defective cues before, " +
-                "${repairs.sumOf { it["defects_after"] as Int }} after",
+                "${repairs.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs),
         )
         return true
+    }
+
+    private fun gapSummary(repairs: List<Map<String, Any?>>): String {
+        val gaps = repairs.filter { it["kind"] == "gap" }
+        if (gaps.isEmpty()) return ""
+        val filled = gaps.filter { it["applied"] == true }
+        val recovered = filled.sumOf { (it["uncovered_before_s"] as Double) - (it["uncovered_after_s"] as Double) }
+        return "; ${filled.size} of ${gaps.size} gaps filled, ${"%.1f".format(Locale.ROOT, recovered)} s of speech recovered"
+    }
+
+    private class Filled(
+        val best: WindowRepair.Replacement?,
+        val chunks: List<TimeWindow>,
+        val before: Double,
+        val after: Double,
+        val conditioned: Boolean,
+        val retry: Map<String, String>,
+    )
+
+    /**
+     * A gap decoded in chunks that start on the speech, so whisper never opens a window on the music that made it skip.
+     * Kept only if it covers more of the speech, loses none of the cues around it, and brings no defect of its own.
+     */
+    private fun tryGap(
+        base: WhisperTranscription,
+        audioPath: Path,
+        podcast: PodcastConfig,
+        range: IntRange,
+        speech: List<TimeWindow>,
+        prompt: WindowRepair.Prompt,
+    ): Filled {
+        val from = base.cues[range.first].end
+        val to = base.cues[range.last].start
+        val inner = (range.first + 1 until range.last).toSet()
+        val chunks = WindowRepair.chunks(speech, from, to)
+        val before = WindowRepair.uncovered(base.words, speech, from, to)
+        var filled = Filled(null, chunks, before, before, true, emptyMap())
+        if (chunks.isEmpty()) return filled
+        for ((conditioned, retry) in GAP_ATTEMPTS) {
+            val decoded = WindowRepair.joined(chunks.map { decode(audioPath, podcast, conditioned, it, retry) })
+            val anchored = WindowRepair.anchor(base, decoded, range, inner)
+            if (maxOf(anchored.intoLeft, anchored.intoRight) > WindowRepair.MAX_INTO_ANCHOR_SECONDS) continue
+            val replacement = WindowRepair.dropNonSpeech(anchored, speech)
+            if (replacement.words.isEmpty() || WindowRepair.voicesPrompt(base, replacement, prompt, inner)) continue
+            if (WindowRepair.dropsHeardCue(base, replacement, emptySet(), speech)) continue
+            if (WindowRepair.defectsAfter(base, replacement, prompt, inner) > 0) continue
+            val after = WindowRepair.uncovered(replacement.words, speech, from, to)
+            if (after <= before - WindowRepair.MIN_GAP_GAIN_SECONDS && (filled.best == null || after < filled.after)) {
+                filled = Filled(replacement, chunks, before, after, conditioned, retry)
+            }
+            if (filled.best != null && filled.after <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
+        }
+        return filled
     }
 
     private class Tried(
@@ -1700,6 +1800,10 @@ class PodcastPipeline(
                     retry ->
                 listOf(true to retry, false to retry)
             }
+
+        /** Unprompted first, as each chunk is decoded alone; then prompted, warmer, and with a wider beam. */
+        private val GAP_ATTEMPTS =
+            listOf(false to emptyMap(), true to emptyMap(), false to Transcriber.RETRY_WARMER, false to Transcriber.RETRY_WIDER_BEAM)
 
         /** How many cues a window may grow by, one per side each time, when an attempt disputes its anchors. */
         private const val MAX_WIDENINGS = 2

@@ -1126,6 +1126,123 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
+    /**
+     * Stretches of speech VAD hears with no word starting near them, as ranges from the cue before to the cue after, any cues
+     * over the stretch between. whisper skips the rest of a 30 s window it takes for silence, and a skipped window can leave
+     * nothing, or filler ("Thank you.") held to the window's end.
+     */
+    fun gapWindows(
+        base: WhisperTranscription,
+        speech: List<TimeWindow>,
+    ): List<IntRange> {
+        val starts = base.words.filter { normalise(it.text).isNotEmpty() }.map { it.start }.sorted()
+
+        fun covered(t: Double): Boolean {
+            val at = starts.binarySearch(t).let { if (it < 0) -it - 1 else it }
+            return listOfNotNull(starts.getOrNull(at - 1), starts.getOrNull(at)).any { abs(it - t) <= GAP_COVER_SECONDS }
+        }
+        val gaps = mutableListOf<Pair<TimeWindow, Double>>()
+        for (span in speech) {
+            var t = span.start
+            while (t < span.end) {
+                if (!covered(t)) {
+                    val last = gaps.lastOrNull()
+                    if (last != null && t - last.first.end <= GAP_JOIN_SECONDS) {
+                        gaps[gaps.size - 1] = TimeWindow(last.first.start, t + SAMPLE_SECONDS) to last.second + SAMPLE_SECONDS
+                    } else {
+                        gaps += TimeWindow(t, t + SAMPLE_SECONDS) to SAMPLE_SECONDS
+                    }
+                }
+                t += SAMPLE_SECONDS
+            }
+        }
+        val ranges = mutableListOf<IntRange>()
+        for ((gap, heard) in gaps) {
+            if (heard < MIN_GAP_SECONDS) continue
+            val over = base.cues.indices.filter { base.cues[it].start < gap.end && base.cues[it].end > gap.start }
+            val left = over.firstOrNull()?.minus(1) ?: base.cues.indexOfLast { it.start < gap.start }
+            val right = over.lastOrNull()?.plus(1) ?: (left + 1)
+            // A stretch at the episode's very start or end has no cue on that side to anchor to.
+            if (left < 0 || right > base.cues.lastIndex) continue
+            val previous = ranges.lastOrNull()
+            if (previous != null && left < previous.last) {
+                ranges[ranges.size - 1] = previous.first..maxOf(previous.last, right)
+            } else {
+                ranges += left..right
+            }
+        }
+        return ranges
+    }
+
+    /** The speech between [from] and [to], cut and merged into pieces short enough for one of whisper's windows. */
+    fun chunks(
+        speech: List<TimeWindow>,
+        from: Double,
+        to: Double,
+    ): List<TimeWindow> {
+        val pieces =
+            speech.mapNotNull { TimeWindow(maxOf(it.start, from), minOf(it.end, to)).takeIf { w -> w.end > w.start } }.flatMap { span ->
+                val n = kotlin.math.ceil((span.end - span.start) / MAX_CHUNK_SECONDS).toInt().coerceAtLeast(1)
+                (0 until n).map {
+                    TimeWindow(
+                        span.start + (span.end - span.start) * it / n,
+                        span.start + (span.end - span.start) * (it + 1) / n,
+                    )
+                }
+            }
+        val merged = mutableListOf<TimeWindow>()
+        for (piece in pieces) {
+            val last = merged.lastOrNull()
+            if (last != null && piece.end - last.start <= MAX_CHUNK_SECONDS) {
+                merged[merged.size - 1] = TimeWindow(last.start, piece.end)
+            } else {
+                merged += piece
+            }
+        }
+        return merged.map { TimeWindow(maxOf(from, it.start - CHUNK_PAD_SECONDS), minOf(to, it.end + CHUNK_PAD_SECONDS)) }
+    }
+
+    /** Separate decodes read as one, each one's words still pointing at its own cues. */
+    fun joined(parts: List<WhisperTranscription>): WhisperTranscription {
+        val cues = mutableListOf<Cue>()
+        val words = mutableListOf<Word>()
+        for (part in parts) {
+            words += part.words.map { it.copy(segment = it.segment + cues.size) }
+            cues += part.cues
+        }
+        return WhisperTranscription.of(cues, words)
+    }
+
+    /** Seconds of [speech] between [from] and [to] with no word starting within half a second. */
+    fun uncovered(
+        words: List<Word>,
+        speech: List<TimeWindow>,
+        from: Double,
+        to: Double,
+    ): Double {
+        return speech.mapNotNull { TimeWindow(maxOf(it.start, from), minOf(it.end, to)).takeIf { w -> w.end > w.start } }.sumOf { span ->
+            var lost = 0.0
+            var t = span.start
+            while (t < span.end) {
+                val step = minOf(SAMPLE_SECONDS, span.end - t)
+                if (words.none { abs(it.start - (t + step / 2)) <= CLOSE_COVER_SECONDS }) lost += step
+                t += step
+            }
+            lost
+        }
+    }
+
+    /** Less than this recovered and the gap was mostly what VAD mistakes for speech. */
+    const val MIN_GAP_GAIN_SECONDS = 2.0
+    private const val GAP_COVER_SECONDS = 1.0
+    private const val GAP_JOIN_SECONDS = 2.0
+    private const val MIN_GAP_SECONDS = 4.0
+    private const val SAMPLE_SECONDS = 0.1
+
+    /** Under whisper's 30 s window, with room for the pads either side. */
+    private const val MAX_CHUNK_SECONDS = 28.0
+    private const val CHUNK_PAD_SECONDS = 0.2
+
     /** The window's own defects, counting crammed cues a replacement can change as [defectsAfter] does, so the two compare. */
     fun defectsBefore(
         base: WhisperTranscription,

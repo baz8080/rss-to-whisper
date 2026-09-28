@@ -58,6 +58,109 @@ class WindowRepairTest {
         assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
     }
 
+    /** Measured: Life Scientific 2013-10-01, 28:49.7: "Thank you." held one window over a promo. */
+    @Test
+    fun `speech with no word near it is a gap, from the cue before to the cue after, filler included`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(5.0, 35.0, " Thank you."),
+                Cue(35.0, 38.0, " And then we found something odd."),
+            )
+
+        assertEquals(
+            listOf(0..2),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(8.0, 33.0), TimeWindow(35.0, 38.0))),
+        )
+    }
+
+    /** Measured: Behind the Bastards 2022-05-31, 1:36–1:59: nothing written at all. */
+    @Test
+    fun `a gap with no cue over it lies between its two neighbours`() {
+        val cues = listOf(Cue(0.0, 3.0, " So that is where the story begins."), Cue(30.0, 33.0, " And then we found something odd."))
+
+        assertEquals(
+            listOf(0..1),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(6.0, 28.0), TimeWindow(30.0, 33.0))),
+        )
+    }
+
+    @Test
+    fun `a gap before the first cue has nothing to anchor to`() {
+        val cues = listOf(Cue(20.0, 23.0, " So that is where the story begins."))
+
+        assertEquals(emptyList(), WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 15.0), TimeWindow(20.0, 23.0))))
+    }
+
+    @Test
+    fun `speech is cut into chunks that start on it and fit one of whisper's windows`() {
+        val chunks = WindowRepair.chunks(listOf(TimeWindow(8.0, 20.0), TimeWindow(21.0, 30.0), TimeWindow(31.0, 70.0)), 6.0, 80.0)
+
+        assertEquals(
+            listOf(TimeWindow(7.8, 30.2), TimeWindow(30.8, 50.7), TimeWindow(50.3, 70.2)),
+            chunks.map {
+                TimeWindow(Math.round(it.start * 10) / 10.0, Math.round(it.end * 10) / 10.0)
+            },
+        )
+    }
+
+    private val fillerOverPromo =
+        listOf(
+            Cue(0.0, 3.0, " So that is where the story begins."),
+            Cue(3.0, 6.0, " We looked at the data again, carefully."),
+            Cue(6.0, 36.0, " Thank you."),
+            Cue(36.0, 39.0, " And then we found something odd."),
+        )
+    private val promoSpeech = listOf(TimeWindow(0.0, 6.0), TimeWindow(8.0, 34.0), TimeWindow(36.0, 39.0))
+
+    @Test
+    fun `a gap decoded from where its speech starts replaces the filler`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val promo =
+            serverJson(
+                Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians."),
+                Cue(20.0, 34.0, " So come hang out with us in the studio and listen to the show."),
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(promo), speechDetector = FakeSpeechDetector(promoSpeech))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
+        val vtt = json.path("episode_transcript").asText()
+        assertTrue("Nora Jones" in vtt)
+        assertFalse("Thank you." in vtt)
+        assertTrue("And then we found something odd." in vtt)
+        assertEquals(listOf(false), txSvc.conditioned)
+        assertEquals(
+            TimeWindow(7.8, 34.2),
+            txSvc.windows.single()?.let {
+                TimeWindow(Math.round(it.start * 10) / 10.0, Math.round(it.end * 10) / 10.0)
+            },
+        )
+        val gap = json.path("whisper_run").path("repairs")[0]
+        assertEquals("gap", gap.path("kind").asText())
+        assertTrue(gap.path("uncovered_after_s").asDouble() < gap.path("uncovered_before_s").asDouble())
+    }
+
+    @Test
+    fun `a gap that comes back as filler again is left alone`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val filler = serverJson(Cue(8.0, 34.0, " Thank you."))
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(filler), speechDetector = FakeSpeechDetector(promoSpeech))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        assertEquals(4, txSvc.calls.size)
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
     /** Measured: Universe Today 2014-01-20 Ep 42, 3:53. A 1.8 s sentence fits inside the lost-speech allowance. */
     private val sentenceThenStock =
         listOf(

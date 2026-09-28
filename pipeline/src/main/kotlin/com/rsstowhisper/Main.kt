@@ -109,6 +109,7 @@ fun main(argv: Array<String>) {
                         limit = args.retranscribeLimit,
                         force = args.retranscribeForce,
                         repairWindows = args.repairWindows,
+                        repairGaps = args.repairGaps,
                     ),
                 )
             } else {

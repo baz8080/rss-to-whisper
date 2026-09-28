@@ -685,6 +685,46 @@ internal object WindowRepair {
     const val CLOSE_COVER_SECONDS = 0.5
 
     /**
+     * Whether [replacement] leaves out a cue the base had right and puts nothing where it was said: a short sentence lost
+     * whole fits inside [MAX_LOST_SPEECH_SECONDS] ("And that all just makes the mystery even more interesting.").
+     * Other words there are whisper hearing something else, as over a hallucinated anchor.
+     */
+    fun dropsHeardCue(
+        base: WhisperTranscription,
+        replacement: Replacement,
+        defects: Set<Int>,
+        speech: List<TimeWindow>,
+    ): Boolean {
+        val said = grams(replacement.cues.flatMap { Prompt.wordsOf(it.text) })
+        return replacement.range.any { i ->
+            val cue = base.cues[i]
+            val own = grams(Prompt.wordsOf(cue.text))
+            i !in defects && own.isNotEmpty() && own.count { it in said } < own.size * MIN_KEPT_SHARE &&
+                lostSpeech(base, replacement, speech.mapNotNull { it.clip(cue) }, CLOSE_COVER_SECONDS) >= MIN_HEARD_SECONDS
+        }
+    }
+
+    private fun TimeWindow.clip(cue: Cue): TimeWindow? =
+        TimeWindow(
+            maxOf(start, cue.start),
+            minOf(end, cue.end),
+        ).takeIf { it.end > it.start }
+
+    private fun grams(words: List<String>): Set<List<String>> =
+        (0..words.size - KEPT_GRAM).map {
+            words.subList(
+                it,
+                it + KEPT_GRAM,
+            )
+        }.toSet()
+
+    private const val KEPT_GRAM = 3
+
+    /** A rewording keeps some of the cue's word runs; a cue left out keeps none. */
+    private const val MIN_KEPT_SHARE = 0.3
+    private const val MIN_HEARD_SECONDS = 1.0
+
+    /**
      * Seconds of speech between the anchors that no cue of [replacement] covers.
      * whisper can skip a whole 30 s window of real speech and carry on after it,
      * which anchoring cannot see: the words either side still match.

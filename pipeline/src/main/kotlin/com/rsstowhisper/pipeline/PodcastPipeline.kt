@@ -1618,7 +1618,7 @@ class PodcastPipeline(
             if (WindowRepair.voicesPrompt(base, replacement, prompt, defects)) continue
             val spoken = speech ?: WindowRepair.spokenIn(base, replacement.range, defects)
             val missed = WindowRepair.lostSpeech(base, replacement, spoken)
-            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
+            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS || WindowRepair.dropsHeardCue(base, replacement, defects, spoken)) {
                 lost += missed
                 continue
             }

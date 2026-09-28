@@ -58,6 +58,50 @@ class WindowRepairTest {
         assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
     }
 
+    /** Measured: Universe Today 2014-01-20 Ep 42, 3:53. A 1.8 s sentence fits inside the lost-speech allowance. */
+    private val sentenceThenStock =
+        listOf(
+            Cue(230.22, 233.34, " We may never discover the answer."),
+            Cue(233.34, 236.1, " And that all just makes the mystery even more interesting."),
+            Cue(236.1, 253.74, " Thanks for watching."),
+        )
+    private val sentenceSpeech = listOf(TimeWindow(230.2, 232.1), TimeWindow(233.3, 235.1), TimeWindow(240.5, 253.8))
+
+    @Test
+    fun `an attempt that leaves a heard sentence's time empty drops it`() {
+        val outro =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(240.46, 243.09, " listening to the audio edition of Universe Today.")),
+                listOf(Word(" listening", 240.46, 240.9, 0.9, 0), Word(" Universe", 242.0, 242.5, 0.9, 0)),
+            )
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(sentenceThenStock), outro, setOf(2), sentenceSpeech))
+    }
+
+    @Test
+    fun `an attempt that keeps the sentence, or says something else over it, drops nothing`() {
+        val base = transcription(sentenceThenStock)
+        val kept =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(
+                    Cue(233.34, 236.1, " And that all makes the mystery even more interesting."),
+                    Cue(240.46, 243.09, " listening to the audio."),
+                ),
+                listOf(Word(" And", 233.4, 233.6, 0.9, 0), Word(" listening", 240.46, 240.9, 0.9, 1)),
+            )
+        val heardOtherwise =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(233.34, 236.1, " The data set was looked through again.")),
+                (0 until 6).map { Word(" word", 233.4 + it * 0.3, 233.6 + it * 0.3, 0.9, 0) },
+            )
+
+        assertFalse(WindowRepair.dropsHeardCue(base, kept, setOf(2), sentenceSpeech))
+        assertFalse(WindowRepair.dropsHeardCue(base, heardOtherwise, setOf(2), sentenceSpeech))
+    }
+
     /** Measured: 99pi 2023-03-29 The Panopticon Effect, 36:51.5. */
     @Test
     fun `a stock sign-off held as long as a leak is a defect, and a spoken one is not`() {

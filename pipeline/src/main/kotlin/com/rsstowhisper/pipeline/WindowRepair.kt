@@ -347,12 +347,25 @@ internal object WindowRepair {
         val inner = (left?.plus(1) ?: range.first)..(right?.minus(1) ?: range.last)
 
         val words = decoded.words
-        val normalised = words.map { normalise(it.text) }
+        // Each word is matched whole at its first token: "Spacetime" is " Sp", "ac", "etime" in one decode and one token in another.
+        val normalised = MutableList(words.size) { "" }
+        val opening = IntArray(words.size) { it }
+        val wordEnd = DoubleArray(words.size) { words[it].end }
+        for (group in spoken(words)) {
+            normalised[group.first()] = normalise(group.joinToString("") { words[it].text })
+            group.forEach { opening[it] = group.first() }
+            wordEnd[group.first()] = words[group.last()].end
+        }
         // Punctuation arrives as words of its own and would break a match between two real ones.
         val content = words.indices.filter { normalised[it].isNotEmpty() }
         val contentText = content.map { normalised[it] }
 
-        fun anchorWords(cue: Int) = baseWords[cue].orEmpty().filter { normalise(it.text).isNotEmpty() }
+        fun anchorWords(cue: Int) =
+            baseWords[cue].orEmpty().let { tokens ->
+                spoken(tokens).map { group ->
+                    tokens[group.first()].copy(text = group.joinToString("") { tokens[it].text }, end = tokens[group.last()].end)
+                }
+            }
 
         // Nearest the anchor's own time: a short anchor ("Never?") can also be a word of the sentence before it.
         fun leftMatch(): Int? {
@@ -361,7 +374,7 @@ internal object WindowRepair {
             val end = anchorWords(left).lastOrNull()?.end ?: return null
             return matches(contentText, tail).map { content[it + tail.size - 1] }
                 .filter { words[it].start in (cue.start - ANCHOR_SLACK_SECONDS)..(cue.end + ANCHOR_SLACK_SECONDS) }
-                .minByOrNull { abs(words[it].end - end) }
+                .minByOrNull { abs(wordEnd[it] - end) }
         }
 
         fun rightMatch(from: Int): Int? {
@@ -377,7 +390,7 @@ internal object WindowRepair {
         // edge is judged in that corrected time: a window can start a second or two out.
         val textLeft = leftMatch()
         val shift =
-            textLeft?.let { anchorWords(left!!).last().end - words[it].end }
+            textLeft?.let { anchorWords(left!!).last().end - wordEnd[it] }
                 ?: rightMatch(0)?.let { anchorWords(right!!).first().start - words[it].start }
                 ?: 0.0
 
@@ -388,7 +401,7 @@ internal object WindowRepair {
         if (left != null) {
             if (textLeft != null) {
                 from = textLeft + 1
-                newLeft = words[textLeft].end
+                newLeft = wordEnd[textLeft]
                 oldLeft = anchorWords(left).last().end
                 anchorLeft = "text"
             } else {
@@ -419,6 +432,8 @@ internal object WindowRepair {
                 anchorRight = "text"
             } else {
                 until = walkRight(words, normalised, content, base.cues[right], anchorWords(right).map { normalise(it.text) }, shift, from)
+                // A cut inside a word leaves its opening behind; the anchor holds the whole of it.
+                if (until < words.size) until = maxOf(from, opening[until])
                 anchorRight = "time"
             }
             val again = repeated(words, (from until until).toList(), anchorWords(right), closesAnchor = false)
@@ -537,7 +552,10 @@ internal object WindowRepair {
             i++
         }
         if (last >= 0) return last + 1
-        val cut = words.indexOfFirst { it.start + shift >= cue.end - 0.25 }.let { if (it < 0) words.size else it }
+        // A word opening inside the anchor but held well past it is smeared across the cut, not the anchor's: "Eric" held 5 s.
+        val cut =
+            words.indexOfFirst { it.start + shift >= cue.end - 0.25 || it.end + shift > cue.end + SMEARED_PAST_ANCHOR_SECONDS }
+                .let { if (it < 0) words.size else it }
         // No anchor word at all: words timed inside it that open the cue after it were smeared early, not the anchor.
         val head = following.take(ANCHOR_WORDS)
         if (head.size < 2) return cut
@@ -774,6 +792,32 @@ internal object WindowRepair {
     private const val MAX_SECONDS_PER_WORD = 1.0
 
     /**
+     * A word whisper held for seconds and then carried straight on from ends where it was said and starts where the
+     * speech before it stopped: "However" held 5 s before "College did teach". It keeps its end and a word's length.
+     */
+    fun fitStretched(replacement: Replacement): Replacement {
+        val words = replacement.words.toMutableList()
+        val content = words.indices.filter { normalise(words[it].text).isNotEmpty() }
+        for ((n, i) in content.withIndex()) {
+            val word = words[i]
+            val next = content.getOrNull(n + 1)?.let { words[it] } ?: continue
+            if (word.end - word.start <= MAX_SECONDS_PER_WORD || next.start - word.end > CARRIES_ON_SECONDS) continue
+            words[i] = word.copy(start = word.end - SPOKEN_WORD_SECONDS)
+        }
+        val cues =
+            replacement.cues.mapIndexed {
+                    n,
+                    cue,
+                ->
+                words.firstOrNull { it.segment == n }?.let { cue.copy(start = maxOf(cue.start, it.start)) } ?: cue
+            }
+        return replacement.copy(cues = cues, words = words)
+    }
+
+    private const val CARRIES_ON_SECONDS = 1.0
+    private const val SPOKEN_WORD_SECONDS = 0.5
+
+    /**
      * Only the words timed before the speech move, into the time before the first word already on it at a speaking pace,
      * if they fit at one too: squeezing the whole cue would cram the words whisper timed right.
      */
@@ -885,6 +929,7 @@ internal object WindowRepair {
 
     /** Anchor words a garbled rendering may skip past and still be counted as the anchor. */
     private const val ANCHOR_LOOKAHEAD = 3
+    private const val SMEARED_PAST_ANCHOR_SECONDS = 1.0
 
     /**
      * The decode's words beside an anchor that are the anchor's edge words again ("fully dexterous" / "dexters come"):

@@ -1400,11 +1400,12 @@ class PodcastPipeline(
         podcast: PodcastConfig,
         conditioned: Boolean,
         window: TimeWindow? = null,
+        retry: Map<String, String> = emptyMap(),
     ): WhisperTranscription {
         decodesAttempted++
         val json =
             try {
-                transcriber.transcribe(audioPath, podcast.language ?: config.language, podcast.initialPrompt, conditioned, window)
+                transcriber.transcribe(audioPath, podcast.language ?: config.language, podcast.initialPrompt, conditioned, window, retry)
             } catch (e: TranscriberUnavailable) {
                 decodesUnreachable++
                 throw e
@@ -1519,18 +1520,22 @@ class PodcastPipeline(
                     "defects_before" to before,
                     "defects_after" to if (best != null) tried.bestDefects else before,
                     "conditioned" to if (best != null) tried.bestConditioned else null,
+                    "retry" to tried.bestRetry.takeIf { best != null && it.isNotEmpty() },
                     "applied" to (best != null),
                     "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
                     "anchor_left" to best?.anchorLeft,
                     "anchor_right" to best?.anchorRight,
                     "gap_left_s" to best?.let { WindowRepair.gaps(base, range, it).first },
                     "gap_right_s" to best?.let { WindowRepair.gaps(base, range, it).second },
-                    "request" to best?.let { transcriber.requestFields(language, podcast.initialPrompt, tried.bestConditioned, window) },
+                    "request" to
+                        best?.let {
+                            transcriber.requestFields(language, podcast.initialPrompt, tried.bestConditioned, window, tried.bestRetry)
+                        },
                     "speech_checked" to (speech != null),
                     "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
                     "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
                 )
-            best?.let { replacements += it }
+            best?.let { replacements += WindowRepair.fitStretched(it) }
         }
         if (replacements.isEmpty()) {
             logger.warn("No window of $label came back better than it was; keeping it")
@@ -1572,6 +1577,7 @@ class PodcastPipeline(
         val best: WindowRepair.Replacement?,
         val bestDefects: Int,
         val bestConditioned: Boolean,
+        val bestRetry: Map<String, String>,
         val lost: List<Double>,
         val disputedLeft: Boolean,
         val disputedRight: Boolean,
@@ -1594,12 +1600,13 @@ class PodcastPipeline(
         var best: WindowRepair.Replacement? = null
         var bestDefects = WindowRepair.defectsBefore(base, range, defects)
         var bestConditioned = true
+        var bestRetry = emptyMap<String, String>()
         var bestThin = Double.MAX_VALUE
         val lost = mutableListOf<Double>()
         var disputedLeft = false
         var disputedRight = false
-        for (conditioned in REPAIR_ATTEMPTS) {
-            val anchored = WindowRepair.anchor(base, decode(audioPath, podcast, conditioned, window), range, defects)
+        for ((conditioned, retry) in REPAIR_ATTEMPTS) {
+            val anchored = WindowRepair.anchor(base, decode(audioPath, podcast, conditioned, window, retry), range, defects)
             if (anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS) {
                 disputedLeft = disputedLeft || anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS
                 disputedRight = disputedRight || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS
@@ -1621,11 +1628,12 @@ class PodcastPipeline(
                 best = replacement
                 bestDefects = after
                 bestConditioned = conditioned
+                bestRetry = retry
                 bestThin = thin
             }
             if (bestDefects == 0 && bestThin <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
         }
-        return Tried(best, bestDefects, bestConditioned, lost, disputedLeft, disputedRight)
+        return Tried(best, bestDefects, bestConditioned, bestRetry, lost, disputedLeft, disputedRight)
     }
 
     private fun readWords(path: Path): List<Word> =
@@ -1658,12 +1666,14 @@ class PodcastPipeline(
         private const val VERIFY_THREADS = 8
 
         /**
-         * Prompted, then without history, twice over. whisper can skip a stretch of
-         * speech on one decode and transcribe it on the next, identical request: a
-         * phone-quality Irish History window lost 24 s on one no-history decode and
-         * none on the other. A window decode takes seconds, so the retries are cheap.
+         * Prompted, then without history, then both again warmer, then with a wider beam. whisper can skip speech on one
+         * decode and transcribe it on another, but since v1.9.4 only if the request differs.
          */
-        private val REPAIR_ATTEMPTS = listOf(true, false, true, false)
+        private val REPAIR_ATTEMPTS =
+            listOf(emptyMap(), Transcriber.RETRY_WARMER, Transcriber.RETRY_WIDER_BEAM).flatMap {
+                    retry ->
+                listOf(true to retry, false to retry)
+            }
 
         /** How many cues a window may grow by, one per side each time, when an attempt disputes its anchors. */
         private const val MAX_WIDENINGS = 2

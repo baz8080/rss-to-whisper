@@ -154,6 +154,9 @@ internal class FakeTranscriber(
     /** The stretch of audio each call asked for, null for the whole file. */
     val windows = mutableListOf<TimeWindow?>()
 
+    /** What each call asked for on top of the usual request: empty unless a repair's retry. */
+    val retries = mutableListOf<Map<String, String>>()
+
     var pings = 0
         private set
 
@@ -163,6 +166,7 @@ internal class FakeTranscriber(
         prompt: String?,
         conditioned: Boolean,
         window: TimeWindow?,
+        retry: Map<String, String>,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)
@@ -170,6 +174,7 @@ internal class FakeTranscriber(
         prompts.add(prompt)
         this.conditioned.add(conditioned)
         windows.add(window)
+        retries.add(retry)
         onCall?.invoke(audioPath)
         failWith?.invoke()
         return response

@@ -69,15 +69,17 @@ suppress the timestamps the pipeline exists to capture.
 
 ### Known-good version
 
-The corpus was transcribed and repaired against whisper.cpp **v1.9.2** (`306c88f4`), serving
-`ggml-large-v3` from two builds: Metal with the CoreML encoder on Apple Silicon, and CUDA on Linux. This is not a requirement.
-It is the version whose behaviour the repair's thresholds were tuned against.
+The pipeline is run against whisper.cpp **v1.9.4** (`927cfce3`), serving `ggml-large-v3` from two
+builds: Metal with the CoreML encoder on Apple Silicon, and CUDA on Linux. This is not a requirement.
+It is the version the repair's retries were measured on. The corpus was first transcribed, and
+repaired once, on v1.9.2 (`306c88f4`).
 
-Upgrading past v1.9.3 changes one thing the repair relies on. v1.9.4 re-seeds the sampler on every
-request ([whisper.cpp#4025](https://github.com/ggml-org/whisper.cpp/pull/4025)), so a server gives
-the same output for the same request, even when it falls back to sampling. `--repair-windows`
-retries each window with the same two requests twice, and gets its second chances only because an
-older server's output drifts between calls. On v1.9.4 those retries would repeat themselves.
+v1.9.4 re-seeds the sampler on every request
+([whisper.cpp#4025](https://github.com/ggml-org/whisper.cpp/pull/4025)), so a server gives the same
+output for the same request, even when it falls back to sampling. Older servers drift between calls,
+which is what a repeated request used to get its second chance from. So `--repair-windows` tries each
+window prompted and unprompted, then both again at temperature 0.2, then with a beam of 8: each retry
+asks for something different.
 
 ### Choosing a model
 

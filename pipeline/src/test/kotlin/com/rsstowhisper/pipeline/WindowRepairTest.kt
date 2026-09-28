@@ -6,6 +6,7 @@ import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeechDetector
 import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
+import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
 import org.junit.jupiter.api.io.TempDir
@@ -55,6 +56,95 @@ class WindowRepairTest {
         assertEquals(setOf(2, 3, 4, 5), defects)
         assertEquals(listOf(0..7), WindowRepair.windows(cues, defects))
         assertEquals(TimeWindow(0.0, 24.0), WindowRepair.window(cues, 0..7))
+    }
+
+    /** Measured: Spacetime 2025-10-29, 1:26.6. The anchor spells "Spacetime" in three tokens, the decode in two words. */
+    @Test
+    fun `an anchor word whisper split into tokens is matched whole, and not left half in the window`() {
+        val cues =
+            listOf(
+                Cue(81.56, 86.0, " and another successful test flight."),
+                Cue(86.0, 89.0, " Thank you."),
+                Cue(89.0, 94.12, " Spacetime. Welcome to Spacetime with Stuart Gary."),
+            )
+        val anchorTokens =
+            listOf(" Sp", "ac", "etime", ".", " Welcome", " to", " Space", "time", " with", " Stuart", " Gary", ".")
+                .mapIndexed { i, t -> Word(t, 89.04 + i * 0.4, 89.44 + i * 0.4, 0.9, 2) }
+        val base = WhisperTranscription.of(cues, transcription(cues).words.filter { it.segment < 2 } + anchorTokens)
+        val decoded =
+            decodedWindow(
+                Cue(81.58, 86.0, " and another successful test flight."),
+                Cue(86.62, 89.59, " All that and more coming up on Space Time."),
+                Cue(90.5, 94.1, " Welcome to Space Time with Stuart Gary."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 0..2, setOf(1))
+
+        assertEquals(" All that and more coming up on", replacement.words.joinToString("") { it.text })
+    }
+
+    /** Measured: Freakonomics 260, 18:25. Whisper skipped the anchor's words and smeared "Eric" from inside it across 12 s of silence. */
+    @Test
+    fun `a word opening inside an anchor it doesn't match but held well past it is kept`() {
+        val cues =
+            listOf(
+                Cue(1105.24, 1107.94, " or whatever app you use to find your podcasts."),
+                Cue(1108.5, 1138.48, " Thank you."),
+            )
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(1105.24, 1127.34, " Eric Posner, a law professor")),
+                listOf(
+                    Word(" Eric", 1105.38, 1110.61, 0.9, 0),
+                    Word(" Pos", 1110.65, 1114.68, 0.9, 0),
+                    Word("ner", 1114.68, 1118.71, 0.9, 0),
+                    Word(",", 1118.71, 1121.41, 0.9, 0),
+                    Word(" a", 1121.41, 1121.52, 0.9, 0),
+                    Word(" law", 1121.52, 1121.82, 0.9, 0),
+                    Word(" professor", 1121.82, 1122.71, 0.9, 0),
+                ),
+            )
+
+        val replacement = WindowRepair.anchor(transcription(cues), decoded, 0..1, setOf(1))
+
+        assertEquals(" Eric", replacement.words.first().text)
+    }
+
+    /** Measured: Citation Needed 2019-07-17, 12:59.2. */
+    @Test
+    fun `a word held for seconds then carried on from keeps its end and a word's length`() {
+        val replacement =
+            WindowRepair.Replacement(
+                0..2,
+                listOf(
+                    Cue(778.2, 779.18, " I hate it so much"),
+                    Cue(779.18, 784.58, " However"),
+                    Cue(784.58, 786.36, " College did teach"),
+                ),
+                listOf(
+                    Word(" much", 778.86, 779.18, 0.9, 0),
+                    Word(" However", 779.54, 784.58, 0.9, 1),
+                    Word(" College", 784.94, 785.18, 0.9, 2),
+                ),
+            )
+
+        val fitted = WindowRepair.fitStretched(replacement)
+
+        assertEquals(784.08, fitted.words[1].start, 0.001)
+        assertEquals(784.08, fitted.cues[1].start, 0.001)
+        assertEquals(replacement.words[0], fitted.words[0])
+    }
+
+    @Test
+    fun `a word held before a pause is left where whisper put it`() {
+        val replacement =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(10.0, 14.0, " Well"), Cue(20.0, 22.0, " then we left.")),
+                listOf(Word(" Well", 10.0, 14.0, 0.9, 0), Word(" then", 20.0, 20.4, 0.9, 1)),
+            )
+
+        assertEquals(replacement, WindowRepair.fitStretched(replacement))
     }
 
     /** Measured: Blindboy Soda Jerk, 2740–2752 s. */
@@ -326,7 +416,7 @@ class WindowRepairTest {
     }
 
     @Test
-    fun `a window no better than it was is tried both ways twice, then left alone`(
+    fun `a window no better than it was is tried both ways plain, warmer and with a wider beam, then left alone`(
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir, looping())
@@ -336,7 +426,9 @@ class WindowRepairTest {
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
-        assertEquals(listOf(true, false, true, false), txSvc.conditioned)
+        assertEquals(listOf(true, false, true, false, true, false), txSvc.conditioned)
+        val (warmer, wider) = Transcriber.RETRY_WARMER to Transcriber.RETRY_WIDER_BEAM
+        assertEquals(listOf(emptyMap(), emptyMap(), warmer, warmer, wider, wider), txSvc.retries)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
@@ -357,7 +449,7 @@ class WindowRepairTest {
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
-        assertEquals(4, txSvc.calls.size)
+        assertEquals(6, txSvc.calls.size)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
@@ -1133,7 +1225,7 @@ class WindowRepairTest {
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
-        assertEquals(4, txSvc.calls.size)
+        assertEquals(6, txSvc.calls.size)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
@@ -1324,13 +1416,13 @@ class WindowRepairTest {
                 *rest,
             )
         val (pipeline, txSvc, _) =
-            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = List(4) { disputing } + widened)
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = List(6) { disputing } + widened)
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true))
 
         val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
         val vtt = json.path("episode_transcript").asText()
-        assertEquals(5, txSvc.calls.size)
+        assertEquals(7, txSvc.calls.size)
         assertTrue("The data set was looked through." in vtt)
         assertFalse("where there's lots" in vtt)
         assertEquals(1, json.path("whisper_run").path("repairs")[0].path("widened").asInt())

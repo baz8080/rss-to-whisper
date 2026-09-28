@@ -288,6 +288,22 @@ class TranscriberTest {
     }
 
     @Test
+    fun `a retry asks for its own fields on top of the same request, prompted or not`(
+        @TempDir tmp: Path,
+    ) {
+        val requests = mutableListOf<okhttp3.Request>()
+        val transcriber = Transcriber("http://whisper-server", clientReturning("{}", captureRequests = requests))
+        transcriber.transcribe(mp3File(tmp), "en", conditioned = true)
+        transcriber.transcribe(mp3File(tmp), "en", conditioned = true, retry = Transcriber.RETRY_WIDER_BEAM)
+        transcriber.transcribe(mp3File(tmp), "en", conditioned = false, retry = Transcriber.RETRY_WARMER)
+
+        val (first, retried, unconditioned) = requests.map { formFields(it.body as okhttp3.MultipartBody) }
+        assertEquals(first + Transcriber.RETRY_WIDER_BEAM, retried)
+        assertTrue(unconditioned.entries.containsAll(Transcriber.RETRY_WARMER.entries))
+        assertEquals("0", unconditioned["max_context"])
+    }
+
+    @Test
     fun `a blank explicit prompt sends none rather than falling back to the default`(
         @TempDir tmp: Path,
     ) {

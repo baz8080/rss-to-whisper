@@ -117,6 +117,7 @@ open class Transcriber(
         prompt: String? = null,
         conditioned: Boolean = true,
         window: TimeWindow? = null,
+        retry: Map<String, String> = emptyMap(),
     ): String {
         val bodyBuilder =
             MultipartBody.Builder()
@@ -126,7 +127,7 @@ open class Transcriber(
                     audioPath.fileName.toString(),
                     audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
                 )
-        requestFields(language, prompt, conditioned, window).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
+        requestFields(language, prompt, conditioned, window, retry).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
 
         val requestBody = bodyBuilder.build()
 
@@ -178,6 +179,8 @@ open class Transcriber(
         conditioned: Boolean = true,
         /** Decode only this stretch of the file; whisper returns times from the file's start. */
         window: TimeWindow? = null,
+        /** Fields on top of the usual ones, for a retry: since v1.9.4 the server answers a repeated request identically. */
+        retry: Map<String, String> = emptyMap(),
     ): Map<String, String> {
         // whisper.cpp looks the code up in a map keyed by lower case and never
         // checks the result: an unmatched one returns -1, which its caller adds
@@ -213,6 +216,7 @@ open class Transcriber(
         // Cut on word boundaries rather than mid-token.
         fields["split_on_word"] = "true"
         fields["beam_size"] = beamSize.toString()
+        fields += retry
         if (window != null) {
             fields["offset_t"] = window.offsetMillis.toString()
             fields["duration"] = window.durationMillis.toString()
@@ -318,6 +322,9 @@ open class Transcriber(
 
         /** See [beamSize]. 1 is greedy, which is what the server defaults to. */
         const val DEFAULT_BEAM_SIZE = 5
+
+        val RETRY_WARMER = mapOf("temperature" to "0.2")
+        val RETRY_WIDER_BEAM = mapOf("beam_size" to "8")
 
         /** See [initialPrompt]. Ordinary punctuated prose, nothing domain-specific. */
         const val DEFAULT_INITIAL_PROMPT =

@@ -699,8 +699,14 @@ internal object WindowRepair {
         return replacement.range.any { i ->
             val cue = base.cues[i]
             val own = grams(Prompt.wordsOf(cue.text))
+            // As many words again over its time is whisper hearing something else there; one or two is not.
+            val otherwise = replacement.words.count { it.start in cue.start..cue.end && normalise(it.text).isNotEmpty() }
             i !in defects && own.isNotEmpty() && own.count { it in said } < own.size * MIN_KEPT_SHARE &&
-                lostSpeech(base, replacement, speech.mapNotNull { it.clip(cue) }, CLOSE_COVER_SECONDS) >= MIN_HEARD_SECONDS
+                (
+                    otherwise < Prompt.wordsOf(cue.text).size * MIN_OTHER_WORDS_SHARE ||
+                        lostSpeech(base, replacement, speech.mapNotNull { it.clip(cue) }, CLOSE_COVER_SECONDS) >= MIN_HEARD_SECONDS
+                ) &&
+                speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start } >= MIN_HEARD_SECONDS
         }
     }
 
@@ -723,6 +729,7 @@ internal object WindowRepair {
     /** A rewording keeps some of the cue's word runs; a cue left out keeps none. */
     private const val MIN_KEPT_SHARE = 0.3
     private const val MIN_HEARD_SECONDS = 1.0
+    private const val MIN_OTHER_WORDS_SHARE = 0.5
 
     /**
      * Seconds of speech between the anchors that no cue of [replacement] covers.

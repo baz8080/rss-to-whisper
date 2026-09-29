@@ -79,6 +79,26 @@ class WindowRepairTest {
         assertTrue(WindowRepair.dropsHeardCue(transcription(sentenceThenStock), outro, setOf(2), sentenceSpeech))
     }
 
+    /** Measured: Universe Today 2014-01-20 Ep 38, 3:24.9: "for watching." over a nine-word sentence. */
+    @Test
+    fun `a word or two over a heard sentence's time does not stand in for it`() {
+        val cues =
+            listOf(
+                Cue(201.84, 204.88, " the most promise."),
+                Cue(204.88, 206.92, " And you can bet that scientists are continuing."),
+                Cue(206.92, 236.86, " Thanks for watching."),
+            )
+        val outro =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(205.4, 213.62, " for watching."), Cue(213.67, 217.78, " Now make sure you click subscribe on our channel.")),
+                listOf(Word(" for", 205.4, 206.0, 0.9, 0), Word(" watching", 206.0, 206.6, 0.9, 0), Word(" Now", 213.67, 214.0, 0.9, 1)),
+            )
+        val speech = listOf(TimeWindow(200.1, 203.2), TimeWindow(204.8, 205.6), TimeWindow(205.8, 208.3), TimeWindow(212.7, 217.1))
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(cues), outro, setOf(2), speech))
+    }
+
     @Test
     fun `an attempt that keeps the sentence, or says something else over it, drops nothing`() {
         val base = transcription(sentenceThenStock)

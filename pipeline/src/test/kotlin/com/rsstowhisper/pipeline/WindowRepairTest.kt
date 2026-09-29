@@ -74,6 +74,53 @@ class WindowRepairTest {
         )
     }
 
+    /** Measured: We Have Ways 2024-06-20, 10:57.3: two sentences crammed into no time where whisper skipped. */
+    @Test
+    fun `a crammed copy at a gap's edge goes with the gap`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 3.0, " It's changing the agenda, it's changing the momentum, and you know it."),
+                Cue(30.0, 33.0, " And then we found something odd."),
+            )
+
+        assertEquals(
+            listOf(0..2),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(4.0, 28.0), TimeWindow(30.0, 33.0))),
+        )
+    }
+
+    @Test
+    fun `a punctuated attempt nearly as full beats one in lower case without a mark`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val flat =
+            serverJson(
+                Cue(8.0, 20.0, " hey its nora jones and my podcast is back with more of my favorite musicians so check out"),
+                Cue(20.0, 34.0, " the newest episode and come hang out with us in the studio and listen to the show today"),
+            )
+        val marked =
+            serverJson(
+                Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians. So check out"),
+                Cue(20.0, 34.0, " the newest episode, and come hang out with us in the studio and listen to the show today."),
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(flat, marked),
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        assertEquals(listOf(false, true), txSvc.conditioned)
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("Hey, it's Nora Jones," in vtt)
+    }
+
     /** Measured: Behind the Bastards 2022-05-31, 1:36–1:59: nothing written at all. */
     @Test
     fun `a gap with no cue over it lies between its two neighbours`() {

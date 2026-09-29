@@ -1160,10 +1160,17 @@ internal object WindowRepair {
         for ((gap, heard) in gaps) {
             if (heard < MIN_GAP_SECONDS) continue
             val over = base.cues.indices.filter { base.cues[it].start < gap.end && base.cues[it].end > gap.start }
-            val left = over.firstOrNull()?.minus(1) ?: base.cues.indexOfLast { it.start < gap.start }
-            val right = over.lastOrNull()?.plus(1) ?: (left + 1)
+            var left = over.firstOrNull()?.minus(1) ?: base.cues.indexOfLast { it.start < gap.start }
+            var right = over.lastOrNull()?.plus(1) ?: (left + 1)
             // A stretch at the episode's very start or end has no cue on that side to anchor to.
             if (left < 0 || right > base.cues.lastIndex) continue
+            // whisper crams some of what it skipped into no time at the skip: that copy goes with the gap.
+            var from = left
+            var until = right
+            while (from > 0 && crammed(base.cues[from])) from--
+            while (until < base.cues.lastIndex && crammed(base.cues[until])) until++
+            left = from
+            right = until
             val previous = ranges.lastOrNull()
             if (previous != null && left < previous.last) {
                 ranges[ranges.size - 1] = previous.first..maxOf(previous.last, right)

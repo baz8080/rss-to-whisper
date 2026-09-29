@@ -1685,10 +1685,19 @@ class PodcastPipeline(
             if (WindowRepair.dropsHeardCue(base, replacement, emptySet(), speech)) continue
             if (WindowRepair.defectsAfter(base, replacement, prompt, inner) > 0) continue
             val after = WindowRepair.uncovered(replacement.words, speech, from, to)
-            if (after <= before - WindowRepair.MIN_GAP_GAIN_SECONDS && (filled.best == null || after < filled.after)) {
-                filled = Filled(replacement, chunks, before, after, conditioned, retry)
-            }
-            if (filled.best != null && filled.after <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
+            if (after > before - WindowRepair.MIN_GAP_GAIN_SECONDS) continue
+            val current = filled.best
+            // Unprompted chunks sometimes come back in lower case without a mark; a punctuated attempt nearly as full wins.
+            val better =
+                when {
+                    current == null -> true
+                    WindowRepair.unpunctuated(current) != WindowRepair.unpunctuated(replacement) ->
+                        WindowRepair.unpunctuated(current) && after <= filled.after + GAP_PUNCTUATION_SLACK_SECONDS
+                    else -> after < filled.after
+                }
+            if (better) filled = Filled(replacement, chunks, before, after, conditioned, retry)
+            val best = filled.best
+            if (best != null && filled.after <= WindowRepair.MAX_LOST_SPEECH_SECONDS && !WindowRepair.unpunctuated(best)) break
         }
         return filled
     }
@@ -1804,6 +1813,8 @@ class PodcastPipeline(
         /** Unprompted first, as each chunk is decoded alone; then prompted, warmer, and with a wider beam. */
         private val GAP_ATTEMPTS =
             listOf(false to emptyMap(), true to emptyMap(), false to Transcriber.RETRY_WARMER, false to Transcriber.RETRY_WIDER_BEAM)
+
+        private const val GAP_PUNCTUATION_SLACK_SECONDS = 1.0
 
         /** How many cues a window may grow by, one per side each time, when an attempt disputes its anchors. */
         private const val MAX_WIDENINGS = 2

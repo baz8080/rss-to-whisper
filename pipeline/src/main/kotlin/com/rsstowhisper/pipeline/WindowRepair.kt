@@ -473,7 +473,13 @@ internal object WindowRepair {
             if (again.isNotEmpty()) until = again.first()
             val head = anchorWords(right)
             val said = (from until until).filter { normalised[it].isNotEmpty() }.takeLast(seamWords)
-            val k = saidAgain(said.map { normalised[it] }, head.take(MAX_REPEATED_WORDS).map { normalise(it.text) }, closesAnchor = false)
+            val k =
+                saidAgain(
+                    said.map { normalised[it] },
+                    head.take(MAX_REPEATED_WORDS).map { normalise(it.text) },
+                    closesAnchor = false,
+                    clipped = !byText,
+                )
             if (k > 0 && head.first().start - (wordEnd[said.last()] + shift) <= SAME_WORD_AT_SEAM_SECONDS) until = said[said.size - k]
         }
         // The anchor's edge words said again within half a second of the seam are one saying heard across it: "it" | "it."
@@ -1133,13 +1139,14 @@ internal object WindowRepair {
     }
 
     /**
-     * How many of the decode's words at a seam are the anchor's edge words. At a right seam the last may be cut short
-     * after one ("for mol"), or a guess at a word the clip heard only the start of after two ("on an event").
+     * How many of the decode's words at a seam are the anchor's edge words. At a clip's right seam the last may be cut
+     * short ("P" | "Panger", "for mol"), or after two a guess at a word it heard only the start of ("on an event").
      */
     private fun saidAgain(
         said: List<String>,
         anchor: List<String>,
         closesAnchor: Boolean,
+        clipped: Boolean = false,
     ): Int =
         (minOf(said.size, anchor.size) downTo 1).firstOrNull { k ->
             if (closesAnchor) {
@@ -1147,12 +1154,10 @@ internal object WindowRepair {
             } else {
                 val mine = said.takeLast(k)
                 val theirs = anchor.take(k)
-                val cut = k > 1 && mine.last().length >= MIN_CUT_WORD_LETTERS && theirs.last().startsWith(mine.last())
+                val cut = clipped && theirs.last().startsWith(mine.last())
                 mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || k > 2)
             }
         } ?: 0
-
-    private const val MIN_CUT_WORD_LETTERS = 2
 
     /** One word the other with a few letters added: "star" and "stars" are different words, not a re-rendering. */
     private fun prefixed(

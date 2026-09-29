@@ -286,6 +286,10 @@ class WindowRepairTest {
         val dasher =
             transcription(listOf(Cue(1070.1, 1100.08, " Thank you."), Cue(1105.94, 1112.52, " on an Avenger-class escort carrier.")))
         val guessed = transcription(listOf(Cue(1103.84, 1105.94, " was an air mechanic on an event.")))
+        // Measured: Blindboy 2022-12-07, 54:54.5: "book and pen, P" | "Panger bears me no ill will".
+        val panger =
+            transcription(listOf(Cue(3280.0, 3284.0, " words I sit all night"), Cue(3294.68, 3299.32, " Panger bears me no ill will.")))
+        val lone = transcription(listOf(Cue(3290.0, 3294.52, " tis to sit with book and pen, P")))
         val nazis = transcription(listOf(Cue(170.0, 175.0, " And his politics?"), Cue(181.14, 183.0, " Not a fan of Nazis.")))
         val atSeam = transcription(listOf(Cue(178.0, 181.1, " Oh, not a fan")))
         val before = transcription(listOf(Cue(178.0, 180.0, " Oh, not a fan")))
@@ -297,6 +301,7 @@ class WindowRepairTest {
 
         assertEquals(" She was arrested", text(trial, cut))
         assertEquals(" was an air mechanic", text(dasher, guessed))
+        assertEquals(" tis to sit with book and pen,", text(panger, lone))
         assertEquals(" Oh,", text(nazis, atSeam))
         assertEquals(" Oh, not a fan", text(nazis, before))
     }

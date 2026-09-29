@@ -192,6 +192,26 @@ class WindowRepairTest {
         assertTrue(gap.path("uncovered_after_s").asDouble() < gap.path("uncovered_before_s").asDouble())
     }
 
+    /** Measured: Mindscape 2021-04-05, 2:59: the next line written early over the theme. */
+    @Test
+    fun `a gap decode that is the next line early is an echo`() {
+        val cues =
+            listOf(
+                Cue(174.5, 179.06, " Our sociology, I will leave to you to decide whether that's any good. So let's go."),
+                Cue(196.18, 198.18, " Zeynep Tufekci, welcome to the Mindscape Podcast."),
+            )
+        val early =
+            WindowRepair.Replacement(
+                1..0,
+                listOf(Cue(179.47, 187.52, " Zeynep Tufekci, welcome to the Mindscape")),
+                listOf(Word(" Zeynep", 179.47, 180.2, 0.9, 0), Word(" Mindscape", 185.5, 186.7, 0.9, 0)),
+            )
+        val said = early.copy(cues = listOf(Cue(179.47, 187.52, " Today we are talking about the sociology of technology with a guest.")))
+
+        assertTrue(WindowRepair.echoesNeighbours(transcription(cues), early))
+        assertFalse(WindowRepair.echoesNeighbours(transcription(cues), said))
+    }
+
     @Test
     fun `a gap that comes back as filler again is left alone`(
         @TempDir tempDir: Path,

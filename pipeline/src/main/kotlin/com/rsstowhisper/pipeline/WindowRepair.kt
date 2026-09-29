@@ -1209,6 +1209,22 @@ internal object WindowRepair {
         return merged.map { TimeWindow(maxOf(from, it.start - CHUNK_PAD_SECONDS), minOf(to, it.end + CHUNK_PAD_SECONDS)) }
     }
 
+    /**
+     * A gap's decode that is mostly the text of the cues either side: whisper writing the next line early over the music
+     * before it ("Zeynep Tufekci, welcome to the Mindscape" 17 s before she is welcomed), or the last one again.
+     */
+    fun echoesNeighbours(
+        base: WhisperTranscription,
+        replacement: Replacement,
+    ): Boolean {
+        val own = grams(replacement.cues.flatMap { Prompt.wordsOf(it.text) })
+        val beside = listOfNotNull(base.cues.getOrNull(replacement.range.first - 1), base.cues.getOrNull(replacement.range.last + 1))
+        val theirs = grams(beside.flatMap { Prompt.wordsOf(it.text) })
+        return own.isNotEmpty() && own.count { it in theirs } >= own.size * MIN_ECHOED_SHARE
+    }
+
+    private const val MIN_ECHOED_SHARE = 0.6
+
     /** Separate decodes read as one, each one's words still pointing at its own cues. */
     fun joined(parts: List<WhisperTranscription>): WhisperTranscription {
         val cues = mutableListOf<Cue>()

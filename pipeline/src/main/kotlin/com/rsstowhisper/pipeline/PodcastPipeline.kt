@@ -1684,6 +1684,7 @@ class PodcastPipeline(
             if (replacement.words.isEmpty() || WindowRepair.voicesPrompt(base, replacement, prompt, inner)) continue
             if (WindowRepair.dropsHeardCue(base, replacement, emptySet(), speech)) continue
             if (WindowRepair.defectsAfter(base, replacement, prompt, inner) > 0) continue
+            if (WindowRepair.echoesNeighbours(base, replacement)) continue
             val after = WindowRepair.uncovered(replacement.words, speech, from, to)
             if (after > before - WindowRepair.MIN_GAP_GAIN_SECONDS) continue
             val current = filled.best

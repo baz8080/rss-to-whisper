@@ -121,6 +121,32 @@ class WindowRepairTest {
         assertTrue("Hey, it's Nora Jones," in vtt)
     }
 
+    @Test
+    fun `punctuation does not buy a gap decode that leaves far more speech without words`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val half = serverJson(Cue(8.0, 18.0, " Hey, it's Nora Jones, and my podcast is back."))
+        val full =
+            serverJson(
+                Cue(8.0, 20.0, " hey its nora jones and my podcast is back with more of my favorite musicians so check out"),
+                Cue(20.0, 34.0, " the newest episode and come hang out with us in the studio and listen to the show today"),
+            )
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(half, full),
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("come hang out with us" in vtt)
+    }
+
     /** Measured: Behind the Bastards 2022-05-31, 1:36–1:59: nothing written at all. */
     @Test
     fun `a gap with no cue over it lies between its two neighbours`() {
@@ -140,11 +166,11 @@ class WindowRepairTest {
     }
 
     @Test
-    fun `speech is cut into chunks that start on it and fit one of whisper's windows`() {
+    fun `speech is cut into chunks that start on it, fit one of whisper's windows, and meet without overlap`() {
         val chunks = WindowRepair.chunks(listOf(TimeWindow(8.0, 20.0), TimeWindow(21.0, 30.0), TimeWindow(31.0, 70.0)), 6.0, 80.0)
 
         assertEquals(
-            listOf(TimeWindow(7.8, 30.2), TimeWindow(30.8, 50.7), TimeWindow(50.3, 70.2)),
+            listOf(TimeWindow(7.8, 30.2), TimeWindow(30.8, 50.5), TimeWindow(50.5, 70.2)),
             chunks.map {
                 TimeWindow(Math.round(it.start * 10) / 10.0, Math.round(it.end * 10) / 10.0)
             },

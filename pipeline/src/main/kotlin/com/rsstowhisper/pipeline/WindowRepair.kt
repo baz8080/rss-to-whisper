@@ -1126,21 +1126,14 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
-    /**
-     * Stretches of speech VAD hears with no word starting near them, as ranges from the cue before to the cue after, any cues
-     * over the stretch between. whisper skips the rest of a 30 s window it takes for silence, and a skipped window can leave
-     * nothing, or filler ("Thank you.") held to the window's end.
-     */
+    /** Stretches of speech VAD hears with no word starting near them, as ranges from the cue before to the cue after. */
     fun gapWindows(
         base: WhisperTranscription,
         speech: List<TimeWindow>,
     ): List<IntRange> {
         val starts = base.words.filter { normalise(it.text).isNotEmpty() }.map { it.start }.sorted()
 
-        fun covered(t: Double): Boolean {
-            val at = starts.binarySearch(t).let { if (it < 0) -it - 1 else it }
-            return listOfNotNull(starts.getOrNull(at - 1), starts.getOrNull(at)).any { abs(it - t) <= GAP_COVER_SECONDS }
-        }
+        fun covered(t: Double) = near(starts, t, GAP_COVER_SECONDS)
         val gaps = mutableListOf<Pair<TimeWindow, Double>>()
         for (span in speech) {
             var t = span.start
@@ -1173,7 +1166,7 @@ internal object WindowRepair {
             right = until
             val previous = ranges.lastOrNull()
             if (previous != null && left < previous.last) {
-                ranges[ranges.size - 1] = previous.first..maxOf(previous.last, right)
+                ranges[ranges.size - 1] = minOf(previous.first, left)..maxOf(previous.last, right)
             } else {
                 ranges += left..right
             }
@@ -1206,7 +1199,15 @@ internal object WindowRepair {
                 merged += piece
             }
         }
-        return merged.map { TimeWindow(maxOf(from, it.start - CHUNK_PAD_SECONDS), minOf(to, it.end + CHUNK_PAD_SECONDS)) }
+        // Padded only away from a neighbour it touches, or the word at the seam is decoded twice.
+        return merged.mapIndexed { i, it ->
+            val before = merged.getOrNull(i - 1)?.let { p -> it.start - p.end < 2 * CHUNK_PAD_SECONDS } ?: false
+            val after = merged.getOrNull(i + 1)?.let { n -> n.start - it.end < 2 * CHUNK_PAD_SECONDS } ?: false
+            TimeWindow(
+                if (before) it.start else maxOf(from, it.start - CHUNK_PAD_SECONDS),
+                if (after) it.end else minOf(to, it.end + CHUNK_PAD_SECONDS),
+            )
+        }
     }
 
     /**
@@ -1236,23 +1237,33 @@ internal object WindowRepair {
         return WhisperTranscription.of(cues, words)
     }
 
-    /** Seconds of [speech] between [from] and [to] with no word starting within half a second. */
+    /** Seconds of [speech] between [from] and [to] with no spoken word starting within half a second. */
     fun uncovered(
         words: List<Word>,
         speech: List<TimeWindow>,
         from: Double,
         to: Double,
     ): Double {
+        val starts = words.filter { normalise(it.text).isNotEmpty() }.map { it.start }.sorted()
         return speech.mapNotNull { TimeWindow(maxOf(it.start, from), minOf(it.end, to)).takeIf { w -> w.end > w.start } }.sumOf { span ->
             var lost = 0.0
             var t = span.start
             while (t < span.end) {
                 val step = minOf(SAMPLE_SECONDS, span.end - t)
-                if (words.none { abs(it.start - (t + step / 2)) <= CLOSE_COVER_SECONDS }) lost += step
+                if (!near(starts, t + step / 2, CLOSE_COVER_SECONDS)) lost += step
                 t += step
             }
             lost
         }
+    }
+
+    private fun near(
+        sorted: List<Double>,
+        t: Double,
+        within: Double,
+    ): Boolean {
+        val at = sorted.binarySearch(t).let { if (it < 0) -it - 1 else it }
+        return listOfNotNull(sorted.getOrNull(at - 1), sorted.getOrNull(at)).any { abs(it - t) <= within }
     }
 
     /** Less than this recovered and the gap was mostly what VAD mistakes for speech. */

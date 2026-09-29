@@ -1575,7 +1575,8 @@ class PodcastPipeline(
         }
         if (fillGaps && speech != null) {
             for (range in WindowRepair.gapWindows(base, speech)) {
-                if (windowed.any { it.first <= range.last && range.first <= it.last }) continue
+                // Sharing an anchor is fine: only a cue one replaces and the other needs is a clash.
+                if (windowed.any { overlaps(it, inner(range)) || overlaps(range, inner(it)) }) continue
                 val filled = tryGap(base, audioPath, podcast, range, speech, prompt)
                 val best = filled.best
                 repairs +=
@@ -1603,6 +1604,10 @@ class PodcastPipeline(
                     )
                 best?.let { replacements += WindowRepair.fitStretched(it) }
             }
+        }
+        if (repairs.isEmpty()) {
+            logger.info("$label has no loops, stretch-copies, prompt leaks or gaps to repair")
+            return false
         }
         if (replacements.isEmpty()) {
             logger.warn("No window of $label came back better than it was; keeping it")
@@ -1639,6 +1644,13 @@ class PodcastPipeline(
         )
         return true
     }
+
+    private fun inner(range: IntRange) = (range.first + 1) until range.last
+
+    private fun overlaps(
+        a: IntRange,
+        b: IntRange,
+    ) = !a.isEmpty() && !b.isEmpty() && a.first <= b.last && b.first <= a.last
 
     private fun gapSummary(repairs: List<Map<String, Any?>>): String {
         val gaps = repairs.filter { it["kind"] == "gap" }
@@ -1692,8 +1704,10 @@ class PodcastPipeline(
             val better =
                 when {
                     current == null -> true
-                    WindowRepair.unpunctuated(current) != WindowRepair.unpunctuated(replacement) ->
-                        WindowRepair.unpunctuated(current) && after <= filled.after + GAP_PUNCTUATION_SLACK_SECONDS
+                    WindowRepair.unpunctuated(current) && !WindowRepair.unpunctuated(replacement) ->
+                        after <= filled.after + GAP_PUNCTUATION_SLACK_SECONDS
+                    !WindowRepair.unpunctuated(current) && WindowRepair.unpunctuated(replacement) ->
+                        after < filled.after - GAP_PUNCTUATION_SLACK_SECONDS
                     else -> after < filled.after
                 }
             if (better) filled = Filled(replacement, chunks, before, after, conditioned, retry)

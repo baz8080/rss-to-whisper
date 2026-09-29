@@ -282,6 +282,10 @@ class WindowRepairTest {
         val trial =
             transcription(listOf(Cue(1850.0, 1856.0, " And then there was the trial."), Cue(1863.93, 1866.0, " for molesting her kids.")))
         val cut = transcription(listOf(Cue(1860.0, 1863.88, " She was arrested for mol")))
+        // Measured: We Have Ways 283, 18:25.5: "on an event." | "on an Avenger-class escort carrier".
+        val dasher =
+            transcription(listOf(Cue(1070.1, 1100.08, " Thank you."), Cue(1105.94, 1112.52, " on an Avenger-class escort carrier.")))
+        val guessed = transcription(listOf(Cue(1103.84, 1105.94, " was an air mechanic on an event.")))
         val nazis = transcription(listOf(Cue(170.0, 175.0, " And his politics?"), Cue(181.14, 183.0, " Not a fan of Nazis.")))
         val atSeam = transcription(listOf(Cue(178.0, 181.1, " Oh, not a fan")))
         val before = transcription(listOf(Cue(178.0, 180.0, " Oh, not a fan")))
@@ -292,6 +296,7 @@ class WindowRepairTest {
         ) = WindowRepair.anchor(base, decoded, 0..1, emptySet(), byText = false).cues.joinToString("") { it.text }
 
         assertEquals(" She was arrested", text(trial, cut))
+        assertEquals(" was an air mechanic", text(dasher, guessed))
         assertEquals(" Oh,", text(nazis, atSeam))
         assertEquals(" Oh, not a fan", text(nazis, before))
     }
@@ -330,6 +335,29 @@ class WindowRepairTest {
         assertEquals(3573.12, chunks.first().window.start)
         assertTrue(chunks.last().window.end > 3596.9)
         assertEquals(" presidential imagine you're in the biggest band", text)
+    }
+
+    /** Measured: Astronomy Cast 704, 2:59.9: the later clip timed "And I'd love to" 1.1 s early; both clips heard it. */
+    @Test
+    fun `chunks whose clocks disagree across an overlap are cut on the words both heard in turn`() {
+        val chunks =
+            listOf(WindowRepair.Chunk(TimeWindow(152.67, 180.87), cutInSpeech = true), WindowRepair.Chunk(TimeWindow(178.87, 183.54)))
+
+        fun decode(
+            text: String,
+            vararg starts: Double,
+        ): WhisperTranscription {
+            val tokens = text.split(" ").drop(1).map { " $it" }
+            val words = tokens.mapIndexed { i, t -> Word(t, starts[i], starts.getOrElse(i + 1) { starts[i] + 0.5 }, 0.9, 0) }
+            return WhisperTranscription.of(listOf(Cue(starts.first(), words.last().end, text)), words)
+        }
+        val first = decode(" Women in Podcasting, and I'd love to", 178.12, 178.58, 178.76, 179.86, 180.13, 180.4, 180.89)
+        val second = decode(" And I'd love to take home two trophies.", 178.73, 179.14, 179.35, 179.82, 179.98, 180.55, 180.88, 181.24)
+
+        val stitched = WindowRepair.stitched(chunks, listOf(first, second))
+
+        assertEquals(" Women in Podcasting, And I'd love to take home two trophies.", stitched.cues.joinToString("") { it.text })
+        assertEquals(stitched.words.map { it.start }.sorted(), stitched.words.map { it.start })
     }
 
     @Test
@@ -853,6 +881,22 @@ class WindowRepairTest {
         assertEquals(784.08, fitted.words[1].start, 0.001)
         assertEquals(784.08, fitted.cues[1].start, 0.001)
         assertEquals(replacement.words[0], fitted.words[0])
+    }
+
+    /** Measured: Freakonomics 66, 48:19.3: "presidential" timed 2899.43-2900.70 over speech heard throughout; said at 2899.3. */
+    @Test
+    fun `a word stretched over speech heard throughout keeps its start, and one held across a pause does not`() {
+        val replacement =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(2899.43, 2901.47, " presidential debates.")),
+                listOf(Word(" presidential", 2899.43, 2900.7, 0.9, 0), Word(" debates.", 2900.7, 2901.47, 0.9, 0)),
+            )
+        val throughout = listOf(TimeWindow(2895.75, 2910.17))
+        val paused = listOf(TimeWindow(2895.75, 2899.5), TimeWindow(2900.3, 2910.17))
+
+        assertEquals(2899.43, WindowRepair.fitStretched(replacement, throughout).words[0].start, 0.001)
+        assertEquals(2900.2, WindowRepair.fitStretched(replacement, paused).words[0].start, 0.001)
     }
 
     @Test

@@ -1582,7 +1582,7 @@ class PodcastPipeline(
                     "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
                     "refused_for_dropped_cue" to tried.droppedCue,
                 )
-            best?.let { replacements += WindowRepair.fitStretched(it) }
+            best?.let { replacements += WindowRepair.fitStretched(it, speech) }
         }
         if (fillGaps && speech != null) {
             val frames by lazy { Mp3Frames.of(audioPath) }
@@ -1622,7 +1622,7 @@ class PodcastPipeline(
                                 transcriber.requestFields(language, podcast.initialPrompt, filled.conditioned, first, filled.retry)
                             },
                     )
-                best?.let { replacements += WindowRepair.fitStretched(it) }
+                best?.let { replacements += WindowRepair.fitStretched(it, speech) }
             }
         }
         if (repairs.isEmpty()) {

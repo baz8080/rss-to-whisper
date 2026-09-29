@@ -568,6 +568,7 @@ below supply the three required values.
 | `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-list <file>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 | `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
 | `--list-defects` | No equivalent; see [Repairing windows](#repairing-windows) |
+| `--repair-gaps` | No equivalent; see [Filling gaps](#filling-gaps) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -824,6 +825,33 @@ voices them.
 
 `--list-defects` prints every episode the repair would find something in, with counts by kind,
 as a list that works with `--retranscribe-list`. It only reads.
+
+### Filling gaps
+
+```bash
+./transcribe --repair-gaps --retranscribe-list episodes.txt
+```
+
+whisper decodes in 30 s windows, and when the model ends one early, whisper.cpp skips the rest of
+it ("single timestamp ending"). Over an ad jingle, music or another language the model says so
+wrongly, and the speech later in the window is lost: nothing is written, or a filler such as
+"Thank you." is held to the window's end. Re-decoding the same window from the same cue edges
+meets the same wall.
+
+- **Gaps** are stretches VAD hears with no word starting within 1 s, 4 s or more of them, from the
+  cue before to the cue after. Filler cues over a gap, and crammed cues at its edges (whisper
+  often crams part of what it skipped into no time at the skip), are replaced with it. A gap at
+  an episode's very start or end has no anchor on that side and is skipped.
+- **Chunks.** The speech between the anchors is cut and merged from VAD's spans into pieces under
+  30 s, each decoded alone and starting on speech, the way WhisperX avoids the skip.
+- **Attempts.** Unprompted first, then prompted, then warmer and with a wider beam. A prompt on
+  every short chunk invites skips and echoes; unprompted chunks sometimes come back without
+  punctuation, so a punctuated attempt within a second of the best coverage wins.
+- **Kept only if** it covers at least 2 s more of the speech, keeps every heard cue around it,
+  holds no defect of its own, no prompt sentence, and is not mostly the text of the cues either
+  side (the next line written early over music). Recorded with `"kind": "gap"`.
+- Needs `vad_binary` and `vad_model`. It can run with `--repair-windows` in the same pass; a gap
+  inside a defect window is left to that window.
 
 ### Re-transcribing an episode
 

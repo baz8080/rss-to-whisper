@@ -67,6 +67,9 @@ write either file. `--verify-pairs` lists every episode whose pair disagrees, an
 `--retranscribe-list <file>` re-transcribes such a list. `--list-defects` lists every episode `--repair-windows` would
 find something in.
 
+`--repair-gaps` (with VAD) re-decodes stretches VAD hears that no word covers, in chunks that start on
+the speech: whisper.cpp skips the rest of a 30 s window it wrongly takes for silence.
+
 `--repair-windows` with any re-transcription target re-decodes only the windows around
 loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues
 either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`

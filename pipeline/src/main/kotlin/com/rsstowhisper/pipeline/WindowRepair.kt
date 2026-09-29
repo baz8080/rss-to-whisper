@@ -749,9 +749,17 @@ internal object WindowRepair {
                         otherwise < words.size * MIN_OTHER_WORDS_SHARE ||
                         lostSpeech(base, replacement, speech.mapNotNull { it.clip(cue) }, CLOSE_COVER_SECONDS) >= MIN_HEARD_SECONDS
                 ) &&
-                speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start } >= MIN_HEARD_SECONDS
+                speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start } >= heardEnough(cue, i in strict)
         }
     }
+
+    /** A second of speech under a cue, or for one that must keep its words, half of a shorter one: "I understand." in 0.7 s. */
+    private fun heardEnough(
+        cue: Cue,
+        strict: Boolean,
+    ): Double = if (strict) minOf(MIN_HEARD_SECONDS, STRICT_HEARD_SHARE * (cue.end - cue.start)) else MIN_HEARD_SECONDS
+
+    private const val STRICT_HEARD_SHARE = 0.5
 
     /** A gap's edge cues may be reworded, being what whisper gets wrong around a skip, but not left without words. */
     fun losesEdgeSpeech(
@@ -1312,7 +1320,10 @@ internal object WindowRepair {
         return heardPastEdges(padded, from, to)
     }
 
-    /** A clip cut on a word at the gap's edge writes a guess at it or nothing: hear the word whole, keep up to the edge. */
+    /**
+     * A clip cut on a word at the gap's edge writes a guess at it or nothing: hear the word whole, keep to within a word's
+     * timing of the edge, and leave the anchor's own word said again to the same-word rule.
+     */
     private fun heardPastEdges(
         chunks: MutableList<Chunk>,
         from: Double,
@@ -1322,8 +1333,9 @@ internal object WindowRepair {
         chunks[0] = first.copy(window = TimeWindow(maxOf(0.0, minOf(first.window.start, from - EDGE_HEAR_SECONDS)), first.window.end))
         val last = chunks.last()
         chunks[chunks.lastIndex] = last.copy(window = TimeWindow(last.window.start, maxOf(last.window.end, to + EDGE_HEAR_SECONDS)))
-        chunks[0] = chunks[0].copy(keep = TimeWindow(from, chunks[0].keep?.end ?: Double.MAX_VALUE))
-        chunks[chunks.lastIndex] = chunks.last().copy(keep = TimeWindow(chunks.last().keep?.start ?: -Double.MAX_VALUE, to))
+        chunks[0] = chunks[0].copy(keep = TimeWindow(from - EDGE_SLACK_SECONDS, chunks[0].keep?.end ?: Double.MAX_VALUE))
+        val keptFrom = chunks.last().keep?.start ?: -Double.MAX_VALUE
+        chunks[chunks.lastIndex] = chunks.last().copy(keep = TimeWindow(keptFrom, to + EDGE_SLACK_SECONDS))
         return chunks
     }
 

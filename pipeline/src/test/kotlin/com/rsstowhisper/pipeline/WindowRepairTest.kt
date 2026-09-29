@@ -277,14 +277,21 @@ class WindowRepairTest {
 
     /** Measured: Behind the Bastards 2019-09-24, 59:56: a clip ending 0.1 s into "as" wrote "at". */
     @Test
-    fun `a gap's last clip hears past its edge but keeps no word begun after it`() {
+    fun `a gap's clips hear past its edges but keep words only to within a word's timing of them`() {
         val chunks = WindowRepair.chunks(listOf(TimeWindow(3573.1, 3596.22), TimeWindow(3596.42, 3599.74)), 3573.12, 3596.52)
-        val decode = transcription(listOf(Cue(3591.3, 3596.0, " imagine you're in the biggest band"), Cue(3596.55, 3596.9, " as")))
+        val decode =
+            transcription(
+                listOf(
+                    Cue(3572.95, 3573.1, " presidential"),
+                    Cue(3591.3, 3596.0, " imagine you're in the biggest band"),
+                    Cue(3596.9, 3597.3, " Dave"),
+                ),
+            )
 
         val text = WindowRepair.stitched(chunks, listOf(decode)).cues.joinToString("") { it.text }
 
-        assertTrue(chunks.last().window.end > 3596.9)
-        assertEquals(" imagine you're in the biggest band", text)
+        assertTrue(chunks.first().window.start < 3573.0 && chunks.last().window.end > 3596.9)
+        assertEquals(" presidential imagine you're in the biggest band", text)
     }
 
     @Test
@@ -296,6 +303,29 @@ class WindowRepairTest {
         val text = WindowRepair.stitched(chunks, listOf(first, second)).cues.joinToString("") { it.text }
 
         assertEquals(1, Regex("With").findAll(text).count())
+    }
+
+    /** Measured: 99% Invisible 2024-01-16, 26:53.9: "I understand." dropped, 0.55 s of its 0.74 s heard. */
+    @Test
+    fun `a short edge cue must keep its words when half of it is heard`() {
+        val base =
+            transcription(
+                listOf(
+                    Cue(1612.42, 1613.34, " Oh, I see."),
+                    Cue(1613.86, 1614.6, " I understand."),
+                    Cue(1620.83, 1626.95, " Talking to the mayor and translator was bizarre."),
+                ),
+            )
+        val dropped =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(1620.83, 1626.33, " to the mayor and translator was bizarre.")),
+                transcription(listOf(Cue(1620.83, 1626.33, " to the mayor and translator was bizarre."))).words,
+            )
+        val speech = listOf(TimeWindow(1614.05, 1614.94), TimeWindow(1620.83, 1626.69))
+
+        assertFalse(WindowRepair.dropsHeardCue(base, dropped, emptySet(), speech))
+        assertTrue(WindowRepair.dropsHeardCue(base, dropped, emptySet(), speech, strict = setOf(1)))
     }
 
     /** Measured: Freakonomics 304, 53:24: "she says, is vulnerable." dropped, the next sentence spread back over it. */

@@ -445,6 +445,8 @@ internal object WindowRepair {
             }
         }
 
+        // A clip cut at an anchor hears its edge words across the cut; a window hears the speaker say a phrase again: "you know".
+        val seamWords = if (byText) 1 else MAX_REPEATED_WORDS
         var until = words.size
         var anchorRight = "none"
         var newRight: Double? = null
@@ -469,16 +471,19 @@ internal object WindowRepair {
             }
             val again = repeated(words, (from until until).toList(), anchorWords(right), closesAnchor = false)
             if (again.isNotEmpty()) until = again.first()
-            val edge = anchorWords(right).firstOrNull()
-            val last = (until - 1 downTo from).firstOrNull { normalised[it].isNotEmpty() }
-            if (edge != null && last != null && sameWordAtSeam(normalised[last], words[last].start + shift, edge)) until = opening[last]
+            val head = anchorWords(right)
+            val said = (from until until).filter { normalised[it].isNotEmpty() }.takeLast(seamWords)
+            val k = saidAgain(said.map { normalised[it] }, head.take(MAX_REPEATED_WORDS).map { normalise(it.text) }, closesAnchor = false)
+            if (k > 0 && head.first().start - (wordEnd[said.last()] + shift) <= SAME_WORD_AT_SEAM_SECONDS) until = said[said.size - k]
         }
-        // The anchor's edge word begun within half a second of the decode's is one word said across the seam: "it" | "it."
+        // The anchor's edge words said again within half a second of the seam are one saying heard across it: "it" | "it."
         if (left != null && from < until) {
-            val edge = anchorWords(left).lastOrNull()
-            val first = (from until until).firstOrNull { normalised[it].isNotEmpty() }
-            if (edge != null && first != null && sameWordAtSeam(normalised[first], words[first].start + shift, edge)) {
-                from = closing[first] + 1
+            val tail = anchorWords(left)
+            val said = (from until until).filter { normalised[it].isNotEmpty() }.take(seamWords)
+            val k =
+                saidAgain(said.map { normalised[it] }, tail.takeLast(MAX_REPEATED_WORDS).map { normalise(it.text) }, closesAnchor = true)
+            if (k > 0 && words[said.first()].start + shift - tail.last().end <= SAME_WORD_AT_SEAM_SECONDS) {
+                from = closing[said[k - 1]] + 1
                 while (from < until && normalised[from].isEmpty()) from++
             }
         }
@@ -734,7 +739,13 @@ internal object WindowRepair {
     ): Boolean {
         val said = replacement.cues.flatMap { Prompt.wordsOf(it.text) }
         val saidGrams = (1..KEPT_GRAM).associateWith { grams(said, it) }
-        val opens = spoken(replacement.words).map { replacement.words[it.first()].start }
+        val spokenWords = spoken(replacement.words)
+        val opens = spokenWords.map { replacement.words[it.first()].start }
+        val saidAt =
+            spokenWords.map {
+                    g ->
+                normalise(g.joinToString("") { replacement.words[it].text }) to replacement.words[g.first()].start
+            }
         return replacement.range.any { i ->
             val cue = base.cues[i]
             val words = Prompt.wordsOf(cue.text)
@@ -744,6 +755,7 @@ internal object WindowRepair {
             // As many words again over its time is whisper hearing something else there; one or two is not.
             val otherwise = opens.count { it in cue.start..cue.end }
             i !in defects && n > 0 && own.count { it in saidGrams.getValue(n) } < own.size * MIN_KEPT_SHARE &&
+                !(i in strict && words.size < KEPT_GRAM && rewordedInPlace(cue, words, saidAt)) &&
                 (
                     i in strict ||
                         otherwise < words.size * MIN_OTHER_WORDS_SHARE ||
@@ -760,6 +772,19 @@ internal object WindowRepair {
     ): Double = if (strict) minOf(MIN_HEARD_SECONDS, STRICT_HEARD_SHARE * (cue.end - cue.start)) else MIN_HEARD_SECONDS
 
     private const val STRICT_HEARD_SHARE = 0.5
+
+    /** A short edge cue said again with a word of it where it was: "Amar Higgs." as "R. Higgs." */
+    private fun rewordedInPlace(
+        cue: Cue,
+        words: List<String>,
+        saidAt: List<Pair<String, Double>>,
+    ): Boolean {
+        val own = words.map(::normalise).filter { it.length >= MIN_REWORDED_LETTERS }.toSet()
+        val near = (cue.start - SAME_WORD_AT_SEAM_SECONDS)..(cue.end + SAME_WORD_AT_SEAM_SECONDS)
+        return saidAt.any { (word, at) -> word in own && at in near }
+    }
+
+    private const val MIN_REWORDED_LETTERS = 2
 
     /** A gap's edge cues may be reworded, being what whisper gets wrong around a skip, but not left without words. */
     fun losesEdgeSpeech(
@@ -1103,6 +1128,25 @@ internal object WindowRepair {
         return emptyList()
     }
 
+    /** How many of the decode's words at a seam are the anchor's edge words; at a right seam the last of two or more may be cut short: "for mol". */
+    private fun saidAgain(
+        said: List<String>,
+        anchor: List<String>,
+        closesAnchor: Boolean,
+    ): Int =
+        (minOf(said.size, anchor.size) downTo 1).firstOrNull { k ->
+            if (closesAnchor) {
+                said.take(k) == anchor.takeLast(k)
+            } else {
+                val mine = said.takeLast(k)
+                val theirs = anchor.take(k)
+                val cut = k > 1 && mine.last().length >= MIN_CUT_WORD_LETTERS && theirs.last().startsWith(mine.last())
+                mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut)
+            }
+        } ?: 0
+
+    private const val MIN_CUT_WORD_LETTERS = 2
+
     /** One word the other with a few letters added: "star" and "stars" are different words, not a re-rendering. */
     private fun prefixed(
         a: String,
@@ -1321,16 +1365,15 @@ internal object WindowRepair {
     }
 
     /**
-     * A clip cut on a word at the gap's edge writes a guess at it or nothing: hear the word whole, keep to within a word's
-     * timing of the edge, and leave the anchor's own word said again to the same-word rule.
+     * A clip cut on a word at the gap's end writes a guess at it or nothing: hear the word whole, keep to within a word's
+     * timing of the edge, and leave the anchor's word said again to the same-word rule. Not at its start: whisper writes the
+     * anchor's last word again there, timed a second late.
      */
     private fun heardPastEdges(
         chunks: MutableList<Chunk>,
         from: Double,
         to: Double,
     ): List<Chunk> {
-        val first = chunks.first()
-        chunks[0] = first.copy(window = TimeWindow(maxOf(0.0, minOf(first.window.start, from - EDGE_HEAR_SECONDS)), first.window.end))
         val last = chunks.last()
         chunks[chunks.lastIndex] = last.copy(window = TimeWindow(last.window.start, maxOf(last.window.end, to + EDGE_HEAR_SECONDS)))
         chunks[0] = chunks[0].copy(keep = TimeWindow(from - EDGE_SLACK_SECONDS, chunks[0].keep?.end ?: Double.MAX_VALUE))

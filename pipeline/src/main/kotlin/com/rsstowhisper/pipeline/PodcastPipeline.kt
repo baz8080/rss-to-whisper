@@ -1877,6 +1877,8 @@ class PodcastPipeline(
         var bestThin = Double.MAX_VALUE
         val lost = mutableListOf<Double>()
         var droppedCue = 0
+        // A line held from where whisper resumed, before it is said, may be re-timed but not replaced.
+        val held = WindowRepair.heldLines(base, range, defects)
         var disputedLeft = false
         var disputedRight = false
         for ((conditioned, retry) in REPAIR_ATTEMPTS) {
@@ -1896,7 +1898,7 @@ class PodcastPipeline(
                 lost += missed
                 continue
             }
-            if (WindowRepair.dropsHeardCue(base, replacement, defects, spoken)) {
+            if (WindowRepair.dropsHeardCue(base, replacement, defects, spoken, held)) {
                 droppedCue++
                 continue
             }

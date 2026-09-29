@@ -779,14 +779,20 @@ internal object WindowRepair {
     ): List<Int> {
         val said = replacement.cues.flatMap { Prompt.wordsOf(it.text) }.map(::digits)
         val saidGrams = (1..KEPT_GRAM).associateWith { grams(said, it) }
+
+        // whisper's stock credits are not it hearing something else there.
+        fun credit(word: Word) = STOCK.any { it.voices(replacement.cues[word.segment].text) }
         val spokenWords = spoken(replacement.words)
-        val opens = spokenWords.map { replacement.words[it.first()].start }
+        val opens = spokenWords.map { replacement.words[it.first()] }.filterNot(::credit).map { it.start }
 
         fun textOf(group: List<Int>) = normalise(group.joinToString("") { replacement.words[it].text })
         val saidAt = spokenWords.map { textOf(it) to replacement.words[it.first()].start }
+        val looped = defects.filter { it in replacement.range }.map { d -> Prompt.wordsOf(base.cues[d].text).map(::digits) }
         return replacement.range.filter { i ->
             val cue = base.cues[i]
             val words = Prompt.wordsOf(cue.text).map(::digits)
+            // A piece of a flagged cue's words is part of that loop or copy: "line of duty." beside "...the same line of duty."
+            if (i !in strict && looped.any { d -> words.isNotEmpty() && matches(d, words).isNotEmpty() }) return@filter false
             // A cue of one or two words is kept only if it is said whole.
             val n = minOf(KEPT_GRAM, words.size)
             val own = grams(words, n)
@@ -841,6 +847,23 @@ internal object WindowRepair {
     }
 
     private const val MIN_REWORDED_LETTERS = 2
+
+    /** Cues of [range] that hold a line across the stretch before it is said: its words are right, its time is not. */
+    fun heldLines(
+        base: WhisperTranscription,
+        range: IntRange,
+        defects: Set<Int>,
+    ): Set<Int> =
+        range.filter { i ->
+            val cue = base.cues[i]
+            val said = Prompt.wordsOf(cue.text).size
+            val held = cue.end - cue.start
+            i !in defects && said >= MIN_HELD_WORDS && held >= MIN_HELD_SECONDS && said / held < MAX_HELD_WORDS_PER_SECOND
+        }.toSet()
+
+    private const val MIN_HELD_WORDS = 4
+    private const val MIN_HELD_SECONDS = 10.0
+    private const val MAX_HELD_WORDS_PER_SECOND = 0.5
 
     /** A gap's edge cues may be reworded, being what whisper gets wrong around a skip, but not left without words. */
     fun losesEdgeSpeech(

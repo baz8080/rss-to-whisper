@@ -958,6 +958,69 @@ class WindowRepairTest {
         assertTrue(WindowRepair.dropsHeardCue(transcription(cues), pieces, setOf(2), speech))
     }
 
+    /** Measured: Irish History 2022-01-31, 42:57: the right line held from the window start, replaced by a garble. */
+    @Test
+    fun `a line held across the stretch before it is said may be re-timed but not replaced`() {
+        val cues =
+            listOf(
+                Cue(2546.5, 2576.5, " \u00a9 BF-WATCH TV 2021"),
+                Cue(2576.5, 2606.1, " The famine continued in Ireland into the 1850s."),
+                Cue(2606.1, 2608.8, " and Irish people continued to leave."),
+            )
+        val base = transcription(cues)
+        val garbled =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(2603.4, 2606.1, " to help us so that until those")),
+                transcription(listOf(Cue(2603.4, 2606.1, " to help us so that until those"))).words,
+            )
+        val retimed =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(2603.4, 2606.1, " The famine continued in Ireland into the 1850s,")),
+                transcription(listOf(Cue(2603.4, 2606.1, " The famine continued in Ireland into the 1850s,"))).words,
+            )
+        val speech = listOf(TimeWindow(2603.3, 2608.8))
+        val held = WindowRepair.heldLines(base, 0..1, setOf(0))
+
+        assertEquals(setOf(1), held)
+        assertTrue(WindowRepair.dropsHeardCue(base, garbled, setOf(0), speech, held))
+        assertFalse(WindowRepair.dropsHeardCue(base, retimed, setOf(0), speech, held))
+    }
+
+    /** Measured: The Rest Is History 682, 1:04:13: the stock credit written where "Hi everybody, it's Dominic Sandbrook here." is said. */
+    @Test
+    fun `a stock credit over a heard line is not whisper hearing something else there`() {
+        val cues =
+            listOf(Cue(3850.0, 3852.0, " Hi everybody, it's Dominic Sandbrook here."), Cue(3852.0, 3858.0, " There are two weeks to go."))
+        val credit =
+            WindowRepair.Replacement(
+                0..0,
+                listOf(Cue(3850.0, 3852.0, " \u00a9 BF-WATCH TV 2021")),
+                transcription(listOf(Cue(3850.0, 3852.0, " \u00a9 BF-WATCH TV 2021 transcribed by ESO, translated by"))).words,
+            )
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(cues), credit, emptySet(), listOf(TimeWindow(3850.0, 3858.0))))
+    }
+
+    @Test
+    fun `a piece of a flagged cue's words goes with it`() {
+        val cues =
+            listOf(
+                Cue(1279.0, 1280.0, " He saw a group of officers who were in the same line of duty."),
+                Cue(1280.0, 1281.2, " line of duty."),
+                Cue(1281.2, 1282.2, " He saw a group of officers who were in the same line of duty."),
+            )
+        val real =
+            WindowRepair.Replacement(
+                0..2,
+                listOf(Cue(1281.3, 1282.2, " digging in under Nash")),
+                transcription(listOf(Cue(1281.3, 1282.2, " digging in under Nash"))).words,
+            )
+
+        assertFalse(WindowRepair.dropsHeardCue(transcription(cues), real, setOf(0, 2), listOf(TimeWindow(1279.0, 1282.2))))
+    }
+
     @Test
     fun `an attempt that keeps the sentence, or says something else over it, drops nothing`() {
         val base = transcription(sentenceThenStock)

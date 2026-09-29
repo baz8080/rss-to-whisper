@@ -5,6 +5,7 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.asRequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.nio.file.Path
@@ -118,16 +119,19 @@ open class Transcriber(
         conditioned: Boolean = true,
         window: TimeWindow? = null,
         retry: Map<String, String> = emptyMap(),
+        /** Sent in place of the file, and [window] with it: whisper then returns times from the clip's start. */
+        clip: Mp3Clip? = null,
     ): String {
+        val audio =
+            clip?.bytes?.toRequestBody("audio/mpeg".toMediaType())
+                ?: audioPath.toFile().asRequestBody("audio/mpeg".toMediaType())
         val bodyBuilder =
             MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
-                .addFormDataPart(
-                    "file",
-                    audioPath.fileName.toString(),
-                    audioPath.toFile().asRequestBody("audio/mpeg".toMediaType()),
-                )
-        requestFields(language, prompt, conditioned, window, retry).forEach { (name, value) -> bodyBuilder.addFormDataPart(name, value) }
+                .addFormDataPart("file", audioPath.fileName.toString(), audio)
+        requestFields(language, prompt, conditioned, window.takeIf { clip == null }, retry).forEach { (name, value) ->
+            bodyBuilder.addFormDataPart(name, value)
+        }
 
         val requestBody = bodyBuilder.build()
 

@@ -16,6 +16,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WindowRepairTest {
@@ -69,7 +70,7 @@ class WindowRepairTest {
             )
 
         assertEquals(
-            listOf(0..2),
+            listOf(WindowRepair.Gap(-1..3, 0..2)),
             WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(8.0, 33.0), TimeWindow(35.0, 38.0))),
         )
     }
@@ -85,7 +86,7 @@ class WindowRepairTest {
             )
 
         assertEquals(
-            listOf(0..2),
+            listOf(WindowRepair.Gap(-1..3, 0..2)),
             WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(4.0, 28.0), TimeWindow(30.0, 33.0))),
         )
     }
@@ -97,26 +98,30 @@ class WindowRepairTest {
         val dir = episode(tempDir, fillerOverPromo)
         val flat =
             serverJson(
+                flatAround[0],
                 Cue(8.0, 20.0, " hey its nora jones and my podcast is back with more of my favorite musicians so check out"),
                 Cue(20.0, 34.0, " the newest episode and come hang out with us in the studio and listen to the show today"),
+                flatAround[1],
             )
         val marked =
             serverJson(
+                saidAround[0],
                 Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians. So check out"),
                 Cue(20.0, 34.0, " the newest episode, and come hang out with us in the studio and listen to the show today."),
+                saidAround[1],
             )
         val (pipeline, txSvc, _) =
             buildPipeline(
                 tempDir,
                 listOf(podcast),
                 feed = null,
-                vtts = listOf(flat, marked),
+                vtts = listOf(flat, flat, flat, marked),
                 speechDetector = FakeSpeechDetector(promoSpeech),
             )
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
 
-        assertEquals(listOf(false, true), txSvc.conditioned)
+        assertEquals(listOf(false, false, false, true, true, true), txSvc.conditioned.take(6))
         val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
         assertTrue("Hey, it's Nora Jones," in vtt)
     }
@@ -126,18 +131,20 @@ class WindowRepairTest {
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir, fillerOverPromo)
-        val half = serverJson(Cue(8.0, 18.0, " Hey, it's Nora Jones, and my podcast is back."))
+        val half = serverJson(saidAround[0], Cue(8.0, 18.0, " Hey, it's Nora Jones, and my podcast is back."), saidAround[1])
         val full =
             serverJson(
+                flatAround[0],
                 Cue(8.0, 20.0, " hey its nora jones and my podcast is back with more of my favorite musicians so check out"),
                 Cue(20.0, 34.0, " the newest episode and come hang out with us in the studio and listen to the show today"),
+                flatAround[1],
             )
         val (pipeline, _, _) =
             buildPipeline(
                 tempDir,
                 listOf(podcast),
                 feed = null,
-                vtts = listOf(half, full),
+                vtts = listOf(half, half, half, full),
                 speechDetector = FakeSpeechDetector(promoSpeech),
             )
 
@@ -153,28 +160,254 @@ class WindowRepairTest {
         val cues = listOf(Cue(0.0, 3.0, " So that is where the story begins."), Cue(30.0, 33.0, " And then we found something odd."))
 
         assertEquals(
-            listOf(0..1),
+            listOf(WindowRepair.Gap(-1..2, 0..1)),
             WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(6.0, 28.0), TimeWindow(30.0, 33.0))),
         )
     }
 
+    /** Measured: Life Scientific 2013-10-01, 28:35: a clip decoded to 2.7 s of its 16.8, the promo after a pause skipped. */
     @Test
-    fun `a gap before the first cue has nothing to anchor to`() {
-        val cues = listOf(Cue(20.0, 23.0, " So that is where the story begins."))
+    fun `a chunk decode that stops with speech still heard after it is picked up from there`() {
+        val decode = transcription(listOf(Cue(1714.6, 1717.3, " And that's where we'll leave it.")))
+        val speech = listOf(TimeWindow(1711.6, 1717.7), TimeWindow(1719.2, 1731.4))
 
-        assertEquals(emptyList(), WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 15.0), TimeWindow(20.0, 23.0))))
+        assertEquals(TimeWindow(1719.0, 1731.6), WindowRepair.unheardTail(decode, speech, TimeWindow(1714.8, 1731.6)))
+        assertNull(WindowRepair.unheardTail(decode, listOf(TimeWindow(1711.6, 1717.7)), TimeWindow(1714.8, 1731.6)))
     }
 
     @Test
-    fun `speech is cut into chunks that start on it, fit one of whisper's windows, and meet without overlap`() {
+    fun `a chunk decode with no words is not sent again from the same place`() {
+        assertNull(WindowRepair.unheardTail(transcription(emptyList()), listOf(TimeWindow(10.0, 30.0)), TimeWindow(9.8, 30.2)))
+    }
+
+    /** Measured: Behind the Bastards 2023-08-08, 53:03: the anchor's "watches women's sports" again in the next ad. */
+    @Test
+    fun `a gap's decode is anchored by time when ad copy repeats the anchor's words`() {
+        val base =
+            transcription(
+                listOf(
+                    Cue(3181.3, 3183.2, " Because everyone watches women's sports."),
+                    Cue(3183.5, 3188.3, " Listen to everyone watches women's sports on the app."),
+                    Cue(3209.7, 3212.9, " Each week we'll revisit an episode of Portlandia."),
+                ),
+            )
+        val decoded = transcription(listOf(Cue(3183.2, 3188.3, " Listen to everyone watches women's sports on the app.")))
+
+        val byTime = WindowRepair.anchor(base, decoded, 0..2, setOf(1), byText = false)
+
+        assertEquals(" Listen to everyone watches women's sports on the app.", byTime.cues.joinToString("") { it.text })
+        assertEquals("time", byTime.anchorLeft)
+    }
+
+    @Test
+    fun `an edge cue may be reworded but not left without words where it was heard`() {
+        val base =
+            transcription(
+                listOf(
+                    Cue(0.0, 3.0, " So that is where the story begins."),
+                    Cue(3.0, 6.0, " at oracle dot com slash data."),
+                    Cue(30.0, 33.0, " And then we found something odd."),
+                ),
+            )
+        val reworded =
+            WindowRepair.Replacement(
+                1..1,
+                listOf(Cue(3.0, 6.0, " at oracle dot com slash strategic.")),
+                transcription(listOf(Cue(3.0, 6.0, " at oracle dot com slash strategic."))).words,
+            )
+        val emptied =
+            WindowRepair.Replacement(
+                1..1,
+                listOf(Cue(3.0, 3.8, " at oracle")),
+                transcription(listOf(Cue(3.0, 3.8, " at oracle"))).words,
+            )
+        val speech = listOf(TimeWindow(0.0, 6.0), TimeWindow(30.0, 33.0))
+
+        assertFalse(WindowRepair.losesEdgeSpeech(base, reworded, setOf(1), speech))
+        assertTrue(WindowRepair.losesEdgeSpeech(base, emptied, setOf(1), speech))
+    }
+
+    /** Measured: 99% Invisible 2023-11-15, 32:29.9: "I've lived through it." | "it. My dad lived through it." */
+    @Test
+    fun `a word said across the seam with an anchor is written once, by the anchor`() {
+        val base =
+            transcription(
+                listOf(
+                    Cue(1941.9, 1945.2, " Durant's was at the hearing too."),
+                    Cue(1949.94, 1954.26, " it. My dad lived through it."),
+                ),
+            )
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(1945.7, 1949.9, " I coach football. I've lived through it.")),
+                listOf(
+                    Word(" I", 1945.72, 1945.8, 0.9, 0),
+                    Word(" coach", 1945.8, 1946.3, 0.9, 0),
+                    Word(" football", 1946.3, 1946.9, 0.9, 0),
+                    Word(".", 1946.9, 1947.0, 0.9, 0),
+                    Word(" I", 1948.84, 1948.85, 0.9, 0),
+                    Word("'ve", 1948.85, 1949.0, 0.9, 0),
+                    Word(" lived", 1949.01, 1949.27, 0.9, 0),
+                    Word(" through", 1949.27, 1949.77, 0.9, 0),
+                    Word(" it", 1949.77, 1949.83, 0.9, 0),
+                    Word(".", 1949.83, 1949.9, 0.9, 0),
+                ),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 0..1, emptySet(), byText = false)
+
+        assertEquals(" I coach football. I've lived through", replacement.cues.joinToString("") { it.text })
+    }
+
+    /** Measured: Behind the Bastards 2021-04-08, 1:51.8: "'m Jake Brennan", its "I" timed before where the chunk was picked up. */
+    @Test
+    fun `a chunk picked up again keeps its words from where the first decode stopped`() {
+        val chunks =
+            listOf(
+                WindowRepair.Chunk(TimeWindow(102.4, 108.98), cutInSpeech = true),
+                WindowRepair.Chunk(TimeWindow(111.64, 126.92)),
+            )
+        val first = transcription(listOf(Cue(102.4, 108.98, " or wherever you get your podcasts.")))
+        val second = transcription(listOf(Cue(111.5, 114.0, " I'm Jake Brennan, and on the Disgraceland podcast")))
+
+        val text = WindowRepair.stitched(chunks, listOf(first, second)).cues.joinToString("") { it.text }
+
+        assertTrue(" I'm Jake Brennan" in text)
+    }
+
+    /** Measured: Behind the Bastards 2019-09-24, 59:56: a clip ending 0.1 s into "as" wrote "at". */
+    @Test
+    fun `a gap's last clip hears past its edge but keeps no word begun after it`() {
+        val chunks = WindowRepair.chunks(listOf(TimeWindow(3573.1, 3596.22), TimeWindow(3596.42, 3599.74)), 3573.12, 3596.52)
+        val decode = transcription(listOf(Cue(3591.3, 3596.0, " imagine you're in the biggest band"), Cue(3596.55, 3596.9, " as")))
+
+        val text = WindowRepair.stitched(chunks, listOf(decode)).cues.joinToString("") { it.text }
+
+        assertTrue(chunks.last().window.end > 3596.9)
+        assertEquals(" imagine you're in the biggest band", text)
+    }
+
+    @Test
+    fun `the same word begun either side of a seam within half a second is written once`() {
+        val chunks = listOf(WindowRepair.Chunk(TimeWindow(0.0, 10.0), cutInSpeech = true), WindowRepair.Chunk(TimeWindow(9.6, 20.0)))
+        val first = transcription(listOf(Cue(7.0, 9.9, " the price you thought skyrockets. With")))
+        val second = transcription(listOf(Cue(9.7, 12.0, " With Mint Mobile you never worry")))
+
+        val text = WindowRepair.stitched(chunks, listOf(first, second)).cues.joinToString("") { it.text }
+
+        assertEquals(1, Regex("With").findAll(text).count())
+    }
+
+    /** Measured: Freakonomics 304, 53:24: "she says, is vulnerable." dropped, the next sentence spread back over it. */
+    @Test
+    fun `an edge cue dropped under other words is refused, where an inner filler would not be`() {
+        val base =
+            transcription(
+                listOf(
+                    Cue(3198.2, 3203.98, " Even Germany's world-beating auto sector,"),
+                    Cue(3204.28, 3205.62, " she says, is vulnerable."),
+                    Cue(3234.06, 3244.68, " The U.S., meanwhile, has had its own comparative advantage."),
+                ),
+            )
+        val smeared =
+            WindowRepair.Replacement(
+                1..1,
+                listOf(Cue(3203.98, 3214.57, " And so one problem today is how is the car industry going to do")),
+                listOf(
+                    Word(" And", 3203.98, 3204.47, 0.9, 0),
+                    Word(" so", 3204.47, 3205.0, 0.9, 0),
+                    Word(" one", 3205.0, 3206.56, 0.9, 0),
+                    Word(" problem", 3206.56, 3207.64, 0.9, 0),
+                ),
+            )
+        val speech = listOf(TimeWindow(3198.2, 3210.0))
+
+        assertFalse(WindowRepair.dropsHeardCue(base, smeared, emptySet(), speech))
+        assertTrue(WindowRepair.dropsHeardCue(base, smeared, emptySet(), speech, strict = setOf(1)))
+    }
+
+    /** Measured: Behind the Bastards 2022-06-02, 0:30: the cue after the skip is pinned to 30.00, and said at 34.45. */
+    @Test
+    fun `the cues either side of a gap are decoded again, anchored one cue further out`() {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " This is an iHeart Podcast."),
+                Cue(3.4, 5.4, " Hey, Portlandia fans."),
+                Cue(30.0, 39.7, " Kyle is going for it here. You fully improvised not just words, but a song."),
+                Cue(39.8, 41.1, " Well, I thought you were all going to write a song."),
+            )
+
+        assertEquals(
+            listOf(WindowRepair.Gap(0..3, 1..2)),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 3.0), TimeWindow(3.4, 41.1))),
+        )
+    }
+
+    /** Measured: Behind the Bastards 2023-05-11, 1:44:20: "This is an iHeart Podcast. Guaranteed human." after the last cue. */
+    @Test
+    fun `a gap before the first cue or after the last runs to the episode's edge`() {
+        val cues = listOf(Cue(20.0, 23.0, " So that is where the story begins."))
+
+        assertEquals(
+            listOf(WindowRepair.Gap(-1..1, -1..0)),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(0.0, 15.0), TimeWindow(20.0, 23.0))),
+        )
+        assertEquals(
+            listOf(WindowRepair.Gap(-1..1, 0..1)),
+            WindowRepair.gapWindows(transcription(cues), listOf(TimeWindow(20.0, 23.0), TimeWindow(25.0, 40.0))),
+        )
+    }
+
+    @Test
+    fun `speech is cut at a pause into chunks that fit one of whisper's windows, overlapping where it has none`() {
         val chunks = WindowRepair.chunks(listOf(TimeWindow(8.0, 20.0), TimeWindow(21.0, 30.0), TimeWindow(31.0, 70.0)), 6.0, 80.0)
 
         assertEquals(
-            listOf(TimeWindow(7.8, 30.2), TimeWindow(30.8, 50.5), TimeWindow(50.5, 70.2)),
-            chunks.map {
-                TimeWindow(Math.round(it.start * 10) / 10.0, Math.round(it.end * 10) / 10.0)
-            },
+            listOf(TimeWindow(5.5, 30.2) to false, TimeWindow(30.8, 59.0) to true, TimeWindow(57.0, 80.5) to false),
+            chunks.map { TimeWindow(Math.round(it.window.start * 10) / 10.0, Math.round(it.window.end * 10) / 10.0) to it.cutInSpeech },
         )
+    }
+
+    @Test
+    fun `a chunk ends at the widest pause that leaves it long enough, not the last one that fits`() {
+        val speech =
+            listOf(TimeWindow(0.0, 5.0), TimeWindow(5.3, 12.0), TimeWindow(14.0, 20.0), TimeWindow(20.2, 27.0), TimeWindow(27.5, 33.0))
+
+        assertEquals(listOf(12.2, 33.5), WindowRepair.chunks(speech, 0.0, 33.0).map { Math.round(it.window.end * 10) / 10.0 })
+    }
+
+    /** Measured: Behind the Bastards 2023-05-11, 1:43:51: a 0.4 s chunk came back with 6 s of the next one's speech. */
+    @Test
+    fun `words a chunk's decode starts past its end are dropped, and a cue cut short keeps the rest`() {
+        val decode =
+            transcription(
+                listOf(
+                    Cue(10.0, 12.0, " or wherever you get podcasts."),
+                    Cue(12.0, 16.0, " what's up fam i'm sports journalist"),
+                ),
+            )
+
+        val kept = WindowRepair.within(decode, 10.0, 13.0)
+
+        assertEquals(listOf(" or wherever you get podcasts.", " what's up"), kept.cues.map { it.text })
+        assertEquals(setOf(0, 1), kept.words.map { it.segment }.toSet())
+    }
+
+    @Test
+    fun `two chunks cut inside speech are stitched at a word both heard, which is written once`() {
+        val chunks =
+            listOf(
+                WindowRepair.Chunk(TimeWindow(0.0, 28.0), cutInSpeech = true),
+                WindowRepair.Chunk(TimeWindow(26.0, 40.0)),
+            )
+        val first = transcription(listOf(Cue(20.0, 28.0, " and so we went down to the harbour")))
+        val second = transcription(listOf(Cue(26.0, 34.0, " to the harbour where the boats were kept")))
+
+        val text = WindowRepair.stitched(chunks, listOf(first, second)).cues.joinToString("") { it.text }
+
+        assertEquals(1, Regex("harbour").findAll(text).count())
+        assertTrue(text.startsWith(" and so we went down"))
+        assertTrue(text.endsWith("where the boats were kept"))
     }
 
     private val fillerOverPromo =
@@ -183,8 +416,15 @@ class WindowRepairTest {
             Cue(3.0, 6.0, " We looked at the data again, carefully."),
             Cue(6.0, 36.0, " Thank you."),
             Cue(36.0, 39.0, " And then we found something odd."),
+            Cue(39.5, 42.0, " It changed everything for us."),
         )
-    private val promoSpeech = listOf(TimeWindow(0.0, 6.0), TimeWindow(8.0, 34.0), TimeWindow(36.0, 39.0))
+    private val promoSpeech = listOf(TimeWindow(0.0, 6.0), TimeWindow(8.0, 34.0), TimeWindow(36.0, 39.0), TimeWindow(39.5, 42.0))
+
+    /** The gap's edge cues as a decode of the widened gap says them again. */
+    private val saidAround =
+        arrayOf(Cue(3.0, 6.0, " We looked at the data again, carefully."), Cue(36.0, 39.0, " And then we found something odd."))
+    private val flatAround =
+        arrayOf(Cue(3.0, 6.0, " we looked at the data again carefully"), Cue(36.0, 39.0, " and then we found something odd"))
 
     @Test
     fun `a gap decoded from where its speech starts replaces the filler`(
@@ -193,8 +433,10 @@ class WindowRepairTest {
         val dir = episode(tempDir, fillerOverPromo)
         val promo =
             serverJson(
+                saidAround[0],
                 Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians."),
                 Cue(20.0, 34.0, " So come hang out with us in the studio and listen to the show."),
+                saidAround[1],
             )
         val (pipeline, txSvc, _) =
             buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(promo), speechDetector = FakeSpeechDetector(promoSpeech))
@@ -206,12 +448,10 @@ class WindowRepairTest {
         assertTrue("Nora Jones" in vtt)
         assertFalse("Thank you." in vtt)
         assertTrue("And then we found something odd." in vtt)
-        assertEquals(listOf(false), txSvc.conditioned)
+        assertEquals(listOf(false, false, false), txSvc.conditioned.take(3))
         assertEquals(
-            TimeWindow(7.8, 34.2),
-            txSvc.windows.single()?.let {
-                TimeWindow(Math.round(it.start * 10) / 10.0, Math.round(it.end * 10) / 10.0)
-            },
+            listOf(TimeWindow(2.5, 6.2), TimeWindow(7.8, 34.2), TimeWindow(35.8, 40.0)),
+            txSvc.windows.take(3).map { it?.let { w -> TimeWindow(Math.round(w.start * 10) / 10.0, Math.round(w.end * 10) / 10.0) } },
         )
         val gap = json.path("whisper_run").path("repairs")[0]
         assertEquals("gap", gap.path("kind").asText())
@@ -250,7 +490,8 @@ class WindowRepairTest {
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
 
-        assertEquals(4, txSvc.calls.size)
+        // Four attempts at the widened gap's three chunks, then four at the gap alone, anchored on its edge cues.
+        assertEquals(16, txSvc.calls.size)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 

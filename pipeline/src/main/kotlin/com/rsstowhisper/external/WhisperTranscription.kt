@@ -90,6 +90,14 @@ data class WhisperTranscription(
             return if (checked == 0) 0.0 else misplaced.toDouble() / checked
         }
 
+    /** The same decode [seconds] later: a clip's times count from the clip's start. */
+    fun shifted(seconds: Double): WhisperTranscription =
+        of(
+            cues.map { it.copy(start = it.start + seconds, end = it.end + seconds) },
+            words.map { it.copy(start = it.start + seconds, end = it.end + seconds) },
+            run,
+        )
+
     /** Newline-delimited JSON, gzipped. ~274 KB per episode before compression. */
     fun writeWords(path: Path) {
         val mapper = ObjectMapper()

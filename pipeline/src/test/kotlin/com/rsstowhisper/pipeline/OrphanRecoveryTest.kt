@@ -126,7 +126,7 @@ class OrphanRecoveryTest {
         assertTrue(json["episode_ad_markers"].isNull)
     }
 
-    /** Blocked by putting a directory where the sidecar has to go. */
+    /** Blocked by putting a directory where the staged sidecar has to go. */
     @Test
     fun `an orphan whose sidecar cannot be written is not counted as recovered`(
         @TempDir dataDir: Path,
@@ -137,7 +137,7 @@ class OrphanRecoveryTest {
                 dataDir,
                 listOf(podcast),
                 makeFeed(liveEntry()),
-                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve("words.jsonl.gz")) },
+                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve(stagedWordsName())) },
             )
 
         pipeline.run()

@@ -1,5 +1,6 @@
 package com.rsstowhisper.pipeline
 
+import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.WhisperTranscription
 
 /**
@@ -52,6 +53,17 @@ object TranscriptQuality {
      */
     const val MAX_REPEATED_CUE_RUN = 4
 
+    /**
+     * A stretch-copy: whisper spends a whole 30 s window on a few words it has
+     * just transcribed, and the real speech in that window is lost. Signature
+     * from #98: a cue of 20 s or more, under 0.8 words/s, with 80% of its words
+     * already in the previous three cues.
+     */
+    const val MIN_STRETCH_SECONDS = 20.0
+    const val MAX_STRETCH_WORDS_PER_SECOND = 0.8
+    const val MIN_STRETCH_COPIED_SHARE = 0.8
+    private const val STRETCH_LOOKBACK_CUES = 3
+
     const val LOW_CONFIDENCE_PROBABILITY = 0.3
 
     const val MAX_LOW_CONFIDENCE_SHARE = 0.2
@@ -65,6 +77,7 @@ object TranscriptQuality {
     const val FLAG_SHREDDED_CUES = "shredded-cues"
     const val FLAG_REPETITION_LOOP = "repetition-loop"
     const val FLAG_LOW_CONFIDENCE = "low-confidence"
+    const val FLAG_STRETCH_COPY = "stretch-copy"
 
     fun score(transcription: WhisperTranscription): QualityReport {
         val cues = transcription.cues
@@ -83,6 +96,7 @@ object TranscriptQuality {
 
         val repeatedShare = repeatedShare(words)
         val longestRepeatedCueRun = longestRepeatedCueRun(cues.map { it.text })
+        val stretchCopies = stretchCopyCues(cues).size
 
         // Empty for anything decoded before token_timestamps was turned on, and
         // an absent signal must not read as a passing one.
@@ -105,6 +119,7 @@ object TranscriptQuality {
         if (repeatedShare > MAX_REPEATED_SHARE || longestRepeatedCueRun >= MAX_REPEATED_CUE_RUN) {
             flags += FLAG_REPETITION_LOOP
         }
+        if (stretchCopies > 0) flags += FLAG_STRETCH_COPY
         if (lowConfidenceShare != null && lowConfidenceShare > MAX_LOW_CONFIDENCE_SHARE) flags += FLAG_LOW_CONFIDENCE
 
         return QualityReport(
@@ -117,7 +132,22 @@ object TranscriptQuality {
             wordCount = wordCount,
             cueCount = cues.size,
             flags = flags,
+            stretchCopies = stretchCopies,
         )
+    }
+
+    internal fun stretchCopyCues(cues: List<Cue>): List<Int> {
+        val tokens = cues.map { cue -> TOKEN.findAll(cue.text.lowercase()).map { it.value }.toList() }
+        return cues.indices.filter { i ->
+            val cue = cues[i]
+            val seconds = cue.end - cue.start
+            val words = tokens[i]
+            if (seconds < MIN_STRETCH_SECONDS || words.isEmpty() || words.size / seconds >= MAX_STRETCH_WORDS_PER_SECOND) {
+                return@filter false
+            }
+            val previous = tokens.subList(maxOf(0, i - STRETCH_LOOKBACK_CUES), i).flatten().toSet()
+            previous.isNotEmpty() && words.count { it in previous }.toDouble() / words.size >= MIN_STRETCH_COPIED_SHARE
+        }
     }
 
     /**
@@ -164,6 +194,8 @@ object TranscriptQuality {
     }
 
     private val WHITESPACE = Regex("\\s+")
+
+    private val TOKEN = Regex("[a-z0-9']+")
 }
 
 /** Paired so nothing downstream can write a transcript without its score. */
@@ -188,6 +220,8 @@ data class QualityReport(
     val wordCount: Int,
     val cueCount: Int,
     val flags: List<String>,
+    /** Null for a report stored before stretch-copies were measured, which is not the same as none. */
+    val stretchCopies: Int? = null,
 ) {
     val isFlagged: Boolean get() = flags.isNotEmpty()
 
@@ -201,9 +235,13 @@ data class QualityReport(
         // Counting only what both reports could have raised. low-confidence
         // needs word probabilities, so a decode scored without them cannot trip
         // it and would win on raw count against one that did.
-        val bothMeasured = hasWordTimes && other.hasWordTimes
-        val mine = comparableFlagCount(bothMeasured)
-        val theirs = other.comparableFlagCount(bothMeasured)
+        val unmeasured =
+            buildSet {
+                if (!hasWordTimes || !other.hasWordTimes) add(TranscriptQuality.FLAG_LOW_CONFIDENCE)
+                if (stretchCopies == null || other.stretchCopies == null) add(TranscriptQuality.FLAG_STRETCH_COPY)
+            }
+        val mine = flags.count { it !in unmeasured }
+        val theirs = other.flags.count { it !in unmeasured }
 
         return when {
             // Ahead of the count because an empty decode trips exactly one
@@ -219,9 +257,6 @@ data class QualityReport(
             else -> hasWordTimes && !other.hasWordTimes
         }
     }
-
-    private fun comparableFlagCount(bothMeasured: Boolean): Int =
-        if (bothMeasured) flags.size else flags.count { it != TranscriptQuality.FLAG_LOW_CONFIDENCE }
 
     /**
      * Both, because the flag is only as good as whoever wrote the report:
@@ -249,6 +284,7 @@ data class QualityReport(
             "low_confidence_share" to lowConfidenceShare?.let { round(it) },
             "word_count" to wordCount,
             "cue_count" to cueCount,
+            "stretch_copies" to stretchCopies,
             "flags" to flags,
         )
 
@@ -279,6 +315,7 @@ data class QualityReport(
                 wordCount = number(stored["word_count"])?.toInt() ?: 0,
                 cueCount = number(stored["cue_count"])?.toInt() ?: 0,
                 flags = flags,
+                stretchCopies = number(stored["stretch_copies"])?.toInt(),
             )
         }
 

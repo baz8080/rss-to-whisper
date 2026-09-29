@@ -30,8 +30,27 @@ data class RetranscribeRequest(
      * prompt, a model change -- is invisible to a flag count.
      */
     val force: Boolean = false,
+    /** Re-decode only the windows around loops and stretch-copies, not the whole episode. */
+    val repairWindows: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
+
+    companion object {
+        private val ID = Regex("[0-9a-fA-F]{8}")
+
+        /**
+         * One target per line, as `<podcast dir>/<episode dir>` or a bare id.
+         * Blank lines and `#` comments are skipped, and anything after a tab
+         * is ignored, so `--verify-pairs` output can be fed straight back in.
+         */
+        fun parseList(lines: List<String>): Pair<List<String>, List<String>> {
+            val targets =
+                lines.map { it.substringBefore('\t').trim() }
+                    .filter { it.isNotEmpty() && !it.startsWith("#") }
+            val (ids, paths) = targets.partition { ID.matches(it) }
+            return paths to ids
+        }
+    }
 }
 
 /**
@@ -150,19 +169,26 @@ internal object RetranscribeTargets {
         }
     }
 
-    /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. */
-    private fun episodeDirs(dataDir: Path): List<Path> =
-        listDirectories(dataDir)
+    /** Every `<data dir>/<podcast>/<episode>` directory, in a stable order. [strict] throws on a directory it cannot list. */
+    internal fun episodeDirs(
+        dataDir: Path,
+        strict: Boolean = false,
+    ): List<Path> =
+        listDirectories(dataDir, strict)
             // logs/ sits beside the podcast directories and holds no episodes.
             .filter { it.name != "logs" }
-            .flatMap { listDirectories(it) }
+            .flatMap { listDirectories(it, strict) }
 
-    private fun listDirectories(path: Path): List<Path> =
+    private fun listDirectories(
+        path: Path,
+        strict: Boolean,
+    ): List<Path> =
         try {
             Files.list(path).use { stream ->
                 stream.filter { Files.isDirectory(it) }.toList().sortedBy { it.name }
             }
         } catch (e: Exception) {
+            if (strict) throw e
             logger.error("Could not list $path", e)
             emptyList()
         }

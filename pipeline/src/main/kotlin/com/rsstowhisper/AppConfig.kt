@@ -16,6 +16,8 @@ data class AppConfig(
     /** Where the mp3s go, under the same `<podcast>/<episode>` layout. Blank means [dataDirectory]. */
     val audioDirectory: String = "",
     val whisperServerUrl: String = "",
+    /** A label recorded with each decode; the server does not report which model it loaded. */
+    val whisperModel: String? = null,
     val skipAfterConsecutive: Int = 20,
     val excludeTitleKeywords: List<String> = DEFAULT_EXCLUDE_TITLE_KEYWORDS,
     val minEpisodeDurationSeconds: Int = 150,
@@ -31,6 +33,15 @@ data class AppConfig(
      */
     val initialPrompt: String? = null,
     val qualityRetry: Boolean = true,
+    /**
+     * Decode first with no earlier text in context, which stops the loops and
+     * stretch-copies conditioning feeds. It drops the initial prompt too, so a
+     * flagged result is retried with it.
+     */
+    val decodeWithoutHistory: Boolean = false,
+    /** whisper.cpp's `whisper-vad-speech-segments` and a Silero model, so window repair can tell silence from speech. */
+    val vadBinary: String? = null,
+    val vadModel: String? = null,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */
@@ -44,6 +55,7 @@ data class AppConfig(
      * a feed thinking it has the punctuation lever when it does not.
      */
     internal fun validate() {
+        require((vadBinary == null) == (vadModel == null)) { "vad_binary and vad_model are set together or not at all" }
         checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {
@@ -176,6 +188,10 @@ data class AppConfig(
                 dataDirectory = dataDirectory,
                 audioDirectory = audioDirectory,
                 whisperServerUrl = whisperServerUrl,
+                whisperModel =
+                    args.whisperModel
+                        ?: env["PIPELINE_WHISPER_MODEL"]?.takeIf { it.isNotBlank() }
+                        ?: raw.whisperModel,
                 verbose = args.verbose ?: envVerbose ?: raw.verbose,
                 recoverOrphans = args.recoverOrphans ?: raw.recoverOrphans,
                 orphanRecoveryLimit = args.orphanRecoveryLimit ?: raw.orphanRecoveryLimit,

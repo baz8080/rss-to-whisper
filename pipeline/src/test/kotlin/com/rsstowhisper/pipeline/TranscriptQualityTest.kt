@@ -264,11 +264,56 @@ class TranscriptQualityTest {
                 "low_confidence_share",
                 "word_count",
                 "cue_count",
+                "stretch_copies",
                 "flags",
             ),
             map.keys,
         )
         assertEquals(emptyList<String>(), map["flags"])
+    }
+
+    private fun withCues(vararg cues: Cue): WhisperTranscription = WhisperTranscription("WEBVTT\n\n", emptyList(), cues = cues.toList())
+
+    @Test
+    fun `a 30 second window holding a copy of the last cue is a stretch-copy`() {
+        val report =
+            TranscriptQuality.score(
+                withCues(
+                    Cue(0.0, 4.0, " And we were using fluorophores to label building blocks."),
+                    Cue(4.0, 34.0, " using fluorophores to label building blocks."),
+                ),
+            )
+
+        assertEquals(1, report.stretchCopies)
+        assertTrue(TranscriptQuality.FLAG_STRETCH_COPY in report.flags)
+    }
+
+    /** A long cue of new words is slow speech, not a copy. */
+    @Test
+    fun `a long sparse cue of new words is not a stretch-copy`() {
+        val report =
+            TranscriptQuality.score(
+                withCues(
+                    Cue(0.0, 4.0, " And we were using fluorophores to label building blocks."),
+                    Cue(4.0, 34.0, " Then the music swells for a while."),
+                ),
+            )
+
+        assertEquals(0, report.stretchCopies)
+    }
+
+    /** Stored before the measure existed: it could not have raised the flag, so it must not win for lacking it. */
+    @Test
+    fun `stretch-copy only counts against a report that measured it`() {
+        val stored = QualityReport.fromMap(TranscriptQuality.score(healthy()).toMap() - "stretch_copies")!!
+        val stretched =
+            TranscriptQuality.score(transcription(healthyTexts(60), secondsPerCue = 3.0)).copy(
+                flags = listOf(TranscriptQuality.FLAG_STRETCH_COPY),
+                stretchCopies = 1,
+            )
+
+        assertEquals(null, stored.stretchCopies)
+        assertFalse(stored.isBetterThan(stretched))
     }
 
     /** A report whose decode carried no word probabilities, as a server ignoring token_timestamps gives. */

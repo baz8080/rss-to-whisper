@@ -60,7 +60,7 @@ class PodcastPipelineRunTest {
      * writeWords swallows its exception, so without the check the run would go
      * on to write transcript.json and mark done an episode that will never get
      * its sidecar -- which is what writing words first exists to prevent.
-     * Blocked by putting a directory where the sidecar has to go.
+     * Blocked by putting a directory where the staged sidecar has to go.
      */
     @Test
     fun `an episode whose sidecar cannot be written is left for the next run`(
@@ -72,14 +72,14 @@ class PodcastPipelineRunTest {
                 tempDir,
                 podcasts,
                 makeFeed(makeEntry("My Episode")),
-                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve("words.jsonl.gz")) },
+                onTranscribe = { audio -> Files.createDirectory(audio.parent.resolve(stagedWordsName())) },
             )
         blocked.run()
 
         val episodeDir = Files.list(tempDir.resolve("Show")).use { it.toList() }.single()
         assertFalse(Files.exists(episodeDir.resolve("transcript.json")))
 
-        Files.deleteIfExists(episodeDir.resolve("words.jsonl.gz"))
+        Files.deleteIfExists(episodeDir.resolve(stagedWordsName()))
         val (retry, _, _) = buildPipeline(tempDir, podcasts, makeFeed(makeEntry("My Episode")))
         retry.run()
 
@@ -732,6 +732,48 @@ class PodcastPipelineRunTest {
     }
 
     @Test
+    fun `decoding without history retries a flagged decode with it`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(twoFlagJson(), healthyJson()),
+                decodeWithoutHistory = true,
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf(false, true), txSvc.conditioned)
+        @Suppress("UNCHECKED_CAST")
+        val run = transcriptJson(tempDir)["whisper_run"] as Map<String, Any?>
+        assertEquals("true", (run["request"] as Map<*, *>)["carry_initial_prompt"])
+    }
+
+    @Test
+    fun `decoding without history keeps a clean first decode`(
+        @TempDir tempDir: Path,
+    ) {
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("My Episode")),
+                vtts = listOf(healthyJson()),
+                decodeWithoutHistory = true,
+            )
+
+        pipeline.run()
+
+        assertEquals(listOf(false), txSvc.conditioned)
+        @Suppress("UNCHECKED_CAST")
+        val run = transcriptJson(tempDir)["whisper_run"] as Map<String, Any?>
+        assertEquals("0", (run["request"] as Map<*, *>)["max_context"])
+    }
+
+    @Test
     fun `--no-quality-retry keeps the first decode and makes one call`(
         @TempDir tempDir: Path,
     ) {
@@ -854,5 +896,24 @@ class PodcastPipelineRunTest {
         @Suppress("UNCHECKED_CAST")
         return com.fasterxml.jackson.databind.ObjectMapper()
             .readValue(Files.readString(episodeDir.resolve("transcript.json")), Map::class.java) as Map<String, Any?>
+    }
+
+    @Test
+    fun `a server that misplaces word times stops a feed run at the first episode`(
+        @TempDir tempDir: Path,
+    ) {
+        val vadServer =
+            """{"segments":[{"start":0.0,"end":1.0,"text":" Hello.","words":[""" +
+                """{"word":" Hello.","start":50.0,"end":51.0,"probability":0.9}]}]}"""
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(PodcastConfig(name = "Show", url = "https://feed")),
+                makeFeed(makeEntry("One"), makeEntry("Two")),
+                vtt = vadServer,
+            )
+
+        assertFalse(pipeline.run())
+        assertEquals(1, txSvc.calls.size)
     }
 }

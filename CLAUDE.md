@@ -36,6 +36,7 @@ Configuration comes from `pipeline/.env` — copy `pipeline/.env.example` and fi
 - `PIPELINE_AUDIO_DIRECTORY` — optional; where the mp3s go instead, under the same `<podcast>/<episode>` layout
 - `PIPELINE_WHISPER_SERVER_URL` — URL of the whisper HTTP server
 - `PIPELINE_VERBOSE` — set to `true` to enable debug logging
+- `PIPELINE_WHISPER_MODEL` — optional label for the model the server loaded, recorded with each decode
 
 Each of those has a command-line equivalent that takes precedence (`--config`, `--data-dir`,
 `--audio-dir`, `--whisper-url`, `--verbose`/`--no-verbose`), which is how two instances run side by side:
@@ -59,6 +60,17 @@ would otherwise decode in the wrong language silently.
 Warnings and errors are mirrored to `<data-dir>/logs/pipeline-errors.log`, and the run
 prints a warning/error count when it finishes. Every run also writes what it did to
 `<data-dir>/logs/run-<stamp>.json`, copied to `logs/latest-run.json`.
+
+`transcript.json` and `words.jsonl.gz` are written only together, by `writeTranscriptArtifacts`,
+and carry the same run id (`whisper_run.run_id`, and `run` on every word line). Nothing else may
+write either file. `--verify-pairs` lists every episode whose pair disagrees, and
+`--retranscribe-list <file>` re-transcribes such a list. `--list-defects` lists every episode `--repair-windows` would
+find something in.
+
+`--repair-windows` with any re-transcription target re-decodes only the windows around
+loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues
+either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`
+(optional) let it drop cues over non-speech and judge lost speech by what VAD hears.
 
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.

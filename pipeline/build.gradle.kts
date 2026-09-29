@@ -28,3 +28,14 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter-params:5.14.3")
 }
+
+// Recorded in every transcript's whisper_run, so a pair can be traced to the code that wrote it.
+val gitVersion =
+    providers.exec {
+        commandLine("git", "describe", "--always", "--dirty")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim() }
+
+tasks.jar {
+    manifest { attributes("Implementation-Version" to gitVersion.getOrElse("")) }
+}

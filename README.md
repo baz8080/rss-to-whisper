@@ -787,10 +787,11 @@ prompt. It is off by default.
 ```
 
 Re-decodes only the stretches of each target around its defects, instead of the whole
-episode, and splices them into the pair on disk. A defect is a stretch-copy, a run of
-four or more identical cues, an echo or long copy of the cues before it, or a cue of 10 s
-or more that is nothing but a sentence of the initial prompt: over music or silence, a
-prompted decode voices the prompt.
+episode, and splices them into the pair on disk. A defect is a stretch-copy, a loop (four or more identical cues, a few cues repeated in
+turn, or one cue repeating a phrase faster than anyone speaks), an echo or long copy of the
+cues before it, or a cue of 10 s or more that is nothing but a sentence of the initial prompt
+or one of whisper's stock phrases ("Thanks for watching."): over music or silence, a decode
+voices them.
 
 - **Windows** are the defective cues plus two good cues either side. whisper-server
   decodes just that stretch (`offset_t`, `duration`); nothing is cut from the mp3.
@@ -801,9 +802,12 @@ prompted decode voices the prompt.
   the anchor's, past a word the anchor does not have, and only then cut by time, in the
   clock the other anchor's words set. The new window's clock is mapped onto the old one
   between the two anchors.
-- **Attempts.** Prompted, then without history (`max_context=0`), twice over: whisper can
-  skip speech on one decode and keep it on the next. A window is applied only if it comes
-  back with fewer defects than it had, counting any sentence of the prompt it now holds.
+- **Attempts.** Prompted, then without history (`max_context=0`), then both again at
+  temperature 0.2, then with a beam of 8: whisper can skip speech on one decode and keep it
+  on another, but since v1.9.4 only if the request differs. A window is applied only if it
+  comes back with fewer defects than it had, counting any sentence of the prompt it now
+  holds; an attempt holding a prompt sentence as long as a leak is refused outright, as is
+  one that drops a cue the base had right where speech is heard under it.
 - **Lost speech.** An attempt that leaves more than 2 s of speech without a word near it
   is refused: whisper can skip a whole window and carry on, and the words either side
   still match. Without VAD, the speech is the base's own words in the window's good cues.

@@ -456,28 +456,47 @@ class PodcastPipeline(
             } finally {
                 pool.shutdownNow()
             }
-        val found = lines.filterNotNull()
-        found.forEach { out.append(it).append('\n') }
-        logger.info("${found.size} of ${dirs.size} episodes have defects to repair")
-        return true
+        var found = 0
+        var unreadable = 0
+        for (line in lines) {
+            line.fold(
+                onSuccess = { text ->
+                    if (text != null) {
+                        out.append(text).append('\n')
+                        found++
+                    }
+                },
+                onFailure = {
+                    logger.warn(it.message)
+                    unreadable++
+                },
+            )
+        }
+        logger.info(
+            "$found of ${dirs.size} episodes have defects to repair" + if (unreadable > 0) "; $unreadable could not be read" else "",
+        )
+        return unreadable == 0
     }
 
-    private fun defectLine(dir: Path): String? {
+    /** The episode's --list-defects line, null if it has none; a failure if it cannot be judged. */
+    private fun defectLine(dir: Path): Result<String?> {
         val label = "${dir.parent.fileName}/${dir.fileName}"
         return try {
             @Suppress("UNCHECKED_CAST")
             val existing = jsonMapper.readValue(Files.readString(dir.resolve(TRANSCRIPT_FILENAME)), Map::class.java) as Map<String, Any?>
             val parsed = TranscriptPair.parseCues(existing["episode_transcript"]?.toString().orEmpty())
-            if (parsed.any { it.start == null || it.end == null }) return "$label\tunparseable"
+            if (parsed.any { it.start == null || it.end == null }) {
+                return Result.failure(IllegalStateException("$label: a cue timestamp does not parse"))
+            }
             val cues = parsed.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
             val podcast = podcastForDir(config.podcasts, dir.parent.fileName.toString())
-            val prompt = WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt)
-            val defects = WindowRepair.defectCues(cues, prompt)
-            if (defects.isEmpty()) return null
-            val kinds = WindowRepair.defectKinds(cues, prompt).entries.joinToString("\t") { "${it.key}=${it.value}" }
-            "$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds"
+            val byKind = WindowRepair.defectsByKind(cues, WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt))
+            val defects = WindowRepair.defectCues(cues, byKind)
+            if (defects.isEmpty()) return Result.success(null)
+            val kinds = byKind.entries.joinToString("\t") { "${it.key}=${it.value.size}" }
+            Result.success("$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds")
         } catch (e: Exception) {
-            "$label\tcould not be read: ${e.message}"
+            Result.failure(IllegalStateException("$label could not be read: ${e.message}", e))
         }
     }
 
@@ -1534,6 +1553,7 @@ class PodcastPipeline(
                     "speech_checked" to (speech != null),
                     "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
                     "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
+                    "refused_for_dropped_cue" to tried.droppedCue,
                 )
             best?.let { replacements += WindowRepair.fitStretched(it) }
         }
@@ -1579,6 +1599,7 @@ class PodcastPipeline(
         val bestConditioned: Boolean,
         val bestRetry: Map<String, String>,
         val lost: List<Double>,
+        val droppedCue: Int,
         val disputedLeft: Boolean,
         val disputedRight: Boolean,
     )
@@ -1603,6 +1624,7 @@ class PodcastPipeline(
         var bestRetry = emptyMap<String, String>()
         var bestThin = Double.MAX_VALUE
         val lost = mutableListOf<Double>()
+        var droppedCue = 0
         var disputedLeft = false
         var disputedRight = false
         for ((conditioned, retry) in REPAIR_ATTEMPTS) {
@@ -1618,8 +1640,12 @@ class PodcastPipeline(
             if (WindowRepair.voicesPrompt(base, replacement, prompt, defects)) continue
             val spoken = speech ?: WindowRepair.spokenIn(base, replacement.range, defects)
             val missed = WindowRepair.lostSpeech(base, replacement, spoken)
-            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS || WindowRepair.dropsHeardCue(base, replacement, defects, spoken)) {
+            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
                 lost += missed
+                continue
+            }
+            if (WindowRepair.dropsHeardCue(base, replacement, defects, spoken)) {
+                droppedCue++
                 continue
             }
             val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
@@ -1633,7 +1659,7 @@ class PodcastPipeline(
             }
             if (bestDefects == 0 && bestThin <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
         }
-        return Tried(best, bestDefects, bestConditioned, bestRetry, lost, disputedLeft, disputedRight)
+        return Tried(best, bestDefects, bestConditioned, bestRetry, lost, droppedCue, disputedLeft, disputedRight)
     }
 
     private fun readWords(path: Path): List<Word> =

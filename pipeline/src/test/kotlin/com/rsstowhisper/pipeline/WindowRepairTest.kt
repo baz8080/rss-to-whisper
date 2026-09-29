@@ -100,6 +100,51 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `a heard cue of two words is kept only if the attempt says both`() {
+        val cues =
+            listOf(
+                Cue(10.0, 12.0, " We should stop here."),
+                Cue(12.0, 13.4, " Absolutely not."),
+                Cue(13.4, 30.0, " Thanks for watching."),
+            )
+        val speech = listOf(TimeWindow(10.0, 13.4))
+        val dropped = WindowRepair.Replacement(1..2, listOf(Cue(20.0, 21.0, " Thanks.")), listOf(Word(" Thanks", 20.0, 20.5, 0.9, 0)))
+        val kept =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(12.1, 13.3, " Absolutely not.")),
+                listOf(Word(" Absolutely", 12.1, 12.8, 0.9, 0), Word(" not", 12.8, 13.2, 0.9, 0)),
+            )
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(cues), dropped, setOf(2), speech))
+        assertFalse(WindowRepair.dropsHeardCue(transcription(cues), kept, setOf(2), speech))
+    }
+
+    @Test
+    fun `one word whisper splits into pieces counts as one word over a dropped cue's time`() {
+        val cues =
+            listOf(
+                Cue(10.0, 12.0, " We should stop here."),
+                Cue(12.0, 14.0, " Listen on the app every single week."),
+                Cue(14.0, 30.0, " Thanks for watching."),
+            )
+        val speech = listOf(TimeWindow(10.0, 14.0))
+        val pieces =
+            WindowRepair.Replacement(
+                1..2,
+                listOf(Cue(12.2, 13.6, " iHeartRadio")),
+                listOf(
+                    Word(" i", 12.2, 12.4, 0.9, 0),
+                    Word("He", 12.4, 12.7, 0.9, 0),
+                    Word("art", 12.7, 13.0, 0.9, 0),
+                    Word("Radio", 13.0, 13.6, 0.9, 0),
+                ),
+            )
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(cues), pieces, setOf(2), speech))
+    }
+
+    @Test
     fun `an attempt that keeps the sentence, or says something else over it, drops nothing`() {
         val base = transcription(sentenceThenStock)
         val kept =
@@ -228,6 +273,32 @@ class WindowRepairTest {
         val replacement = WindowRepair.anchor(transcription(cues), decoded, 0..1, setOf(1))
 
         assertEquals(" Eric", replacement.words.first().text)
+    }
+
+    @Test
+    fun `a word in pieces held past an anchor is kept whole, not from its second piece`() {
+        val cues =
+            listOf(
+                Cue(1105.24, 1107.94, " or whatever app you use to find your podcasts."),
+                Cue(1108.5, 1138.48, " Thank you."),
+            )
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(1105.24, 1127.34, " Eric Posner, a law professor")),
+                listOf(
+                    Word(" Er", 1105.38, 1106.0, 0.9, 0),
+                    Word("ic", 1106.0, 1110.61, 0.9, 0),
+                    Word(" Posner", 1110.65, 1118.71, 0.9, 0),
+                    Word(",", 1118.71, 1121.41, 0.9, 0),
+                    Word(" a", 1121.41, 1121.52, 0.9, 0),
+                    Word(" law", 1121.52, 1121.82, 0.9, 0),
+                    Word(" professor", 1121.82, 1122.71, 0.9, 0),
+                ),
+            )
+
+        val replacement = WindowRepair.anchor(transcription(cues), decoded, 0..1, setOf(1))
+
+        assertEquals(" Eric", replacement.words.take(2).joinToString("") { it.text })
     }
 
     /** Measured: Citation Needed 2019-07-17, 12:59.2. */
@@ -519,6 +590,19 @@ class WindowRepairTest {
         assertEquals(4, repairs[0].path("defects_before").asInt())
         assertEquals(0, repairs[0].path("defects_after").asInt())
         assertEquals("0", repairs[0].path("request").path("offset_t").asText())
+    }
+
+    @Test
+    fun `list-defects keeps an episode it cannot read out of its list, and says so in its result`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        Files.writeString(dir.resolve("transcript.json"), "{ not json")
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+        val out = StringBuilder()
+
+        assertFalse(pipeline.listDefects(out))
+        assertEquals("", out.toString())
     }
 
     @Test

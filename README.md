@@ -78,8 +78,8 @@ v1.9.4 re-seeds the sampler on every request
 ([whisper.cpp#4025](https://github.com/ggml-org/whisper.cpp/pull/4025)), so a server gives the same
 output for the same request, even when it falls back to sampling. Older servers drift between calls,
 which is what a repeated request used to get its second chance from. So `--repair-windows` tries each
-window prompted and unprompted, then both again at temperature 0.2, then with a beam of 8: each retry
-asks for something different.
+window prompted and unprompted, then both again at temperature 0.2, then both again with a beam of 8:
+each retry asks for something different.
 
 ### Choosing a model
 
@@ -803,11 +803,11 @@ voices them.
   clock the other anchor's words set. The new window's clock is mapped onto the old one
   between the two anchors.
 - **Attempts.** Prompted, then without history (`max_context=0`), then both again at
-  temperature 0.2, then with a beam of 8: whisper can skip speech on one decode and keep it
-  on another, but since v1.9.4 only if the request differs. A window is applied only if it
-  comes back with fewer defects than it had, counting any sentence of the prompt it now
-  holds; an attempt holding a prompt sentence as long as a leak is refused outright, as is
-  one that drops a cue the base had right where speech is heard under it.
+  temperature 0.2, then both again with a beam of 8: whisper can skip speech on one decode
+  and keep it on another, but since v1.9.4 only if the request differs. A window is applied
+  only if it comes back with fewer defects than it had, counting any sentence of the prompt
+  it now holds; an attempt holding a prompt sentence as long as a leak is refused outright,
+  as is one that drops a cue the base had right where speech is heard under it.
 - **Lost speech.** An attempt that leaves more than 2 s of speech without a word near it
   is refused: whisper can skip a whole window and carry on, and the words either side
   still match. Without VAD, the speech is the base's own words in the window's good cues.

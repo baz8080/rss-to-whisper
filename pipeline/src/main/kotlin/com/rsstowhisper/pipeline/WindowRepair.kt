@@ -48,9 +48,14 @@ internal object WindowRepair {
     fun defectCues(
         cues: List<Cue>,
         prompt: Prompt = Prompt.NONE,
+    ): Set<Int> = defectCues(cues, defectsByKind(cues, prompt))
+
+    /** The cues [byKind] names, as [defectsByKind] found them in [cues]. */
+    fun defectCues(
+        cues: List<Cue>,
+        byKind: Map<String, Set<Int>>,
     ): Set<Int> {
-        val defects = TranscriptQuality.stretchCopyCues(cues).toMutableSet()
-        defects += loops(cues) + echoes(cues) + longCopies(cues) + leaks(cues, prompt) + stock(cues)
+        val defects = byKind.values.flatten().toMutableSet()
         // A cue of many words in no time beside a defect is part of it, and must not be kept as an anchor.
         val crammed = cues.indices.filter { crammed(cues[it]) }.toSet()
         var grew = true
@@ -58,19 +63,25 @@ internal object WindowRepair {
         return defects
     }
 
-    /** How many cues of each kind of defect, as [defectCues] finds them. */
+    /** Each kind of defect's cues. */
+    fun defectsByKind(
+        cues: List<Cue>,
+        prompt: Prompt = Prompt.NONE,
+    ): Map<String, Set<Int>> =
+        mapOf(
+            "loop" to loops(cues),
+            "stretch" to TranscriptQuality.stretchCopyCues(cues).toSet(),
+            "echo" to echoes(cues).toSet(),
+            "copy" to longCopies(cues).toSet(),
+            "leak" to leaks(cues, prompt),
+            "stock" to stock(cues),
+        )
+
+    /** How many cues of each kind of defect. */
     fun defectKinds(
         cues: List<Cue>,
         prompt: Prompt = Prompt.NONE,
-    ): Map<String, Int> =
-        mapOf(
-            "loop" to loops(cues).size,
-            "stretch" to TranscriptQuality.stretchCopyCues(cues).size,
-            "echo" to echoes(cues).size,
-            "copy" to longCopies(cues).size,
-            "leak" to leaks(cues, prompt).size,
-            "stock" to stock(cues).size,
-        )
+    ): Map<String, Int> = defectsByKind(cues, prompt).mapValues { it.value.size }
 
     /** Runs of identical cues, with the cue either side that holds the loop's first or last lap. */
     private fun loops(cues: List<Cue>): Set<Int> {
@@ -356,12 +367,13 @@ internal object WindowRepair {
         // Each word is matched whole at its first token: "Spacetime" is " Sp", "ac", "etime" in one decode and one token in another.
         val normalised = MutableList(words.size) { "" }
         val opening = IntArray(words.size) { it }
-        val wordEnd = DoubleArray(words.size) { words[it].end }
+        val closing = IntArray(words.size) { it }
         for (group in spoken(words)) {
             normalised[group.first()] = normalise(group.joinToString("") { words[it].text })
             group.forEach { opening[it] = group.first() }
-            wordEnd[group.first()] = words[group.last()].end
+            closing[group.first()] = group.last()
         }
+        val wordEnd = DoubleArray(words.size) { words[closing[it]].end }
         // Punctuation arrives as words of its own and would break a match between two real ones.
         val content = words.indices.filter { normalised[it].isNotEmpty() }
         val contentText = content.map { normalised[it] }
@@ -413,7 +425,7 @@ internal object WindowRepair {
             } else {
                 val anchor = anchorWords(left).map { normalise(it.text) }
                 val next = (left + 1).takeIf { it in inner && it !in defects }?.let { cue -> anchorWords(cue).map { normalise(it.text) } }
-                from = walkLeft(words, normalised, content, base.cues[left], anchor, shift, next.orEmpty())
+                from = walkLeft(words, normalised, content, opening, closing, base.cues[left], anchor, shift, next.orEmpty())
                 anchorLeft = "time"
             }
             // What is left of the anchor cue's own punctuation belongs to it, not to the repair.
@@ -518,6 +530,8 @@ internal object WindowRepair {
         words: List<Word>,
         normalised: List<String>,
         content: List<Int>,
+        opening: IntArray,
+        closing: IntArray,
         cue: Cue,
         anchor: List<String>,
         shift: Double,
@@ -546,9 +560,9 @@ internal object WindowRepair {
                 // The anchor's closing word, rendered another way: it ends a sentence if the anchor does, or ends inside it.
                 val closes =
                     if (cue.text.trimEnd().lastOrNull() in SENTENCE_ENDS) {
-                        endsSentence(words, at)
+                        endsSentence(words, closing[at])
                     } else {
-                        words[at].end + shift <= cue.end + OVERLAP_SLACK_SECONDS
+                        words[closing[at]].end + shift <= cue.end + OVERLAP_SLACK_SECONDS
                     }
                 if (last >= 0 && next == anchor.size - 1 && words[at].start + shift < cue.end && closes) last = at
                 break
@@ -561,7 +575,7 @@ internal object WindowRepair {
         // A word opening inside the anchor but held well past it is smeared across the cut, not the anchor's: "Eric" held 5 s.
         val cut =
             words.indexOfFirst { it.start + shift >= cue.end - 0.25 || it.end + shift > cue.end + SMEARED_PAST_ANCHOR_SECONDS }
-                .let { if (it < 0) words.size else it }
+                .let { if (it < 0) words.size else opening[it] }
         // No anchor word at all: words timed inside it that open the cue after it were smeared early, not the anchor.
         val head = following.take(ANCHOR_WORDS)
         if (head.size < 2) return cut
@@ -684,26 +698,27 @@ internal object WindowRepair {
     /** Closer than that: a decode that skips a sentence smears its next words across the gap, a word every second or two. */
     const val CLOSE_COVER_SECONDS = 0.5
 
-    /**
-     * Whether [replacement] leaves out a cue the base had right and puts nothing where it was said: a short sentence lost
-     * whole fits inside [MAX_LOST_SPEECH_SECONDS] ("And that all just makes the mystery even more interesting.").
-     * Other words there are whisper hearing something else, as over a hallucinated anchor.
-     */
+    /** Whether [replacement] leaves out a cue the base had right and puts nothing where it was said. */
     fun dropsHeardCue(
         base: WhisperTranscription,
         replacement: Replacement,
         defects: Set<Int>,
         speech: List<TimeWindow>,
     ): Boolean {
-        val said = grams(replacement.cues.flatMap { Prompt.wordsOf(it.text) })
+        val said = replacement.cues.flatMap { Prompt.wordsOf(it.text) }
+        val saidGrams = (1..KEPT_GRAM).associateWith { grams(said, it) }
+        val opens = spoken(replacement.words).map { replacement.words[it.first()].start }
         return replacement.range.any { i ->
             val cue = base.cues[i]
-            val own = grams(Prompt.wordsOf(cue.text))
+            val words = Prompt.wordsOf(cue.text)
+            // A cue of one or two words is kept only if it is said whole.
+            val n = minOf(KEPT_GRAM, words.size)
+            val own = grams(words, n)
             // As many words again over its time is whisper hearing something else there; one or two is not.
-            val otherwise = replacement.words.count { it.start in cue.start..cue.end && normalise(it.text).isNotEmpty() }
-            i !in defects && own.isNotEmpty() && own.count { it in said } < own.size * MIN_KEPT_SHARE &&
+            val otherwise = opens.count { it in cue.start..cue.end }
+            i !in defects && n > 0 && own.count { it in saidGrams.getValue(n) } < own.size * MIN_KEPT_SHARE &&
                 (
-                    otherwise < Prompt.wordsOf(cue.text).size * MIN_OTHER_WORDS_SHARE ||
+                    otherwise < words.size * MIN_OTHER_WORDS_SHARE ||
                         lostSpeech(base, replacement, speech.mapNotNull { it.clip(cue) }, CLOSE_COVER_SECONDS) >= MIN_HEARD_SECONDS
                 ) &&
                 speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start } >= MIN_HEARD_SECONDS
@@ -716,13 +731,10 @@ internal object WindowRepair {
             minOf(end, cue.end),
         ).takeIf { it.end > it.start }
 
-    private fun grams(words: List<String>): Set<List<String>> =
-        (0..words.size - KEPT_GRAM).map {
-            words.subList(
-                it,
-                it + KEPT_GRAM,
-            )
-        }.toSet()
+    private fun grams(
+        words: List<String>,
+        n: Int = KEPT_GRAM,
+    ): Set<List<String>> = (0..words.size - n).map { words.subList(it, it + n) }.toSet()
 
     private const val KEPT_GRAM = 3
 

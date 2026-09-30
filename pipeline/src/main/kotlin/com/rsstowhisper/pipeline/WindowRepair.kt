@@ -498,7 +498,7 @@ internal object WindowRepair {
             val edge = anchorWords(left).lastOrNull()
             val first = (from until until).firstOrNull { normalised[it].isNotEmpty() }
             if (edge != null && first != null && restOf(normalised[first], normalise(edge.text)) &&
-                words[first].start + shift - edge.end <= CUT_WORD_SECONDS
+                words[first].start + shift - base.cues[left].end <= CUT_WORD_SECONDS
             ) {
                 from = closing[first] + 1
                 while (from < until && normalised[from].isEmpty()) from++
@@ -1182,7 +1182,7 @@ internal object WindowRepair {
             "me", "my", "no", "of", "on", "one", "or", "our", "she", "so", "the", "to", "up", "us", "we", "you",
         )
 
-    /** Whisper writes the rest of a cut word at the clip's very start; a word said next comes a moment later. */
+    /** Whisper writes the rest of a cut word at the clip's very start, the anchor cue's end; a word said next comes a moment later. */
     private const val CUT_WORD_SECONDS = 0.15
 
     /** One word the other with a few letters added: "star" and "stars" are different words, not a re-rendering. */

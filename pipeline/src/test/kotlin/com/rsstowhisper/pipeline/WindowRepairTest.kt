@@ -293,6 +293,29 @@ class WindowRepairTest {
         assertEquals(" on another episode of Space Nuts.", text(soon, next))
     }
 
+    /** Measured: 99% Invisible 2013-02-05, 2:36.9: "Warsaw" ends at 156.47, its cue at 156.86, where the clip began: "saw". */
+    @Test
+    fun `the rest of a cut word is timed from the anchor cue's end, where the clip starts`() {
+        val warsaw =
+            WhisperTranscription.of(
+                listOf(Cue(154.0, 156.86, " the old town of Warsaw."), Cue(170.0, 172.0, " Next.")),
+                listOf(
+                    Word(" the", 154.0, 154.3, 0.9, 0),
+                    Word(" old", 154.3, 154.6, 0.9, 0),
+                    Word(" town", 154.6, 155.0, 0.9, 0),
+                    Word(" of", 155.0, 155.3, 0.9, 0),
+                    Word(" Warsaw", 155.3, 156.47, 0.9, 0),
+                    Word(".", 156.47, 156.86, 0.9, 0),
+                    Word(" Next.", 170.0, 172.0, 0.9, 1),
+                ),
+            )
+        val rest = transcription(listOf(Cue(156.86, 160.0, " saw it rebuilt brick by brick.")))
+
+        val replacement = WindowRepair.anchor(warsaw, rest, 0..1, emptySet(), byText = false)
+
+        assertEquals(" it rebuilt brick by brick.", replacement.cues.joinToString("") { it.text })
+    }
+
     /** Measured: Behind the Bastards 2021-10-26, 31:03.9: "for mol" | "for molesting her kids." */
     @Test
     fun `the anchor's opening words said again at the seam are written once, but not when said a second before`() {

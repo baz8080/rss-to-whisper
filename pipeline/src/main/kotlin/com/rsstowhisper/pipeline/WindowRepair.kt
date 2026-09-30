@@ -907,7 +907,8 @@ internal object WindowRepair {
         speech: List<TimeWindow>,
     ): Pair<Cue, List<Word>> {
         if (words.isEmpty()) return cue to words
-        val heard = speech.filter { it.end > cue.start && it.start < cue.end }
+        // From its first word: a cue that begins where the one before ended can open on that one's speech.
+        val heard = speech.filter { it.end > words.first().start && it.start < cue.end }
         // A short sound alone, a jingle's hit, says nothing about where the words are.
         val inside = heard.filterNot { isolatedBlip(it, heard) }.ifEmpty { heard }
         if (inside.isEmpty()) return cue to words

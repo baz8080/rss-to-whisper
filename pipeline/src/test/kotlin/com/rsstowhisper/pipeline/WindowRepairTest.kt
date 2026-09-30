@@ -944,6 +944,34 @@ class WindowRepairTest {
         assertEquals(2900.2, WindowRepair.fitStretched(replacement, paused).words[0].start, 0.001)
     }
 
+    /** Measured: 99% Invisible 2020-12-22, 39:17.9: "You can find us" timed over 6.5 s of silence, said from 2364.6. */
+    @Test
+    fun `a cue opening where the one before ended is fitted from its first word`() {
+        val words =
+            listOf(
+                " You" to 2359.18,
+                " can" to 2360.8,
+                " find" to 2363.4,
+                " us" to 2364.1,
+                " and" to 2365.22,
+                " join" to 2365.3,
+                " discussions" to 2365.4,
+            )
+                .mapIndexed {
+                        i,
+                        (w, t),
+                    ->
+                    Word(w, t, if (i < 6) listOf(2360.8, 2363.4, 2364.1, 2365.22, 2365.3, 2365.4)[i] else 2365.77, 0.9, 0)
+                }
+        val replacement = WindowRepair.Replacement(0..1, listOf(Cue(2357.85, 2365.77, words.joinToString("") { it.text })), words)
+        val speech = listOf(TimeWindow(2347.52, 2358.14), TimeWindow(2364.61, 2378.69))
+
+        val fitted = WindowRepair.dropNonSpeech(replacement, speech)
+
+        assertEquals(2364.61, fitted.cues.single().start, 0.01)
+        assertTrue(fitted.words.all { it.start >= 2364.6 })
+    }
+
     @Test
     fun `a word held before a pause is left where whisper put it`() {
         val replacement =

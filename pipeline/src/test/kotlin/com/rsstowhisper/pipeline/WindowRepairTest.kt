@@ -227,6 +227,26 @@ class WindowRepairTest {
         assertTrue(WindowRepair.losesEdgeSpeech(base, emptied, setOf(1), speech))
     }
 
+    @Test
+    fun `an edge cue's speech the anchor's last word covers is not lost when the cue is written again`() {
+        val edge =
+            listOf(
+                Word(" at", 4.0, 4.4, 0.9, 1),
+                Word(" oracle", 4.4, 5.0, 0.9, 1),
+                Word(" dot", 5.0, 5.4, 0.9, 1),
+                Word(" com.", 5.4, 6.0, 0.9, 1),
+            )
+        val base =
+            WhisperTranscription.of(
+                listOf(Cue(2.0, 3.0, " It begins."), Cue(3.0, 6.0, " at oracle dot com."), Cue(30.0, 33.0, " Next.")),
+                listOf(Word(" It", 2.0, 2.9, 0.9, 0), Word(" begins.", 2.9, 3.0, 0.9, 0)) + edge + Word(" Next.", 30.0, 33.0, 0.9, 2),
+            )
+        val same = WindowRepair.Replacement(1..1, listOf(base.cues[1]), edge.map { it.copy(segment = 0) })
+        val speech = listOf(TimeWindow(2.0, 6.0), TimeWindow(30.0, 33.0))
+
+        assertEquals(0.0, WindowRepair.edgeSpeechLost(base, same, setOf(1), speech).getValue(1), 1e-9)
+    }
+
     /** Measured: 99% Invisible 2023-11-15, 32:29.9: "I've lived through it." | "it. My dad lived through it." */
     @Test
     fun `a word said across the seam with an anchor is written once, by the anchor`() {
@@ -283,6 +303,8 @@ class WindowRepairTest {
         val rest = transcription(listOf(Cue(1724.54, 1725.84, " K slash Radio 4.")))
         val soon = transcription(listOf(Cue(1318.0, 1322.82, " We'll see you very soon"), Cue(1330.0, 1332.0, " Bye.")))
         val next = transcription(listOf(Cue(1322.82, 1325.0, " on another episode of Space Nuts.")))
+        val five = transcription(listOf(Cue(40.0, 43.0, " It was number five."), Cue(50.0, 52.0, " Bye.")))
+        val contraction = transcription(listOf(Cue(43.0, 45.0, " I've been there.")))
 
         fun text(
             base: WhisperTranscription,
@@ -291,6 +313,7 @@ class WindowRepairTest {
 
         assertEquals(" slash Radio 4.", text(bbc, rest))
         assertEquals(" on another episode of Space Nuts.", text(soon, next))
+        assertEquals(" I've been there.", text(five, contraction))
     }
 
     /** Measured: 99% Invisible 2013-02-05, 2:36.9: "Warsaw" ends at 156.47, its cue at 156.86, where the clip began: "saw". */
@@ -344,6 +367,26 @@ class WindowRepairTest {
         assertEquals(" tis to sit with book and pen,", text(panger, lone))
         assertEquals(" Oh,", text(nazis, atSeam))
         assertEquals(" Oh, not a fan", text(nazis, before))
+    }
+
+    @Test
+    fun `a word at a clip's right seam that only starts like the anchor's, or ends a run of two of its words, is kept`() {
+        fun text(
+            fill: String,
+            anchor: String,
+        ) = WindowRepair
+            .anchor(
+                transcription(listOf(Cue(0.0, 4.0, " So that is where it begins."), Cue(9.0, 12.0, anchor))),
+                transcription(listOf(Cue(4.0, 8.9, fill))),
+                0..1,
+                emptySet(),
+                byText = false,
+            ).cues
+            .joinToString("") { it.text }
+
+        assertEquals(" So that was the year, and I", text(" So that was the year, and I", " It was the worst year."))
+        assertEquals(" and then there's a", text(" and then there's a", " About ten years later."))
+        assertEquals(" She told me, and I said", text(" She told me, and I said", " And I think that's right."))
     }
 
     /** Measured: Behind the Bastards 2021-04-08, 1:51.8: "'m Jake Brennan", its "I" timed before where the chunk was picked up. */
@@ -657,6 +700,22 @@ class WindowRepairTest {
 
         // Four attempts at the widened gap's three chunks, then four at the gap alone, anchored on its edge cues.
         assertEquals(16, txSvc.calls.size)
+        assertEquals(before, Files.readString(dir.resolve("transcript.json")))
+    }
+
+    @Test
+    fun `an episode whisper wrote nothing for has no gap to fill`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, emptyList())
+        val before = Files.readString(dir.resolve("transcript.json"))
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = emptyList(), speechDetector = FakeSpeechDetector(promoSpeech))
+
+        val errors = loggedAtError { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true)) }
+
+        assertEquals(emptyList<String>(), errors)
+        assertEquals(0, txSvc.calls.size)
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
@@ -1622,6 +1681,21 @@ class WindowRepairTest {
         val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
 
         assertEquals(" You know, the thing is the telescope.", replacement.cues.first().text)
+    }
+
+    @Test
+    fun `a word the speaker says again a moment either side of a window's anchors is kept`() {
+        val base = transcription(looping().take(1) + listOf(Cue(3.0, 6.0, " And I said no.")) + looping().drop(2))
+        val decoded =
+            decodedWindow(
+                Cue(3.0, 6.0, " And I said no."),
+                Cue(6.4, 17.7, " No, I didn't. Today we are talking about the telescope and"),
+                Cue(18.0, 21.0, " And then we found something odd."),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 1..6, setOf(2, 3, 4, 5))
+
+        assertEquals(" No, I didn't. Today we are talking about the telescope and", replacement.cues.single().text)
     }
 
     /** Measured: "It's the size of a squash court." spread 27.55–35.62 s across VAD's silence at 30.08–33.95 s; heard from 34 s. */

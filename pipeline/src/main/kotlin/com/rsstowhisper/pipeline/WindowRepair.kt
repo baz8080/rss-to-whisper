@@ -445,7 +445,8 @@ internal object WindowRepair {
             }
         }
 
-        // A clip cut at an anchor hears its edge words across the cut; a window hears the speaker say a phrase again: "you know".
+        // A clip cut at an anchor hears its edge words across the cut; a window hears the speaker say a phrase again ("you know"),
+        // so only one word begun with the anchor's is the same saying.
         val seamWords = if (byText) 1 else MAX_REPEATED_WORDS
         var until = words.size
         var anchorRight = "none"
@@ -480,7 +481,13 @@ internal object WindowRepair {
                     closesAnchor = false,
                     clipped = !byText,
                 )
-            if (k > 0 && head.first().start - (wordEnd[said.last()] + shift) <= SAME_WORD_AT_SEAM_SECONDS) until = said[said.size - k]
+            val apart =
+                when {
+                    k == 0 -> Double.MAX_VALUE
+                    byText -> abs(words[said.last()].start + shift - head.first().start)
+                    else -> head.first().start - (wordEnd[said.last()] + shift)
+                }
+            if (apart <= SAME_WORD_AT_SEAM_SECONDS) until = said[said.size - k]
         }
         // The anchor's edge words said again within half a second of the seam are one saying heard across it: "it" | "it."
         if (left != null && from < until) {
@@ -488,7 +495,13 @@ internal object WindowRepair {
             val said = (from until until).filter { normalised[it].isNotEmpty() }.take(seamWords)
             val k =
                 saidAgain(said.map { normalised[it] }, tail.takeLast(MAX_REPEATED_WORDS).map { normalise(it.text) }, closesAnchor = true)
-            if (k > 0 && words[said.first()].start + shift - tail.last().end <= SAME_WORD_AT_SEAM_SECONDS) {
+            val apart =
+                when {
+                    k == 0 -> Double.MAX_VALUE
+                    byText -> abs(words[said.first()].start + shift - tail.last().start)
+                    else -> words[said.first()].start + shift - tail.last().end
+                }
+            if (apart <= SAME_WORD_AT_SEAM_SECONDS) {
                 from = closing[said[k - 1]] + 1
                 while (from < until && normalised[from].isEmpty()) from++
             }
@@ -497,7 +510,8 @@ internal object WindowRepair {
         if (!byText && left != null && from < until) {
             val edge = anchorWords(left).lastOrNull()
             val first = (from until until).firstOrNull { normalised[it].isNotEmpty() }
-            if (edge != null && first != null && restOf(normalised[first], normalise(edge.text)) &&
+            val said = first?.let { (it..closing[it]).joinToString("") { i -> words[i].text } }
+            if (edge != null && first != null && said != null && restOf(said, normalise(edge.text)) &&
                 words[first].start + shift - base.cues[left].end <= CUT_WORD_SECONDS
             ) {
                 from = closing[first] + 1
@@ -818,7 +832,8 @@ internal object WindowRepair {
     ): Map<Int, Double> =
         edges.associateWith { e ->
             val cue = base.cues[e]
-            uncovered(replacement.words, speech, cue.start, cue.end) - uncovered(base.words, speech, cue.start, cue.end)
+            val after = base.words.filter { it.segment !in replacement.range } + replacement.words
+            uncovered(after, speech, cue.start, cue.end) - uncovered(base.words, speech, cue.start, cue.end)
         }
 
     fun lastSpokenEnd(decode: WhisperTranscription): Double? = decode.words.lastOrNull { normalise(it.text).isNotEmpty() }?.end
@@ -1166,16 +1181,38 @@ internal object WindowRepair {
             } else {
                 val mine = said.takeLast(k)
                 val theirs = anchor.take(k)
-                val cut = clipped && theirs.last().startsWith(mine.last())
-                mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || k > 2)
+                val cut = clipped && mine.last() !in NEXT_WORDS && theirs.last().startsWith(mine.last())
+                val guessed = k > 2 && 2 * commonLetters(mine.last(), theirs.last()) >= mine.last().length
+                mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || guessed)
             }
         } ?: 0
 
-    /** [said] is the end of [anchor] and not a word that as well comes next: "soon" | "on another episode". */
+    /** [said] is the end of [anchor] and not a word that as well comes next: "soon" | "on another episode", "five" | "I've". */
     private fun restOf(
         said: String,
         anchor: String,
-    ) = said != anchor && anchor.endsWith(said) && said !in NEXT_WORDS
+    ): Boolean {
+        val rest = normalise(said)
+        return rest != anchor && anchor.endsWith(rest) && rest !in NEXT_WORDS && !CONTRACTION.containsMatchIn(said)
+    }
+
+    private val CONTRACTION = Regex("\\p{L}['’]\\p{L}")
+
+    /** Letters [a] and [b] share in order: a guess at a word heard in part keeps some of it ("event" for "Avenger"). */
+    private fun commonLetters(
+        a: String,
+        b: String,
+    ): Int {
+        var previous = IntArray(b.length + 1)
+        for (i in 1..a.length) {
+            val current = IntArray(b.length + 1)
+            for (j in 1..b.length) {
+                current[j] = if (a[i - 1] == b[j - 1]) previous[j - 1] + 1 else maxOf(previous[j], current[j - 1])
+            }
+            previous = current
+        }
+        return previous[b.length]
+    }
 
     private val NEXT_WORDS =
         setOf(
@@ -1353,9 +1390,8 @@ internal object WindowRepair {
     )
 
     /**
-     * The speech between [from] and [to] in pieces that fit one of whisper's windows, each cut at the widest pause that
-     * leaves it at least [MIN_CHUNK_SECONDS] long. Speech with no pause for longer than a window is cut inside it, the
-     * two pieces sharing [CHUNK_OVERLAP_SECONDS] so the words there come whole from one of them.
+     * The speech between [from] and [to] in pieces that fit one of whisper's windows, cut at the widest pause; with no
+     * pause, cut inside the speech, the two sharing [CHUNK_OVERLAP_SECONDS] so the words there come whole from one.
      */
     fun chunks(
         speech: List<TimeWindow>,
@@ -1404,9 +1440,8 @@ internal object WindowRepair {
     }
 
     /**
-     * A clip cut on a word at the gap's end writes a guess at it or nothing: hear the word whole, keep to within a word's
-     * timing of the edge, and leave the anchor's word said again to the same-word rule. Not at its start: whisper writes the
-     * anchor's last word again there, timed a second late.
+     * A clip cut on a word at the gap's end writes a guess at it or nothing, so the last chunk hears past the end. Not the
+     * first: whisper writes the anchor's last word again there, timed a second late.
      */
     private fun heardPastEdges(
         chunks: MutableList<Chunk>,

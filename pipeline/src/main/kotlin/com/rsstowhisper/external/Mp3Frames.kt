@@ -11,10 +11,8 @@ class Mp3Clip(
 )
 
 /**
- * Where each Layer III frame of an mp3 sits, timed the way whisper.cpp's decoder (dr_mp3) times the whole file:
- * from the frame after a Xing/Info frame, less the LAME encoder delay. It lets a stretch go up on its own, which is
- * both far quicker than the whole file with offset_t and all whisper hears: given the whole file it decodes a full
- * 30 s window from the offset, and writes speech from past the stretch's end.
+ * Where each Layer III frame of an mp3 sits, timed as whisper.cpp's decoder (dr_mp3) times the whole file: from the frame
+ * after a Xing/Info frame, less the LAME delay. A stretch sent alone is all whisper hears; with offset_t it hears 30 s.
  */
 class Mp3Frames private constructor(
     private val path: Path,

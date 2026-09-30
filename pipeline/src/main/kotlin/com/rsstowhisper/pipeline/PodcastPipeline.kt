@@ -1584,7 +1584,7 @@ class PodcastPipeline(
                 )
             best?.let { replacements += WindowRepair.fitStretched(it, speech) }
         }
-        if (fillGaps && speech != null) {
+        if (fillGaps && speech != null && base.cues.isNotEmpty()) {
             val frames by lazy { Mp3Frames.of(audioPath) }
             for (gap in WindowRepair.gapWindows(base, speech)) {
                 // Sharing an anchor is fine: only a cue one replaces and the other needs is a clash.

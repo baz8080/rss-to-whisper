@@ -493,6 +493,17 @@ internal object WindowRepair {
                 while (from < until && normalised[from].isEmpty()) from++
             }
         }
+        // A clip cut inside the anchor's last word writes the rest of it as a word: "bbc.co.uk" | "K", "a blog," | "Log".
+        if (!byText && left != null && from < until) {
+            val edge = anchorWords(left).lastOrNull()
+            val first = (from until until).firstOrNull { normalised[it].isNotEmpty() }
+            if (edge != null && first != null && restOf(normalised[first], normalise(edge.text)) &&
+                words[first].start + shift - edge.end <= CUT_WORD_SECONDS
+            ) {
+                from = closing[first] + 1
+                while (from < until && normalised[from].isEmpty()) from++
+            }
+        }
 
         val clock = clock(newLeft, oldLeft, newRight, oldRight)
         val floor = left?.let { base.cues[it].end }
@@ -1158,6 +1169,21 @@ internal object WindowRepair {
                 mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || k > 2)
             }
         } ?: 0
+
+    /** [said] is the end of [anchor] and not a word that as well comes next: "soon" | "on another episode". */
+    private fun restOf(
+        said: String,
+        anchor: String,
+    ) = said != anchor && anchor.endsWith(said) && said !in NEXT_WORDS
+
+    private val NEXT_WORDS =
+        setOf(
+            "a", "all", "an", "and", "are", "as", "at", "be", "but", "by", "for", "he", "her", "his", "i", "id", "if", "in", "is", "it",
+            "me", "my", "no", "of", "on", "one", "or", "our", "she", "so", "the", "to", "up", "us", "we", "you",
+        )
+
+    /** Whisper writes the rest of a cut word at the clip's very start; a word said next comes a moment later. */
+    private const val CUT_WORD_SECONDS = 0.15
 
     /** One word the other with a few letters added: "star" and "stars" are different words, not a re-rendering. */
     private fun prefixed(

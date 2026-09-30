@@ -276,6 +276,23 @@ class WindowRepairTest {
         assertEquals(" iHeartRadio app, Apple Podcasts.", replacement.cues.joinToString("") { it.text })
     }
 
+    /** Measured: The Life Scientific 2013-01-08, 28:44.5 ("bbc.co.uk" | "K"); Space Nuts 454, 22:02.8 ("soon" | "on"). */
+    @Test
+    fun `the rest of a word the clip cut into is not written, but a word said next is`() {
+        val bbc = transcription(listOf(Cue(1717.98, 1724.54, " in the Science Explorer at bbc.co.uk"), Cue(1730.66, 1732.02, " Hello.")))
+        val rest = transcription(listOf(Cue(1724.54, 1725.84, " K slash Radio 4.")))
+        val soon = transcription(listOf(Cue(1318.0, 1322.82, " We'll see you very soon"), Cue(1330.0, 1332.0, " Bye.")))
+        val next = transcription(listOf(Cue(1322.82, 1325.0, " on another episode of Space Nuts.")))
+
+        fun text(
+            base: WhisperTranscription,
+            decoded: WhisperTranscription,
+        ) = WindowRepair.anchor(base, decoded, 0..1, emptySet(), byText = false).cues.joinToString("") { it.text }
+
+        assertEquals(" slash Radio 4.", text(bbc, rest))
+        assertEquals(" on another episode of Space Nuts.", text(soon, next))
+    }
+
     /** Measured: Behind the Bastards 2021-10-26, 31:03.9: "for mol" | "for molesting her kids." */
     @Test
     fun `the anchor's opening words said again at the seam are written once, but not when said a second before`() {

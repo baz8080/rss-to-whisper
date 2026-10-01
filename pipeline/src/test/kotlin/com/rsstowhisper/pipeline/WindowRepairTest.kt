@@ -755,6 +755,51 @@ class WindowRepairTest {
         assertEquals(before, Files.readString(dir.resolve("transcript.json")))
     }
 
+    @Test
+    fun `a short edge cue said again as a number in its place keeps its words`() {
+        val base = transcription(listOf(Cue(0.0, 3.0, " So it begins."), Cue(3.0, 3.6, " One more."), Cue(33.0, 36.0, " The end.")))
+        val said = Cue(3.0, 3.6, " 1 also.").let { WindowRepair.Replacement(1..1, listOf(it), transcription(listOf(it)).words) }
+
+        assertFalse(WindowRepair.dropsHeardCue(base, said, emptySet(), listOf(TimeWindow(0.0, 36.0)), strict = setOf(1)))
+    }
+
+    @Test
+    fun `a gap decode that drops a cue naming music is refused however much it recovers`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(8.0, 9.2, " ♪ music playing ♪"),
+                Cue(9.2, 36.0, " Thank you."),
+                Cue(36.0, 39.0, " And then we found something odd."),
+                Cue(39.5, 42.0, " It changed everything for us."),
+            )
+        val dir = episode(tempDir, cues)
+        val lyrics =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 20.0, " Oh, the land of the free and the home of the brave, we sing it all night long,"),
+                Cue(20.0, 34.0, " and the crowd sings with us in the hall until the morning comes around."),
+                saidAround[1],
+            )
+        val filler = serverJson(Cue(8.0, 34.0, " Thank you."))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(lyrics, lyrics, lyrics, filler),
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertFalse("home of the brave" in vtt, vtt)
+    }
+
     /** Measured: Lions Led By Donkeys 296, 1:05:00: "One man said, quote," came back as "1." with the 20 s quote after it. */
     @Test
     fun `a gap decode that recovers many times what it loses is kept`(
@@ -882,6 +927,8 @@ class WindowRepairTest {
         assertTrue(WindowRepair.describesSound(" ♪ music playing ♪"))
         assertTrue(WindowRepair.describesSound(" CHOIR SINGS"))
         assertFalse(WindowRepair.describesSound(" Number four."))
+        assertFalse(WindowRepair.describesSound(" © BF-WATCH TV 2021"))
+        assertFalse(WindowRepair.describesSound(" NASA."))
     }
 
     @Test

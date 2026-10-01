@@ -785,7 +785,7 @@ internal object WindowRepair {
         val spokenWords = spoken(replacement.words)
         val opens = spokenWords.map { replacement.words[it.first()] }.filterNot(::credit).map { it.start }
 
-        fun textOf(group: List<Int>) = normalise(group.joinToString("") { replacement.words[it].text })
+        fun textOf(group: List<Int>) = digits(normalise(group.joinToString("") { replacement.words[it].text }))
         val saidAt = spokenWords.map { textOf(it) to replacement.words[it.first()].start }
         val looped = defects.filter { it in replacement.range }.map { d -> Prompt.wordsOf(base.cues[d].text).map(::digits) }
         return replacement.range.filter { i ->
@@ -812,8 +812,10 @@ internal object WindowRepair {
     /** whisper naming what it hears instead of words, which is right over music: "♪ music playing ♪", "CHOIR SINGS". */
     fun describesSound(text: String): Boolean {
         val t = text.trim()
-        val letters = t.filter { it.isLetter() }
-        return '♪' in t || '♫' in t || t.startsWith("[") || t.startsWith("(") || (letters.length >= 4 && letters.all { it.isUpperCase() })
+        if (STOCK.any { it.voices(t) }) return false
+        val words = Prompt.wordsOf(t)
+        val capitals = words.size >= 2 && t.filter { it.isLetter() }.all { it.isUpperCase() }
+        return '♪' in t || '♫' in t || t.startsWith("[") || t.startsWith("(") || capitals
     }
 
     /** A number said as a word and written as digits is the same: "One man said" and "1." */
@@ -841,7 +843,7 @@ internal object WindowRepair {
         words: List<String>,
         saidAt: List<Pair<String, Double>>,
     ): Boolean {
-        val own = words.map(::normalise).filter { it.length >= MIN_REWORDED_LETTERS }.toSet()
+        val own = words.map(::normalise).filter { it.length >= MIN_REWORDED_LETTERS || it.all(Char::isDigit) }.toSet()
         val near = (cue.start - SAME_WORD_AT_SEAM_SECONDS)..(cue.end + SAME_WORD_AT_SEAM_SECONDS)
         return saidAt.any { (word, at) -> word in own && at in near }
     }
@@ -1728,7 +1730,12 @@ internal object WindowRepair {
     fun cost(
         cue: Cue,
         speech: List<TimeWindow>,
-    ): Double = minOf(speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start }, Prompt.wordsOf(cue.text).size * SECONDS_PER_WORD)
+    ): Double = minOf(heardUnder(cue, speech), Prompt.wordsOf(cue.text).size * SECONDS_PER_WORD)
+
+    fun heardUnder(
+        cue: Cue,
+        speech: List<TimeWindow>,
+    ): Double = speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start }
 
     private const val SECONDS_PER_WORD = 0.5
 

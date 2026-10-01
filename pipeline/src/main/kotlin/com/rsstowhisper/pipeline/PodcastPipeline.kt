@@ -97,6 +97,8 @@ class PodcastPipeline(
             ?.joinToString("|") { """\b${Regex.escape(it.trim())}\b""" }
             ?.toRegex(RegexOption.IGNORE_CASE)
 
+    private val recordJson = ObjectMapper()
+
     private val jsonMapper =
         ObjectMapper().apply {
             enable(SerializationFeature.INDENT_OUTPUT)
@@ -1630,7 +1632,7 @@ class PodcastPipeline(
                             },
                     )
                 // An episode with every gap refused writes no record; the log keeps its attempts.
-                logger.debug("Gap record: {}", ObjectMapper().writeValueAsString(repairs.last()))
+                if (logger.isDebugEnabled) logger.debug("Gap record: {}", recordJson.writeValueAsString(repairs.last()))
                 best?.let { replacements += WindowRepair.fitStretched(it, speech) }
             }
         }
@@ -1779,8 +1781,8 @@ class PodcastPipeline(
                     "dropped_cues" to
                         dropped.map {
                             val cue = base.cues[it]
-                            val heard = speech.sumOf { w -> maxOf(0.0, minOf(w.end, cue.end) - maxOf(w.start, cue.start)) }
-                            mapOf("cue" to it, "heard_s" to Math.round(heard * 10) / 10.0, "text" to cue.text.trim())
+                            val heard = Math.round(WindowRepair.heardUnder(cue, speech) * 10) / 10.0
+                            mapOf("cue" to it, "heard_s" to heard, "text" to cue.text.trim())
                         },
                 )
             if (refused != null) {

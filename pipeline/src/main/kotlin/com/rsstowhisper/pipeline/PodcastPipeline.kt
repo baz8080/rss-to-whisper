@@ -1555,8 +1555,9 @@ class PodcastPipeline(
                 tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
             }
             previousLast = range.last
-            windowed += range
             val best = tried.best
+            // Only a window replaced holds its gaps; one given up on leaves them to gap repair, as a later run would.
+            if (best != null) windowed += range
             val window = WindowRepair.window(cues, range)
             val before = WindowRepair.defectsBefore(base, range, defects)
             repairs +=

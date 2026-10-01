@@ -32,6 +32,8 @@ data class RetranscribeRequest(
     val force: Boolean = false,
     /** Re-decode only the windows around loops and stretch-copies, not the whole episode. */
     val repairWindows: Boolean = false,
+    /** Re-decode the stretches VAD hears that no word covers, from where the speech starts. */
+    val repairGaps: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 

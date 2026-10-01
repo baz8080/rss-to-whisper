@@ -62,7 +62,10 @@ internal val USAGE =
       --repair-windows           Re-decode only the windows around loops and
                                  stretch-copies of the targets above, and
                                  splice them in; the rest of each episode is kept
-      --retranscribe-force       Keep the new decode even if it scores worse.
+      --repair-gaps              Re-decode the stretches VAD hears that no word
+                                 covers, in chunks that start on the speech, and
+                                 splice them in. Needs vad_binary and vad_model
+      --retranscribe-force      Keep the new decode even if it scores worse.
                                  Only with --retranscribe, --retranscribe-id or
                                  --retranscribe-list,
                                  never with --retranscribe-flagged
@@ -96,6 +99,7 @@ internal data class Args(
     val verifyPairs: Boolean = false,
     val listDefects: Boolean = false,
     val repairWindows: Boolean = false,
+    val repairGaps: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -117,6 +121,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--verify-pairs" -> args.copy(verifyPairs = true)
                 "--list-defects" -> args.copy(listDefects = true)
                 "--repair-windows" -> args.copy(repairWindows = true)
+                "--repair-gaps" -> args.copy(repairGaps = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
@@ -164,6 +169,12 @@ internal fun parseArgs(argv: Array<String>): Args {
     }
     if (args.repairWindows && !args.isRetranscribe) {
         error("--repair-windows needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.repairGaps && !args.isRetranscribe) {
+        error("--repair-gaps needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.repairGaps && args.retranscribeForce) {
+        error("--repair-gaps keeps a gap's decode only when it covers more speech, so --retranscribe-force does not apply")
     }
     if (args.repairWindows && args.retranscribeForce) {
         error("--repair-windows keeps a window only when it comes back better, so --retranscribe-force does not apply")

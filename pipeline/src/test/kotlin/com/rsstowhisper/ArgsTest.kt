@@ -209,6 +209,17 @@ class ArgsTest {
     }
 
     @Test
+    fun `repair-gaps needs targets, and keeps a gap only when it covers more speech`() {
+        assertTrue(parseArgs(arrayOf("--repair-gaps", "--retranscribe-id", "abcd1234")).repairGaps)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--repair-gaps")) }
+        assertFailsWith<IllegalStateException> {
+            parseArgs(
+                arrayOf("--repair-gaps", "--retranscribe-id", "abcd1234", "--retranscribe-force"),
+            )
+        }
+    }
+
+    @Test
     fun `list-defects only reads`() {
         assertTrue(parseArgs(arrayOf("--list-defects")).listDefects)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--retranscribe-id", "abcd1234")) }

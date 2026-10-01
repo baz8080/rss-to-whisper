@@ -12,6 +12,7 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.SpeechDetector
 import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
@@ -167,6 +168,7 @@ internal class FakeTranscriber(
         conditioned: Boolean,
         window: TimeWindow?,
         retry: Map<String, String>,
+        clip: Mp3Clip?,
     ): String {
         val response = vtts[minOf(calls.size, vtts.size - 1)]
         calls.add(audioPath)

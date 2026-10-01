@@ -756,6 +756,184 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `a short edge cue said again as a number in its place keeps its words`() {
+        val base = transcription(listOf(Cue(0.0, 3.0, " So it begins."), Cue(3.0, 3.6, " One more."), Cue(33.0, 36.0, " The end.")))
+        val said = Cue(3.0, 3.6, " 1 also.").let { WindowRepair.Replacement(1..1, listOf(it), transcription(listOf(it)).words) }
+
+        assertFalse(WindowRepair.dropsHeardCue(base, said, emptySet(), listOf(TimeWindow(0.0, 36.0)), strict = setOf(1)))
+    }
+
+    @Test
+    fun `a gap decode that drops a cue naming music is refused however much it recovers`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(8.0, 9.2, " ♪ music playing ♪"),
+                Cue(9.2, 36.0, " Thank you."),
+                Cue(36.0, 39.0, " And then we found something odd."),
+                Cue(39.5, 42.0, " It changed everything for us."),
+            )
+        val dir = episode(tempDir, cues)
+        val lyrics =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 20.0, " Oh, the land of the free and the home of the brave, we sing it all night long,"),
+                Cue(20.0, 34.0, " and the crowd sings with us in the hall until the morning comes around."),
+                saidAround[1],
+            )
+        val filler = serverJson(Cue(8.0, 34.0, " Thank you."))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(lyrics, lyrics, lyrics, filler),
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertFalse("home of the brave" in vtt, vtt)
+    }
+
+    /** Measured: Lions Led By Donkeys 296, 1:05:00: "One man said, quote," came back as "1." with the 20 s quote after it. */
+    @Test
+    fun `a gap decode that recovers many times what it loses is kept`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues =
+            listOf(
+                Cue(0.0, 3.0, " So that is where the story begins."),
+                Cue(3.0, 6.0, " We looked at the data again, carefully."),
+                Cue(8.0, 9.2, " One man said, quote,"),
+                Cue(9.2, 36.0, " Thank you."),
+                Cue(36.0, 39.0, " And then we found something odd."),
+                Cue(39.5, 42.0, " It changed everything for us."),
+            )
+        val dir = episode(tempDir, cues)
+        val quote =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 20.0, " 1. Surrounded from all sides, without powder or ammunition from which to fight,"),
+                Cue(20.0, 34.0, " the powder lacking from having been burnt through the battle by their own soldiers."),
+                saidAround[1],
+            )
+        // The quote for the first attempt's three chunks; every attempt after it, and the gap anchored on that cue, hears filler.
+        val filler = serverJson(Cue(8.0, 34.0, " Thank you."))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(quote, quote, quote, filler),
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("Surrounded from all sides" in vtt, vtt)
+    }
+
+    /** Measured: 99% Invisible 2021-08-04, 14:13: anchored on its edge cues the gap gained 0.8 s and lost a word. */
+    @Test
+    fun `a gap tried again anchored on its edge cues is kept only if it recovers a good deal more`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val most =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 30.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians to hear"),
+                saidAround[1],
+            )
+        val bit = serverJson(Cue(8.0, 31.0, " hey its nora jones and my podcast is back with more of my favorite musicians so come"))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = List(12) { most } + bit,
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("musicians to hear" in vtt, vtt)
+    }
+
+    /** Measured: Universe Today 103, 6:04: a video podcast says "Thanks for watching." and goes on. */
+    @Test
+    fun `a stock phrase said amid the speech a gap decode recovers is kept`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val outro =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 10.0, " Thanks for watching."),
+                Cue(10.0, 22.0, " You can subscribe to these videos on YouTube or at our website, slash video."),
+                Cue(22.0, 34.0, " And if you want to see extra content, you can join our community on Patreon."),
+                saidAround[1],
+            )
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, vtts = listOf(outro), speechDetector = FakeSpeechDetector(promoSpeech))
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("You can subscribe to these videos" in vtt, vtt)
+    }
+
+    @Test
+    fun `a gap left short with its edge cues decoded again is tried anchored on them, and the fuller kept`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val half = serverJson(saidAround[0], Cue(8.0, 18.0, " Hey, it's Nora Jones, and my podcast is back."), saidAround[1])
+        val whole =
+            serverJson(
+                Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians."),
+                Cue(20.0, 34.0, " So come hang out with us in the studio and listen to the show."),
+            )
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = List(12) { half } + whole,
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("come hang out with us" in vtt, vtt)
+    }
+
+    @Test
+    fun `a number said as a word matches its digits, and whisper naming music is told from a line`() {
+        val episode =
+            transcription(listOf(Cue(0.0, 3.0, " So it begins."), Cue(3.0, 4.5, " Chapter one begins."), Cue(33.0, 36.0, " The end.")))
+        val digits =
+            Cue(3.0, 4.5, " Chapter 1 begins.").let { WindowRepair.Replacement(1..1, listOf(it), transcription(listOf(it)).words) }
+
+        assertFalse(WindowRepair.dropsHeardCue(episode, digits, emptySet(), listOf(TimeWindow(0.0, 36.0)), strict = setOf(1)))
+        assertTrue(WindowRepair.describesSound(" ♪ music playing ♪"))
+        assertTrue(WindowRepair.describesSound(" CHOIR SINGS"))
+        assertFalse(WindowRepair.describesSound(" Number four."))
+        assertFalse(WindowRepair.describesSound(" © BF-WATCH TV 2021"))
+        assertFalse(WindowRepair.describesSound(" NASA."))
+        assertFalse(WindowRepair.describesSound(" USA! USA!"))
+        assertFalse(WindowRepair.describesSound(" 1914, 1918."))
+    }
+
+    @Test
     fun `an episode whisper wrote nothing for has no gap to fill`(
         @TempDir tempDir: Path,
     ) {
@@ -855,6 +1033,69 @@ class WindowRepairTest {
             )
 
         assertTrue(WindowRepair.dropsHeardCue(transcription(cues), pieces, setOf(2), speech))
+    }
+
+    /** Measured: Irish History 2022-01-31, 42:57: the right line held from the window start, replaced by a garble. */
+    @Test
+    fun `a line held across the stretch before it is said may be re-timed but not replaced`() {
+        val cues =
+            listOf(
+                Cue(2546.5, 2576.5, " \u00a9 BF-WATCH TV 2021"),
+                Cue(2576.5, 2606.1, " The famine continued in Ireland into the 1850s."),
+                Cue(2606.1, 2608.8, " and Irish people continued to leave."),
+            )
+        val base = transcription(cues)
+        val garbled =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(2603.4, 2606.1, " to help us so that until those")),
+                transcription(listOf(Cue(2603.4, 2606.1, " to help us so that until those"))).words,
+            )
+        val retimed =
+            WindowRepair.Replacement(
+                0..1,
+                listOf(Cue(2603.4, 2606.1, " The famine continued in Ireland into the 1850s,")),
+                transcription(listOf(Cue(2603.4, 2606.1, " The famine continued in Ireland into the 1850s,"))).words,
+            )
+        val speech = listOf(TimeWindow(2603.3, 2608.8))
+        val held = WindowRepair.heldLines(base, 0..1, setOf(0))
+
+        assertEquals(setOf(1), held)
+        assertTrue(WindowRepair.dropsHeardCue(base, garbled, setOf(0), speech, held))
+        assertFalse(WindowRepair.dropsHeardCue(base, retimed, setOf(0), speech, held))
+    }
+
+    /** Measured: The Rest Is History 682, 1:04:13: the stock credit written where "Hi everybody, it's Dominic Sandbrook here." is said. */
+    @Test
+    fun `a stock credit over a heard line is not whisper hearing something else there`() {
+        val cues =
+            listOf(Cue(3850.0, 3852.0, " Hi everybody, it's Dominic Sandbrook here."), Cue(3852.0, 3858.0, " There are two weeks to go."))
+        val credit =
+            WindowRepair.Replacement(
+                0..0,
+                listOf(Cue(3850.0, 3852.0, " \u00a9 BF-WATCH TV 2021")),
+                transcription(listOf(Cue(3850.0, 3852.0, " \u00a9 BF-WATCH TV 2021 transcribed by ESO, translated by"))).words,
+            )
+
+        assertTrue(WindowRepair.dropsHeardCue(transcription(cues), credit, emptySet(), listOf(TimeWindow(3850.0, 3858.0))))
+    }
+
+    @Test
+    fun `a piece of a flagged cue's words goes with it`() {
+        val cues =
+            listOf(
+                Cue(1279.0, 1280.0, " He saw a group of officers who were in the same line of duty."),
+                Cue(1280.0, 1281.2, " line of duty."),
+                Cue(1281.2, 1282.2, " He saw a group of officers who were in the same line of duty."),
+            )
+        val real =
+            WindowRepair.Replacement(
+                0..2,
+                listOf(Cue(1281.3, 1282.2, " digging in under Nash")),
+                transcription(listOf(Cue(1281.3, 1282.2, " digging in under Nash"))).words,
+            )
+
+        assertFalse(WindowRepair.dropsHeardCue(transcription(cues), real, setOf(0, 2), listOf(TimeWindow(1279.0, 1282.2))))
     }
 
     @Test

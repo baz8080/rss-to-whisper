@@ -765,19 +765,34 @@ internal object WindowRepair {
         replacement: Replacement,
         defects: Set<Int>,
         speech: List<TimeWindow>,
+        strict: Set<Int> = emptySet(),
+    ): Boolean = droppedHeardCues(base, replacement, defects, speech, strict).isNotEmpty()
+
+    /** The cues [dropsHeardCue] finds left out. */
+    fun droppedHeardCues(
+        base: WhisperTranscription,
+        replacement: Replacement,
+        defects: Set<Int>,
+        speech: List<TimeWindow>,
         /** Cues whose words must survive whatever else is said over their time: a gap's edge cues, smeared over when dropped. */
         strict: Set<Int> = emptySet(),
-    ): Boolean {
-        val said = replacement.cues.flatMap { Prompt.wordsOf(it.text) }
+    ): List<Int> {
+        val said = replacement.cues.flatMap { Prompt.wordsOf(it.text) }.map(::digits)
         val saidGrams = (1..KEPT_GRAM).associateWith { grams(said, it) }
-        val spokenWords = spoken(replacement.words)
-        val opens = spokenWords.map { replacement.words[it.first()].start }
 
-        fun textOf(group: List<Int>) = normalise(group.joinToString("") { replacement.words[it].text })
+        // whisper's stock credits are not it hearing something else there.
+        fun credit(word: Word) = STOCK.any { it.voices(replacement.cues[word.segment].text) }
+        val spokenWords = spoken(replacement.words)
+        val opens = spokenWords.map { replacement.words[it.first()] }.filterNot(::credit).map { it.start }
+
+        fun textOf(group: List<Int>) = digits(normalise(group.joinToString("") { replacement.words[it].text }))
         val saidAt = spokenWords.map { textOf(it) to replacement.words[it.first()].start }
-        return replacement.range.any { i ->
+        val looped = defects.filter { it in replacement.range }.map { d -> Prompt.wordsOf(base.cues[d].text).map(::digits) }
+        return replacement.range.filter { i ->
             val cue = base.cues[i]
-            val words = Prompt.wordsOf(cue.text)
+            val words = Prompt.wordsOf(cue.text).map(::digits)
+            // A piece of a flagged cue's words is part of that loop or copy: "line of duty." beside "...the same line of duty."
+            if (i !in strict && looped.any { d -> words.isNotEmpty() && matches(d, words).isNotEmpty() }) return@filter false
             // A cue of one or two words is kept only if it is said whole.
             val n = minOf(KEPT_GRAM, words.size)
             val own = grams(words, n)
@@ -794,6 +809,27 @@ internal object WindowRepair {
         }
     }
 
+    /** whisper naming what it hears instead of words, which is right over music: "♪ music playing ♪", "CHOIR SINGS". */
+    fun describesSound(text: String): Boolean {
+        val t = text.trim()
+        if (STOCK.any { it.voices(t) }) return false
+        // Two or more long words all in capitals, as whisper writes a sound; not a chant, acronyms or numbers: "USA! USA!".
+        val words = t.split(WHITESPACE).map { w -> w.filter { it.isLetter() } }
+        val capitals = words.size >= 2 && words.all { it.length >= 4 && it.all(Char::isUpperCase) }
+        return '♪' in t || '♫' in t || t.startsWith("[") || t.startsWith("(") || capitals
+    }
+
+    /** A number said as a word and written as digits is the same: "One man said" and "1." */
+    private fun digits(word: String) = NUMBER_WORDS[word] ?: word
+
+    private val NUMBER_WORDS =
+        (
+            listOf(
+                "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen",
+                "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+            ) + listOf("thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
+        ).mapIndexed { i, word -> word to (if (i <= 20) i else 30 + 10 * (i - 21)).toString() }.toMap()
+
     /** A second of speech under a cue, or for one that must keep its words, half of a shorter one: "I understand." in 0.7 s. */
     private fun heardEnough(
         cue: Cue,
@@ -808,12 +844,29 @@ internal object WindowRepair {
         words: List<String>,
         saidAt: List<Pair<String, Double>>,
     ): Boolean {
-        val own = words.map(::normalise).filter { it.length >= MIN_REWORDED_LETTERS }.toSet()
+        val own = words.map(::normalise).filter { it.length >= MIN_REWORDED_LETTERS || it.all(Char::isDigit) }.toSet()
         val near = (cue.start - SAME_WORD_AT_SEAM_SECONDS)..(cue.end + SAME_WORD_AT_SEAM_SECONDS)
         return saidAt.any { (word, at) -> word in own && at in near }
     }
 
     private const val MIN_REWORDED_LETTERS = 2
+
+    /** Cues of [range] that hold a line across the stretch before it is said: its words are right, its time is not. */
+    fun heldLines(
+        base: WhisperTranscription,
+        range: IntRange,
+        defects: Set<Int>,
+    ): Set<Int> =
+        range.filter { i ->
+            val cue = base.cues[i]
+            val said = Prompt.wordsOf(cue.text).size
+            val held = cue.end - cue.start
+            i !in defects && said >= MIN_HELD_WORDS && held >= MIN_HELD_SECONDS && said / held < MAX_HELD_WORDS_PER_SECOND
+        }.toSet()
+
+    private const val MIN_HELD_WORDS = 4
+    private const val MIN_HELD_SECONDS = 10.0
+    private const val MAX_HELD_WORDS_PER_SECOND = 0.5
 
     /** A gap's edge cues may be reworded, being what whisper gets wrong around a skip, but not left without words. */
     fun losesEdgeSpeech(
@@ -1648,6 +1701,8 @@ internal object WindowRepair {
         replacement: Replacement,
         prompt: Prompt = Prompt.NONE,
         defects: Set<Int> = emptySet(),
+        /** False where the caller weighs a stock phrase against what the decode recovers: [stockAfter]. */
+        stock: Boolean = true,
     ): Int {
         val spliced = splice(base, listOf(replacement))
         val first = replacement.range.first
@@ -1656,13 +1711,34 @@ internal object WindowRepair {
         val leaks = inside.filter { prompt.voices(spliced.cues[it].text) && Prompt.wordsOf(spliced.cues[it].text) !in said }
         // At its own 30 s boundaries a window decode crams in paraphrases of what it just said.
         val crammed = inside.filter { crammed(spliced.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
-        val stock =
-            inside.filter {
-                    cue ->
-                STOCK.any { it.voices(spliced.cues[cue].text) } && Prompt.wordsOf(spliced.cues[cue].text) !in said
-            }
-        return (defectCues(spliced.cues, prompt) + leaks + crammed + stock).count { it in inside }
+        val stocked = if (stock) stockAfter(base, replacement, defects).map { first + it } else emptyList()
+        return (defectCues(spliced.cues, prompt) + leaks + crammed + stocked).count { it in inside }
     }
+
+    /** The replacement's cues that are one of whisper's stock phrases the base did not say there. */
+    fun stockAfter(
+        base: WhisperTranscription,
+        replacement: Replacement,
+        defects: Set<Int> = emptySet(),
+    ): List<Int> {
+        val said = saidBy(base, replacement, defects)
+        return replacement.cues.indices.filter { i ->
+            STOCK.any { it.voices(replacement.cues[i].text) } && Prompt.wordsOf(replacement.cues[i].text) !in said
+        }
+    }
+
+    /** What a cue's loss costs: the speech under it, but no more than its words take to say. */
+    fun cost(
+        cue: Cue,
+        speech: List<TimeWindow>,
+    ): Double = minOf(heardUnder(cue, speech), Prompt.wordsOf(cue.text).size * SECONDS_PER_WORD)
+
+    fun heardUnder(
+        cue: Cue,
+        speech: List<TimeWindow>,
+    ): Double = speech.mapNotNull { it.clip(cue) }.sumOf { it.end - it.start }
+
+    private const val SECONDS_PER_WORD = 0.5
 
     /** whisper's own filler: a stock phrase or a sentence of the prompt, which a decode may drop at any edge. */
     fun filler(

@@ -369,24 +369,76 @@ class WindowRepairTest {
         assertEquals(" Oh, not a fan", text(nazis, before))
     }
 
+    /** Measured: Supermassive 2025-12-23, 0:27.2 ("We" | "We're"); Behind the Bastards 2026-08-20, 2:32.6 ("Survivor"). */
     @Test
-    fun `a word at a clip's right seam that only starts like the anchor's, or ends a run of two of its words, is kept`() {
+    fun `a clip's take on the anchor's opening words is not written, cut short or a guess unlike the word`() {
         fun text(
-            fill: String,
-            anchor: String,
-        ) = WindowRepair
-            .anchor(
-                transcription(listOf(Cue(0.0, 4.0, " So that is where it begins."), Cue(9.0, 12.0, anchor))),
-                transcription(listOf(Cue(4.0, 8.9, fill))),
-                0..1,
-                emptySet(),
-                byText = false,
-            ).cues
-            .joinToString("") { it.text }
+            base: List<Cue>,
+            fill: Cue,
+        ) = WindowRepair.anchor(transcription(base), transcription(listOf(fill)), 0..1, emptySet(), byText = false).cues.joinToString("") {
+            it.text
+        }
 
-        assertEquals(" So that was the year, and I", text(" So that was the year, and I", " It was the worst year."))
-        assertEquals(" and then there's a", text(" and then there's a", " About ten years later."))
-        assertEquals(" She told me, and I said", text(" She told me, and I said", " And I think that's right."))
+        assertEquals(
+            " Izzy Clark and astrophysicist Dr. Becky Smethurst.",
+            text(
+                listOf(
+                    Cue(10.0, 14.0, " With me, science journalist"),
+                    Cue(27.52, 33.36, " We're doing it. We are traveling through time."),
+                ),
+                Cue(20.0, 27.52, " Izzy Clark and astrophysicist Dr. Becky Smethurst. We"),
+            ),
+        )
+        assertEquals(
+            " Abducted, stalked, controlled, and nearly silenced.",
+            text(
+                listOf(
+                    Cue(145.08, 148.5, " Every week, I'm with survivors who live through the unthinkable."),
+                    Cue(152.62, 156.02, " These are stories about what it takes to make it out alive."),
+                ),
+                Cue(148.82, 152.62, " Abducted, stalked, controlled, and nearly silenced. These are Survivor"),
+            ),
+        )
+    }
+
+    /** Measured: The Infinite Monkey Cage 2013-07-29, 0:34.2: whisper splits "zurich.com" as " zur" "ich" "." "com". */
+    @Test
+    fun `a guess at the anchor's third word is not written when whisper split the two before it`() {
+        val base =
+            WhisperTranscription.of(
+                listOf(
+                    Cue(28.0, 32.4, " choose Zurich for your car and"),
+                    Cue(34.24, 37.2, " Visit zurich.ie and protect your world today."),
+                ),
+                listOf(
+                    Word(" choose Zurich for your car and", 28.0, 32.4, 0.9, 0),
+                    Word(" Visit", 34.24, 34.24, 0.9, 1),
+                    Word(" zur", 34.37, 34.42, 0.9, 1),
+                    Word("ich", 34.42, 34.59, 0.9, 1),
+                    Word(".", 34.72, 34.88, 0.9, 1),
+                    Word("ie", 34.88, 35.03, 0.9, 1),
+                    Word(" and", 35.03, 35.23, 0.9, 1),
+                    Word(" protect your world today.", 35.31, 37.2, 0.9, 1),
+                ),
+            )
+        val decoded =
+            WhisperTranscription.of(
+                listOf(Cue(32.56, 34.29, " home insurance. Visit zurich.com")),
+                listOf(
+                    Word(" home", 32.56, 32.79, 0.9, 0),
+                    Word(" insurance", 32.79, 33.29, 0.9, 0),
+                    Word(".", 33.49, 33.49, 0.9, 0),
+                    Word(" Visit", 33.53, 33.78, 0.9, 0),
+                    Word(" zur", 33.78, 33.93, 0.9, 0),
+                    Word("ich", 34.04, 34.12, 0.9, 0),
+                    Word(".", 34.12, 34.24, 0.9, 0),
+                    Word("com", 34.29, 34.29, 0.9, 0),
+                ),
+            )
+
+        val replacement = WindowRepair.anchor(base, decoded, 0..1, emptySet(), byText = false)
+
+        assertEquals(" home insurance.", replacement.cues.joinToString("") { it.text })
     }
 
     /** Measured: Behind the Bastards 2021-04-08, 1:51.8: "'m Jake Brennan", its "I" timed before where the chunk was picked up. */

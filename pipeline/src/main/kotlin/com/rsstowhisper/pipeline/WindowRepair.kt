@@ -1181,9 +1181,8 @@ internal object WindowRepair {
             } else {
                 val mine = said.takeLast(k)
                 val theirs = anchor.take(k)
-                val cut = clipped && mine.last() !in NEXT_WORDS && theirs.last().startsWith(mine.last())
-                val guessed = k > 2 && 2 * commonLetters(mine.last(), theirs.last()) >= mine.last().length
-                mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || guessed)
+                val cut = clipped && theirs.last().startsWith(mine.last())
+                mine.dropLast(1) == theirs.dropLast(1) && (mine.last() == theirs.last() || cut || k > 2)
             }
         } ?: 0
 
@@ -1197,22 +1196,6 @@ internal object WindowRepair {
     }
 
     private val CONTRACTION = Regex("\\p{L}['’]\\p{L}")
-
-    /** Letters [a] and [b] share in order: a guess at a word heard in part keeps some of it ("event" for "Avenger"). */
-    private fun commonLetters(
-        a: String,
-        b: String,
-    ): Int {
-        var previous = IntArray(b.length + 1)
-        for (i in 1..a.length) {
-            val current = IntArray(b.length + 1)
-            for (j in 1..b.length) {
-                current[j] = if (a[i - 1] == b[j - 1]) previous[j - 1] + 1 else maxOf(previous[j], current[j - 1])
-            }
-            previous = current
-        }
-        return previous[b.length]
-    }
 
     private val NEXT_WORDS =
         setOf(

@@ -794,6 +794,34 @@ class WindowRepairTest {
         assertTrue("Surrounded from all sides" in vtt, vtt)
     }
 
+    /** Measured: 99% Invisible 2021-08-04, 14:13: anchored on its edge cues the gap gained 0.8 s and lost a word. */
+    @Test
+    fun `a gap tried again anchored on its edge cues is kept only if it recovers a good deal more`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, fillerOverPromo)
+        val most =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 30.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians to hear"),
+                saidAround[1],
+            )
+        val bit = serverJson(Cue(8.0, 31.0, " hey its nora jones and my podcast is back with more of my favorite musicians so come"))
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = List(12) { most } + bit,
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("musicians to hear" in vtt, vtt)
+    }
+
     /** Measured: Universe Today 103, 6:04: a video podcast says "Thanks for watching." and goes on. */
     @Test
     fun `a stock phrase said amid the speech a gap decode recovers is kept`(

@@ -1598,7 +1598,8 @@ class PodcastPipeline(
                 if ((filled.best == null || short) && clear.first() != gap.plain && gap.plain in clear) {
                     val widened = filled
                     val plain = tryGap(base, audioPath, podcast, gap.plain, speech, prompt, frames, emptySet())
-                    val better = plain.best != null && (widened.best == null || plain.after < widened.after)
+                    val better =
+                        plain.best != null && (widened.best == null || plain.after < widened.after - WindowRepair.MIN_GAP_GAIN_SECONDS)
                     filled = (if (better) plain else widened).copy(attempts = widened.attempts + plain.attempts)
                 }
                 val best = filled.best

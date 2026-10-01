@@ -813,8 +813,9 @@ internal object WindowRepair {
     fun describesSound(text: String): Boolean {
         val t = text.trim()
         if (STOCK.any { it.voices(t) }) return false
-        val words = Prompt.wordsOf(t)
-        val capitals = words.size >= 2 && t.filter { it.isLetter() }.all { it.isUpperCase() }
+        // Two or more long words all in capitals, as whisper writes a sound; not a chant, acronyms or numbers: "USA! USA!".
+        val words = t.split(WHITESPACE).map { w -> w.filter { it.isLetter() } }
+        val capitals = words.size >= 2 && words.all { it.length >= 4 && it.all(Char::isUpperCase) }
         return '♪' in t || '♫' in t || t.startsWith("[") || t.startsWith("(") || capitals
     }
 

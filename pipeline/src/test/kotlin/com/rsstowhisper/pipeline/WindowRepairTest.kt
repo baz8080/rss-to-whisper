@@ -929,6 +929,8 @@ class WindowRepairTest {
         assertFalse(WindowRepair.describesSound(" Number four."))
         assertFalse(WindowRepair.describesSound(" © BF-WATCH TV 2021"))
         assertFalse(WindowRepair.describesSound(" NASA."))
+        assertFalse(WindowRepair.describesSound(" USA! USA!"))
+        assertFalse(WindowRepair.describesSound(" 1914, 1918."))
     }
 
     @Test

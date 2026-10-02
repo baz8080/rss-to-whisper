@@ -57,7 +57,8 @@ class ChunkedDecodeTest {
                     "text" to cue.text,
                     "words" to
                         words.filter { it.segment == i }.map {
-                            mapOf("word" to it.text, "start" to it.start - at + wordsShift, "end" to it.end - at + wordsShift, "probability" to 0.9)
+                            val shift = wordsShift - at
+                            mapOf("word" to it.text, "start" to it.start + shift, "end" to it.end + shift, "probability" to 0.9)
                         },
                 )
             }

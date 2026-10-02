@@ -2524,7 +2524,7 @@ class WindowRepairTest {
 
     /** Measured: Citation Needed 2019-07-17, 12:59: " However" held 5 s before it is said. */
     @Test
-    fun `retiming writes the pair with the words moved, whisper's filler left, and a record of them`(
+    fun `retiming writes the pair with the words moved, whisper's filler left, and a record of them, without the whisper server`(
         @TempDir tempDir: Path,
     ) {
         val dir =
@@ -2551,6 +2551,7 @@ class WindowRepairTest {
         assertTrue("00:00:12.000 --> 00:00:40.000\n Thanks for watching." in json.path("episode_transcript").asText())
         assertEquals("retime", json.path("whisper_run").path("repairs")[0].path("kind").asText())
         assertEquals(0, txSvc.calls.size)
+        assertEquals(0, txSvc.pings)
         assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
     }
 

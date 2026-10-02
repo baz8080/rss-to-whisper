@@ -189,7 +189,8 @@ class PodcastPipeline(
             return false
         }
 
-        if (!config.dryRun && !transcriber.ping()) {
+        val decodes = !request.retime || request.repairWindows || request.repairGaps
+        if (!config.dryRun && decodes && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }

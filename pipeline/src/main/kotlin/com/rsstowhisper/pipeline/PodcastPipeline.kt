@@ -1354,8 +1354,8 @@ class PodcastPipeline(
     ): ScoredTranscription {
         val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
         // A chunk with a defect is decoded again on its own, so the whole episode never is.
-        chunkSpeech(audioPath, podcast, label)?.let { speech ->
-            return warnIfFlagged(decodeAndScore(audioPath, episodePath, podcast, audio, conditioned = false, speech), label)
+        chunkPlan(audioPath, podcast, label)?.let { plan ->
+            return warnIfFlagged(decodeAndScore(audioPath, episodePath, podcast, audio, conditioned = false, plan), label)
         }
         val first = decodeAndScore(audioPath, episodePath, podcast, audio, conditioned = !config.decodeWithoutHistory)
         if (!first.quality.isFlagged || !config.qualityRetry) return warnIfFlagged(first, label)
@@ -1389,19 +1389,38 @@ class PodcastPipeline(
         return scored
     }
 
-    /** What VAD hears in the episode when it is to be decoded in chunks; null decodes it whole. */
-    private fun chunkSpeech(
+    private class ChunkPlan(
+        val speech: List<TimeWindow>,
+        val frames: Mp3Frames,
+    )
+
+    /** What a decode in chunks needs; null decodes the episode whole. */
+    private fun chunkPlan(
         audioPath: Path,
         podcast: PodcastConfig,
         label: String,
-    ): List<TimeWindow>? {
+    ): ChunkPlan? {
         val detector = speechDetector?.takeIf { config.chunkedDecode } ?: return null
         // Each chunk would detect its language alone, and a few seconds of speech can be taken for another.
         if ((podcast.language ?: config.language).lowercase() == Transcriber.AUTO_LANGUAGE) return null
-        return detector.speech(audioPath).ifEmpty {
-            logger.warn("VAD hears no speech in $label; decoding it whole")
-            null
+        val frames = Mp3Frames.of(audioPath)
+        if (frames == null) {
+            logger.warn("$label cannot be cut into mp3 clips; decoding it whole")
+            return null
         }
+        val speech =
+            try {
+                detector.speech(audioPath)
+            } catch (e: SpeechDetectorFailed) {
+                logger.warn("VAD failed on $label (${e.message}); decoding it whole")
+                return null
+            }
+        // Far less speech than any podcast has is VAD failing quietly, and a chunked decode would hear only that.
+        if (speech.sumOf { it.end - it.start } < MIN_SPEECH_SHARE * frames.duration) {
+            logger.warn("VAD hears almost no speech in $label; decoding it whole")
+            return null
+        }
+        return ChunkPlan(speech, frames)
     }
 
     private fun decodeAndScore(
@@ -1410,15 +1429,15 @@ class PodcastPipeline(
         podcast: PodcastConfig,
         audio: AudioIdentity,
         conditioned: Boolean,
-        /** Decode in chunks of this speech rather than whole. */
-        speech: List<TimeWindow>? = null,
+        /** Decode in chunks rather than whole. */
+        plan: ChunkPlan? = null,
     ): ScoredTranscription {
         logger.debug("Starting transcription in {}", episodePath)
         val startTime = System.currentTimeMillis()
         val language = podcast.language ?: config.language
         val decodedAt = WhisperRun.now()
 
-        val (parsed, chunking) = speech?.let { decodeChunked(audioPath, podcast, it) } ?: (decode(audioPath, podcast, conditioned) to null)
+        val (parsed, chunking) = plan?.let { decodeChunked(audioPath, podcast, it) } ?: (decode(audioPath, podcast, conditioned) to null)
 
         // The mp3 is now the retained artifact -- the whisper server decodes and
         // resamples it itself, so the old audio.wav is dead weight.
@@ -1452,26 +1471,28 @@ class PodcastPipeline(
     private fun decodeChunked(
         audioPath: Path,
         podcast: PodcastConfig,
-        speech: List<TimeWindow>,
+        plan: ChunkPlan,
     ): Pair<WhisperTranscription, Map<String, Any?>> {
-        val frames = Mp3Frames.of(audioPath)
+        val (speech, frames) = plan.speech to plan.frames
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
-        val chunks = WindowRepair.chunks(speech, 0.0, frames?.duration ?: (speech.last().end + CHUNK_TAIL_SECONDS))
+        val chunks = WindowRepair.chunks(speech, 0.0, frames.duration)
+        val attempts = if (config.qualityRetry) CHUNK_ATTEMPTS else CHUNK_ATTEMPTS.take(1)
         val pieces = mutableListOf<Pair<WindowRepair.Chunk, WhisperTranscription>>()
         val retried = mutableListOf<Map<String, Any?>>()
         for (chunk in chunks) {
-            val clip = frames?.clip(chunk.window)
+            val clip = frames.clip(chunk.window)
             var best: ChunkAttempt? = null
             var tried = 0
-            for ((n, attempt) in CHUNK_ATTEMPTS.withIndex()) {
-                val (conditioned, retry) = attempt
-                val decoded = decodeChunk(audioPath, podcast, conditioned, retry, chunk, clip, frames, speech)
+            for ((conditioned, retry) in attempts) {
+                // A few cues are too few to judge where words sit; the joined episode is judged instead.
+                val decoded = decodeChunk(audioPath, podcast, conditioned, retry, chunk, clip, frames, speech, checkPlacement = false)
                 tried++
                 val joined = WindowRepair.stitched(decoded.map { it.first }, decoded.map { it.second })
                 val tries =
                     ChunkAttempt(
                         decoded,
-                        n,
+                        conditioned,
+                        retry,
                         WindowRepair.defectCues(joined.cues, prompt).size,
                         WindowRepair.unpunctuated(WindowRepair.Replacement(IntRange.EMPTY, joined.cues, joined.words)),
                         WindowRepair.uncovered(joined.words, speech, chunk.window.start, chunk.window.end, GAP_SCORE_COVER_SECONDS),
@@ -1481,14 +1502,22 @@ class PodcastPipeline(
             }
             val kept = best!!
             if (tried > 1) {
-                logger.debug("Chunk {}-{} s decoded {} times; kept attempt {}", chunk.window.start, chunk.window.end, tried, kept.attempt)
+                logger.debug(
+                    "Chunk {}-{} s decoded {} times; kept {} {}",
+                    chunk.window.start,
+                    chunk.window.end,
+                    tried,
+                    kept.conditioned,
+                    kept.retry,
+                )
                 val (start, end) = chunk.window
                 retried +=
                     mapOf(
                         "start" to start,
                         "end" to end,
                         "attempts" to tried,
-                        "kept" to kept.attempt,
+                        "conditioned" to kept.conditioned,
+                        "retry" to kept.retry.takeIf { it.isNotEmpty() },
                         "defects" to kept.defects,
                         "unpunctuated" to kept.unpunctuated,
                     )
@@ -1496,9 +1525,9 @@ class PodcastPipeline(
             pieces += kept.pieces
         }
         val stitched = WindowRepair.stitched(pieces.map { it.first }, pieces.map { it.second })
+        misplaced(stitched)?.let { throw it }
         val heard = WindowRepair.dropNonSpeech(WindowRepair.Replacement(IntRange.EMPTY, stitched.cues, stitched.words), speech)
-        return WhisperTranscription.of(heard.cues, heard.words) to
-            mapOf("chunks" to chunks.size, "clipped" to (frames != null), "retried" to retried)
+        return WhisperTranscription.of(heard.cues, heard.words) to mapOf("chunks" to chunks.size, "retried" to retried)
     }
 
     /** One request to whisper, counted for the exit code, and refused if its word times are unusable. */
@@ -1509,6 +1538,7 @@ class PodcastPipeline(
         window: TimeWindow? = null,
         retry: Map<String, String> = emptyMap(),
         clip: Mp3Clip? = null,
+        checkPlacement: Boolean = true,
     ): WhisperTranscription {
         decodesAttempted++
         val json =
@@ -1529,17 +1559,24 @@ class PodcastPipeline(
         decodesSucceeded++
 
         val parsed = WhisperTranscription.parse(json).let { if (clip != null) it.shifted(clip.start) else it }
-        val misplaced = parsed.misplacedWordShare
-        if (misplaced > WhisperTranscription.MAX_MISPLACED_WORD_SHARE) {
-            decodesSucceeded--
-            decodesUnreachable++
-            throw WordTimesMisplaced(
-                "${"%.0f".format(Locale.ROOT, misplaced * 100)}% of cues from ${config.whisperServerUrl} have their words " +
-                    "outside the cue's time, the signature of a server applying VAD whatever the request says. " +
-                    "Restart it without --vad",
-            )
+        if (checkPlacement) {
+            misplaced(parsed)?.let {
+                decodesSucceeded--
+                decodesUnreachable++
+                throw it
+            }
         }
         return parsed
+    }
+
+    private fun misplaced(decoded: WhisperTranscription): WordTimesMisplaced? {
+        val share = decoded.misplacedWordShare
+        if (share <= WhisperTranscription.MAX_MISPLACED_WORD_SHARE) return null
+        return WordTimesMisplaced(
+            "${"%.0f".format(Locale.ROOT, share * 100)}% of cues from ${config.whisperServerUrl} have their words " +
+                "outside the cue's time, the signature of a server applying VAD whatever the request says. " +
+                "Restart it without --vad",
+        )
     }
 
     /**
@@ -1844,7 +1881,7 @@ class PodcastPipeline(
         var filled = Filled(null, range, from, to, chunks, clipped, before, before, true, emptyMap())
         if (chunks.isEmpty()) return filled
         val attempts = mutableListOf<Map<String, Any?>>()
-        for ((conditioned, retry) in GAP_ATTEMPTS) {
+        for ((conditioned, retry) in CHUNK_ATTEMPTS) {
             val pieces =
                 chunks.flatMapIndexed {
                         i,
@@ -1938,12 +1975,13 @@ class PodcastPipeline(
         clip: Mp3Clip?,
         frames: Mp3Frames?,
         speech: List<TimeWindow>,
+        checkPlacement: Boolean = true,
     ): List<Pair<WindowRepair.Chunk, WhisperTranscription>> {
         val pieces = mutableListOf<Pair<WindowRepair.Chunk, WhisperTranscription>>()
         var window = chunk.window
         var sent = clip
         for (resumed in 0..MAX_CHUNK_RESUMES) {
-            val decoded = decode(audioPath, podcast, conditioned, window, retry, sent)
+            val decoded = decode(audioPath, podcast, conditioned, window, retry, sent, checkPlacement)
             val tail = WindowRepair.unheardTail(decoded, speech, window).takeIf { resumed < MAX_CHUNK_RESUMES }
             if (tail == null) {
                 pieces += chunk.copy(window = window) to decoded
@@ -1961,7 +1999,8 @@ class PodcastPipeline(
 
     private class ChunkAttempt(
         val pieces: List<Pair<WindowRepair.Chunk, WhisperTranscription>>,
-        val attempt: Int,
+        val conditioned: Boolean,
+        val retry: Map<String, String>,
         val defects: Int,
         val unpunctuated: Boolean,
         val uncovered: Double,
@@ -2097,10 +2136,7 @@ class PodcastPipeline(
 
         private val CHUNK_ATTEMPTS =
             listOf(false to emptyMap(), true to emptyMap(), false to Transcriber.RETRY_WARMER, false to Transcriber.RETRY_WIDER_BEAM)
-        private val GAP_ATTEMPTS = CHUNK_ATTEMPTS
-
-        /** Past VAD's last speech, where an mp3 too odd to cut into clips has no known end. */
-        private const val CHUNK_TAIL_SECONDS = 1.0
+        private const val MIN_SPEECH_SHARE = 0.2
 
         private const val GAP_PUNCTUATION_SLACK_SECONDS = 1.0
 

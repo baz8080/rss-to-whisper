@@ -75,6 +75,10 @@ loops, stretch-copies and prompt leaks and splices them in, anchored on the good
 either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`
 (optional) let it drop cues over non-speech and judge lost speech by what VAD hears.
 
+`--retime` (with VAD, no decode) moves words and cues whisper timed before their speech to just before where VAD hears
+it start; after `--repair-windows`/`--repair-gaps` when combined. `vad_cache` in `pods.yaml` (optional) is a folder of
+VAD results per episode (`<podcast>__<episode>.json`), read before running VAD and written after.
+
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.
 `--retranscribe-force` keeps a worse-scoring decode for explicitly named targets, and is

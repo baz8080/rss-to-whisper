@@ -2455,6 +2455,43 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `VAD read from its cache is not run again`(
+        @TempDir tempDir: Path,
+    ) {
+        val audio = tempDir.resolve("Show").resolve("2024-01-02-abcd1234-hello").resolve("audio.mp3")
+        Files.createDirectories(tempDir.resolve("cache"))
+        Files.writeString(tempDir.resolve("cache").resolve("Show__2024-01-02-abcd1234-hello.json"), "[[0.5, 3.25], [4.0, 9.0]]")
+
+        val spans = SpeechDetector("/no/such/vad-binary", "model.bin", tempDir.resolve("cache")).speech(audio)
+
+        assertEquals(listOf(TimeWindow(0.5, 3.25), TimeWindow(4.0, 9.0)), spans)
+    }
+
+    /** Measured: Citation Needed 2019-07-17, 12:59: " However" held 5 s before it is said. */
+    @Test
+    fun `retiming writes the pair with the words moved and a record of them`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(tempDir, listOf(Cue(0.0, 3.0, " So that is where the story begins."), Cue(3.0, 12.0, " However, college did teach.")))
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(4.8, 12.0))),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true))
+
+        val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
+        assertTrue("00:00:04.500 --> 00:00:12.000\n However, college did teach." in json.path("episode_transcript").asText())
+        assertEquals("retime", json.path("whisper_run").path("repairs")[0].path("kind").asText())
+        assertEquals(0, txSvc.calls.size)
+        assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
+    }
+
+    @Test
     fun `a VAD that cannot run stops the batch before any target is decoded or marked`(
         @TempDir tempDir: Path,
     ) {

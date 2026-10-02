@@ -18,15 +18,25 @@ class SpeechDetectorFailed(message: String, cause: Throwable? = null) : IOExcept
 open class SpeechDetector(
     private val binary: String,
     private val model: String,
+    private val cache: Path? = null,
 ) {
-    open fun speech(audioPath: Path): List<TimeWindow> =
-        try {
-            detect(audioPath)
-        } catch (e: SpeechDetectorFailed) {
-            throw e
-        } catch (e: IOException) {
-            throw SpeechDetectorFailed("Cannot run $binary on $audioPath: ${e.message}", e)
+    open fun speech(audioPath: Path): List<TimeWindow> {
+        val cached = cache?.resolve("${audioPath.parent.parent.fileName}__${audioPath.parent.fileName}.json")
+        if (cached != null && Files.exists(cached)) return readCache(Files.readString(cached))
+        val spans =
+            try {
+                detect(audioPath)
+            } catch (e: SpeechDetectorFailed) {
+                throw e
+            } catch (e: IOException) {
+                throw SpeechDetectorFailed("Cannot run $binary on $audioPath: ${e.message}", e)
+            }
+        if (cached != null) {
+            Files.createDirectories(cached.parent)
+            Files.writeString(cached, spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" })
         }
+        return spans
+    }
 
     private fun detect(audioPath: Path): List<TimeWindow> {
         // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
@@ -54,6 +64,11 @@ open class SpeechDetector(
 
     companion object {
         private const val TIMEOUT_MINUTES = 10L
+
+        private val CACHED_SPAN = Regex("""\[\s*([0-9.eE+-]+)\s*,\s*([0-9.eE+-]+)\s*]""")
+
+        fun readCache(json: String): List<TimeWindow> =
+            CACHED_SPAN.findAll(json).map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }.toList()
 
         private val DETECTED = Regex("""Detected (\d+) speech segments""")
         private val SEGMENT = Regex("""start = ([0-9.]+), end = ([0-9.]+)""")

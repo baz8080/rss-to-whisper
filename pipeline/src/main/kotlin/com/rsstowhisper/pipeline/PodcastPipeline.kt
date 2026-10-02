@@ -1686,12 +1686,17 @@ class PodcastPipeline(
         updated["episode_quality"] = quality.toMap()
         if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
         val decoded = repairs.filter { it["kind"] != "retime" }
-        logger.info(
-            "Repaired $label: ${replacements.size} of ${decoded.size} windows, " +
-                "${decoded.sumOf { it["defects_before"] as Int }} defective cues before, " +
-                "${decoded.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs) +
-                (retimed?.takeIf { moved }?.let { "; ${it.words} held words and ${it.cues} early cues retimed" } ?: ""),
-        )
+        val retimedSummary = retimed?.takeIf { moved }?.let { "${it.words} held words and ${it.cues} early cues retimed" }
+        if (decoded.isEmpty()) {
+            logger.info("Retimed $label: $retimedSummary")
+        } else {
+            logger.info(
+                "Repaired $label: ${replacements.size} of ${decoded.size} windows, " +
+                    "${decoded.sumOf { it["defects_before"] as Int }} defective cues before, " +
+                    "${decoded.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs) +
+                    (retimedSummary?.let { "; $it" } ?: ""),
+            )
+        }
         return true
     }
 

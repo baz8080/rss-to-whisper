@@ -100,8 +100,10 @@ internal object Retiming {
 
     /** Barry's listening of 15 cases, 1 to 16 s early: VAD's onset lands about 0.3 s into the first word. */
     private const val LEAD_SECONDS = 0.3
-    private const val MIN_HELD_SECONDS = 1.5
-    private const val MIN_EARLY_SECONDS = 1.0
+    private const val MIN_HELD_SECONDS = 2.0
+
+    /** Barry's pilot: moved starts 2 s or more early were right; under that VAD often hears a breath mid-turn. */
+    private const val MIN_EARLY_SECONDS = 2.0
 
     /** Speech that began this long before the cue is the cue before's, not this one's. */
     private const val TAIL_SECONDS = 0.3

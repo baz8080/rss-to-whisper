@@ -2479,13 +2479,13 @@ class WindowRepairTest {
                 tempDir,
                 listOf(podcast),
                 feed = null,
-                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(4.8, 12.0))),
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(5.1, 12.0))),
             )
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true))
 
         val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
-        assertTrue("00:00:04.500 --> 00:00:12.000\n However, college did teach." in json.path("episode_transcript").asText())
+        assertTrue("00:00:04.800 --> 00:00:12.000\n However, college did teach." in json.path("episode_transcript").asText())
         assertEquals("retime", json.path("whisper_run").path("repairs")[0].path("kind").asText())
         assertEquals(0, txSvc.calls.size)
         assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))

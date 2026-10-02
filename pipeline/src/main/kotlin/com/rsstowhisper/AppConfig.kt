@@ -42,6 +42,8 @@ data class AppConfig(
     /** whisper.cpp's `whisper-vad-speech-segments` and a Silero model, so window repair can tell silence from speech. */
     val vadBinary: String? = null,
     val vadModel: String? = null,
+    /** A folder of what VAD heard in each episode, read before running it and written after: `<podcast>__<episode>.json`. */
+    val vadCache: String? = null,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */

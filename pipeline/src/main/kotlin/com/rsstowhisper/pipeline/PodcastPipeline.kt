@@ -70,7 +70,7 @@ class PodcastPipeline(
             promptLanguage = config.defaultPromptLanguage,
         ),
     private val speechDetector: SpeechDetector? =
-        config.vadBinary?.let { binary -> config.vadModel?.let { SpeechDetector(binary, it) } },
+        config.vadBinary?.let { binary -> config.vadModel?.let { SpeechDetector(binary, it, config.vadCache?.let { c -> Path.of(c) }) } },
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
@@ -213,8 +213,8 @@ class PodcastPipeline(
             val attempted =
                 try {
                     val written =
-                        if (request.repairWindows || request.repairGaps) {
-                            repairEpisode(target, request.repairWindows, request.repairGaps)
+                        if (request.repairWindows || request.repairGaps || request.retime) {
+                            repairEpisode(target, request.repairWindows, request.repairGaps, request.retime)
                         } else {
                             retranscribeEpisode(target, request.force)
                         }
@@ -1472,6 +1472,7 @@ class PodcastPipeline(
         episodeDirPath: Path,
         fixDefects: Boolean = true,
         fillGaps: Boolean = false,
+        retime: Boolean = false,
     ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
@@ -1511,7 +1512,7 @@ class PodcastPipeline(
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
         val defects = WindowRepair.defectCues(cues, prompt)
-        if (defects.isEmpty() && !fillGaps) {
+        if (defects.isEmpty() && !fillGaps && !retime) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
         }
@@ -1531,6 +1532,10 @@ class PodcastPipeline(
         if (fillGaps && speech == null) {
             logger.warn("Cannot fill gaps in $label: gap repair needs vad_binary and vad_model, and VAD that hears its speech")
             if (!fixDefects || defects.isEmpty()) return false
+        }
+        if (retime && speech == null) {
+            logger.warn("Cannot retime $label: it needs vad_binary and vad_model, and VAD that hears its speech")
+            if (!fillGaps && (!fixDefects || defects.isEmpty())) return false
         }
 
         val language = podcast.language ?: config.language
@@ -1637,16 +1642,35 @@ class PodcastPipeline(
                 best?.let { replacements += WindowRepair.fitStretched(it, speech) }
             }
         }
+        var spliced = WindowRepair.splice(base, replacements)
+        val retimed =
+            if (retime && speech != null) {
+                val filler = spliced.cues.indices.filter { WindowRepair.filler(spliced.cues[it], prompt) }
+                val skip = WindowRepair.defectCues(spliced.cues, prompt) + filler
+                Retiming.retime(spliced, speech, skip)
+            } else {
+                null
+            }
+        val moved = retimed != null && retimed.words + retimed.cues > 0
+        if (retimed != null && moved) {
+            spliced = retimed.transcription
+            repairs +=
+                mapOf(
+                    "kind" to "retime",
+                    "words_moved" to retimed.words,
+                    "cues_moved" to retimed.cues,
+                    "seconds_moved" to Math.round(retimed.seconds * 10) / 10.0,
+                )
+        }
         if (repairs.isEmpty()) {
-            logger.info("$label has no loops, stretch-copies, prompt leaks or gaps to repair")
+            logger.info("$label has no loops, stretch-copies, prompt leaks, gaps or early cues to repair")
             return false
         }
-        if (replacements.isEmpty()) {
+        if (replacements.isEmpty() && !moved) {
             logger.warn("No window of $label came back better than it was; keeping it")
             return false
         }
 
-        val spliced = WindowRepair.splice(base, replacements)
         val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
         val run =
             WhisperRun(
@@ -1669,11 +1693,18 @@ class PodcastPipeline(
         updated["episode_transcript"] = repaired.vtt
         updated["episode_quality"] = quality.toMap()
         if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
-        logger.info(
-            "Repaired $label: ${replacements.size} of ${repairs.size} windows, " +
-                "${repairs.sumOf { it["defects_before"] as Int }} defective cues before, " +
-                "${repairs.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs),
-        )
+        val decoded = repairs.filter { it["kind"] != "retime" }
+        val retimedSummary = retimed?.takeIf { moved }?.let { "${it.words} held words and ${it.cues} early cues retimed" }
+        if (decoded.isEmpty()) {
+            logger.info("Retimed $label: $retimedSummary")
+        } else {
+            logger.info(
+                "Repaired $label: ${replacements.size} of ${decoded.size} windows, " +
+                    "${decoded.sumOf { it["defects_before"] as Int }} defective cues before, " +
+                    "${decoded.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs) +
+                    (retimedSummary?.let { "; $it" } ?: ""),
+            )
+        }
         return true
     }
 

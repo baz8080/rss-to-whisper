@@ -65,6 +65,10 @@ internal val USAGE =
       --repair-gaps              Re-decode the stretches VAD hears that no word
                                  covers, in chunks that start on the speech, and
                                  splice them in. Needs vad_binary and vad_model
+      --retime                   Move words and cues timed before their speech
+                                 to where VAD hears it start, with no decode;
+                                 after any repair above. Needs vad_binary and
+                                 vad_model
       --retranscribe-force      Keep the new decode even if it scores worse.
                                  Only with --retranscribe, --retranscribe-id or
                                  --retranscribe-list,
@@ -100,6 +104,7 @@ internal data class Args(
     val listDefects: Boolean = false,
     val repairWindows: Boolean = false,
     val repairGaps: Boolean = false,
+    val retime: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -122,6 +127,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--list-defects" -> args.copy(listDefects = true)
                 "--repair-windows" -> args.copy(repairWindows = true)
                 "--repair-gaps" -> args.copy(repairGaps = true)
+                "--retime" -> args.copy(retime = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
@@ -172,6 +178,12 @@ internal fun parseArgs(argv: Array<String>): Args {
     }
     if (args.repairGaps && !args.isRetranscribe) {
         error("--repair-gaps needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.retime && !args.isRetranscribe) {
+        error("--retime needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.retime && args.retranscribeForce) {
+        error("--retime moves word times without a decode, so --retranscribe-force does not apply")
     }
     if (args.repairGaps && args.retranscribeForce) {
         error("--repair-gaps keeps a gap's decode only when it covers more speech, so --retranscribe-force does not apply")

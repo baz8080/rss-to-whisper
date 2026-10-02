@@ -2486,6 +2486,75 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `VAD is cached with its audio's size, read back instead of run, and heard again if the audio or cache changed`(
+        @TempDir tempDir: Path,
+    ) {
+        val audio = tempDir.resolve("Show").resolve("2024-01-02-abcd1234-hello").resolve("audio.mp3")
+        Files.createDirectories(audio.parent)
+        Files.writeString(audio, "fake-mp3-bytes")
+        val runs = tempDir.resolve("runs")
+        val vad = tempDir.resolve("vad.sh")
+        Files.writeString(
+            vad,
+            "#!/bin/sh\necho x >> $runs\necho 'Detected 2 speech segments.'\n" +
+                "echo 'Speech segment 0: start = 50.00, end = 325.00'\necho 'Speech segment 1: start = 400.00, end = 900.00'\n",
+        )
+        vad.toFile().setExecutable(true)
+        val cache = tempDir.resolve("cache")
+        val cached = cache.resolve("Show__2024-01-02-abcd1234-hello.json")
+        val detector = SpeechDetector(vad.toString(), "model.bin", cache)
+        val heard = listOf(TimeWindow(0.5, 3.25), TimeWindow(4.0, 9.0))
+
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(1, Files.readAllLines(runs).size)
+        Files.writeString(cached, "{\"audio_bytes\": 14, \"spans\": [[0.5, 3.25], [4.0")
+        assertEquals(heard, detector.speech(audio))
+        Files.writeString(audio, "fake-mp3-bytes, longer now")
+        assertEquals(heard, detector.speech(audio))
+        Files.writeString(cached, "[[1.0, 2.0], [3.0]")
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(4, Files.readAllLines(runs).size)
+        // A bare list, as #104 wrote its cache, carries no size and is taken as it is.
+        Files.writeString(cached, "[[1.0, 2.0]]")
+        assertEquals(listOf(TimeWindow(1.0, 2.0)), detector.speech(audio))
+        val long = (0 until 4000).joinToString(", ", "[", "]") { "[${it * 2.5}, ${it * 2.5 + 1.25}]" }
+        assertEquals(4000, SpeechDetector.readCache(long, 0)?.size)
+    }
+
+    /** Measured: Citation Needed 2019-07-17, 12:59: " However" held 5 s before it is said. */
+    @Test
+    fun `retiming writes the pair with the words moved, whisper's filler left, and a record of them`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir =
+            episode(
+                tempDir,
+                listOf(
+                    Cue(0.0, 3.0, " So that is where the story begins."),
+                    Cue(3.0, 12.0, " However, college did teach."),
+                    Cue(12.0, 40.0, " Thanks for watching."),
+                ),
+            )
+        val (pipeline, txSvc, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(5.1, 12.0), TimeWindow(35.0, 40.0))),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true))
+
+        val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
+        assertTrue("00:00:04.800 --> 00:00:12.000\n However, college did teach." in json.path("episode_transcript").asText())
+        assertTrue("00:00:12.000 --> 00:00:40.000\n Thanks for watching." in json.path("episode_transcript").asText())
+        assertEquals("retime", json.path("whisper_run").path("repairs")[0].path("kind").asText())
+        assertEquals(0, txSvc.calls.size)
+        assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))
+    }
+
+    @Test
     fun `a VAD that cannot run stops the batch before any target is decoded or marked`(
         @TempDir tempDir: Path,
     ) {

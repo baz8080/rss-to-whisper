@@ -220,6 +220,13 @@ class ArgsTest {
     }
 
     @Test
+    fun `retime needs targets and has no decode to force`() {
+        assertTrue(parseArgs(arrayOf("--retime", "--retranscribe-id", "abcd1234")).retime)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--retime")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--retime", "--retranscribe-id", "abcd1234", "--retranscribe-force")) }
+    }
+
+    @Test
     fun `list-defects only reads`() {
         assertTrue(parseArgs(arrayOf("--list-defects")).listDefects)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--list-defects", "--retranscribe-id", "abcd1234")) }

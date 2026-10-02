@@ -4,6 +4,7 @@ import java.io.IOException
 import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 
 /** The VAD tool could not be run or said something unreadable, and will for every file until it is fixed. */
@@ -18,15 +19,28 @@ class SpeechDetectorFailed(message: String, cause: Throwable? = null) : IOExcept
 open class SpeechDetector(
     private val binary: String,
     private val model: String,
+    private val cache: Path? = null,
 ) {
-    open fun speech(audioPath: Path): List<TimeWindow> =
-        try {
-            detect(audioPath)
-        } catch (e: SpeechDetectorFailed) {
-            throw e
-        } catch (e: IOException) {
-            throw SpeechDetectorFailed("Cannot run $binary on $audioPath: ${e.message}", e)
+    open fun speech(audioPath: Path): List<TimeWindow> {
+        val cached = cache?.resolve("${audioPath.parent.parent.fileName}__${audioPath.parent.fileName}.json")
+        if (cached != null && Files.exists(cached)) readCache(Files.readString(cached), Files.size(audioPath))?.let { return it }
+        val spans =
+            try {
+                detect(audioPath)
+            } catch (e: SpeechDetectorFailed) {
+                throw e
+            } catch (e: IOException) {
+                throw SpeechDetectorFailed("Cannot run $binary on $audioPath: ${e.message}", e)
+            }
+        if (cached != null) {
+            Files.createDirectories(cached.parent)
+            val partial = Files.createTempFile(cached.parent, ".vad-", ".json")
+            val list = spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" }
+            Files.writeString(partial, """{"audio_bytes": ${Files.size(audioPath)}, "spans": $list}""")
+            Files.move(partial, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
+        return spans
+    }
 
     private fun detect(audioPath: Path): List<TimeWindow> {
         // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
@@ -54,6 +68,29 @@ open class SpeechDetector(
 
     companion object {
         private const val TIMEOUT_MINUTES = 10L
+
+        private val CACHED_SPAN = Regex("""\[\s*([0-9.eE+-]+)\s*,\s*([0-9.eE+-]+)\s*]""")
+        private val CACHED_ENTRY = Regex("""\{\s*"audio_bytes"\s*:\s*(\d+)\s*,\s*"spans"\s*:\s*(\[.*])\s*}""", RegexOption.DOT_MATCHES_ALL)
+
+        /**
+         * Null for a file cut short or not a whole list, or one written for audio of another size. A bare list,
+         * as #104's cache was written, carries no size and is taken as it is.
+         */
+        fun readCache(
+            json: String,
+            audioBytes: Long,
+        ): List<TimeWindow>? {
+            val entry = CACHED_ENTRY.matchEntire(json.trim())
+            if (entry != null && entry.groupValues[1].toLong() != audioBytes) return null
+            val list = entry?.groupValues?.get(2) ?: json.trim()
+            if (!list.startsWith("[") || !list.endsWith("]")) return null
+            val inner = list.substring(1, list.length - 1)
+            val spans = CACHED_SPAN.findAll(inner).toList()
+            // Nothing but the spans and the commas between them: a file cut short leaves a piece of one.
+            val between = CACHED_SPAN.replace(inner, "")
+            if (between.any { it != ',' && !it.isWhitespace() } || between.count { it == ',' } != maxOf(0, spans.size - 1)) return null
+            return spans.map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }
+        }
 
         private val DETECTED = Regex("""Detected (\d+) speech segments""")
         private val SEGMENT = Regex("""start = ([0-9.]+), end = ([0-9.]+)""")

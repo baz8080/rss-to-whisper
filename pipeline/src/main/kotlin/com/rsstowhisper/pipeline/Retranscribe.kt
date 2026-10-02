@@ -34,6 +34,8 @@ data class RetranscribeRequest(
     val repairWindows: Boolean = false,
     /** Re-decode the stretches VAD hears that no word covers, from where the speech starts. */
     val repairGaps: Boolean = false,
+    /** Move words and cues whisper timed before their speech to where VAD hears it, after any repair. */
+    val retime: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 

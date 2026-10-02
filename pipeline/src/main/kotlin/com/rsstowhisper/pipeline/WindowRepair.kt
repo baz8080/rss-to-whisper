@@ -1266,7 +1266,7 @@ internal object WindowRepair {
     ) = a.startsWith(b) || b.startsWith(a)
 
     /** Tokens grouped into the words they spell, punctuation left out: whisper splits "dexterous" as "de", "xter", "ous". */
-    private fun spoken(tokens: List<Word>): List<List<Int>> {
+    fun spoken(tokens: List<Word>): List<List<Int>> {
         val groups = mutableListOf<MutableList<Int>>()
         for ((i, token) in tokens.withIndex()) {
             if (normalise(token.text).isEmpty()) continue

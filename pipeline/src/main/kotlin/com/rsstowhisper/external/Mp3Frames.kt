@@ -26,6 +26,8 @@ class Mp3Frames private constructor(
 ) {
     val frames: Int get() = offsets.size
 
+    val duration: Double get() = time(offsets.size)
+
     /** Seconds into the whole file's decode at which frame [i]'s first sample plays. */
     fun time(i: Int): Double = (i.toLong() * samplesPerFrame - delay).toDouble() / sampleRate
 

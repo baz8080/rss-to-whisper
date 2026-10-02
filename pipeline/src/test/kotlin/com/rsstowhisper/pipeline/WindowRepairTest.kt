@@ -12,6 +12,7 @@ import com.rsstowhisper.external.Word
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.attribute.FileTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -2455,37 +2456,63 @@ class WindowRepairTest {
     }
 
     @Test
-    fun `VAD read from its cache is not run again`(
+    fun `VAD is cached whole, read back instead of run, and heard again for newer audio or a cut-short cache`(
         @TempDir tempDir: Path,
     ) {
         val audio = tempDir.resolve("Show").resolve("2024-01-02-abcd1234-hello").resolve("audio.mp3")
-        Files.createDirectories(tempDir.resolve("cache"))
-        Files.writeString(tempDir.resolve("cache").resolve("Show__2024-01-02-abcd1234-hello.json"), "[[0.5, 3.25], [4.0, 9.0]]")
+        Files.createDirectories(audio.parent)
+        Files.writeString(audio, "fake-mp3-bytes")
+        Files.setLastModifiedTime(audio, FileTime.fromMillis(1_000_000))
+        val runs = tempDir.resolve("runs")
+        val vad = tempDir.resolve("vad.sh")
+        Files.writeString(
+            vad,
+            "#!/bin/sh\necho x >> $runs\necho 'Detected 2 speech segments.'\n" +
+                "echo 'Speech segment 0: start = 50.00, end = 325.00'\necho 'Speech segment 1: start = 400.00, end = 900.00'\n",
+        )
+        vad.toFile().setExecutable(true)
+        val cache = tempDir.resolve("cache")
+        val cached = cache.resolve("Show__2024-01-02-abcd1234-hello.json")
+        val detector = SpeechDetector(vad.toString(), "model.bin", cache)
+        val heard = listOf(TimeWindow(0.5, 3.25), TimeWindow(4.0, 9.0))
 
-        val spans = SpeechDetector("/no/such/vad-binary", "model.bin", tempDir.resolve("cache")).speech(audio)
-
-        assertEquals(listOf(TimeWindow(0.5, 3.25), TimeWindow(4.0, 9.0)), spans)
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(1, Files.readAllLines(runs).size)
+        Files.writeString(cached, "[[0.5, 3.25], [4.0")
+        assertEquals(heard, detector.speech(audio))
+        Files.setLastModifiedTime(audio, FileTime.fromMillis(System.currentTimeMillis() + 60_000))
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(3, Files.readAllLines(runs).size)
     }
 
     /** Measured: Citation Needed 2019-07-17, 12:59: " However" held 5 s before it is said. */
     @Test
-    fun `retiming writes the pair with the words moved and a record of them`(
+    fun `retiming writes the pair with the words moved, whisper's filler left, and a record of them`(
         @TempDir tempDir: Path,
     ) {
         val dir =
-            episode(tempDir, listOf(Cue(0.0, 3.0, " So that is where the story begins."), Cue(3.0, 12.0, " However, college did teach.")))
+            episode(
+                tempDir,
+                listOf(
+                    Cue(0.0, 3.0, " So that is where the story begins."),
+                    Cue(3.0, 12.0, " However, college did teach."),
+                    Cue(12.0, 40.0, " Thanks for watching."),
+                ),
+            )
         val (pipeline, txSvc, _) =
             buildPipeline(
                 tempDir,
                 listOf(podcast),
                 feed = null,
-                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(5.1, 12.0))),
+                speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 2.9), TimeWindow(5.1, 12.0), TimeWindow(35.0, 40.0))),
             )
 
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true))
 
         val json = mapper.readTree(Files.readString(dir.resolve("transcript.json")))
         assertTrue("00:00:04.800 --> 00:00:12.000\n However, college did teach." in json.path("episode_transcript").asText())
+        assertTrue("00:00:12.000 --> 00:00:40.000\n Thanks for watching." in json.path("episode_transcript").asText())
         assertEquals("retime", json.path("whisper_run").path("repairs")[0].path("kind").asText())
         assertEquals(0, txSvc.calls.size)
         assertEquals(TranscriptPair.Consistent, TranscriptPair.check(dir))

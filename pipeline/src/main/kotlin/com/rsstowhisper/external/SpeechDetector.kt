@@ -4,6 +4,7 @@ import java.io.IOException
 import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.TimeUnit
 
 /** The VAD tool could not be run or said something unreadable, and will for every file until it is fixed. */
@@ -22,7 +23,10 @@ open class SpeechDetector(
 ) {
     open fun speech(audioPath: Path): List<TimeWindow> {
         val cached = cache?.resolve("${audioPath.parent.parent.fileName}__${audioPath.parent.fileName}.json")
-        if (cached != null && Files.exists(cached)) return readCache(Files.readString(cached))
+        // Audio replaced since is heard again.
+        if (cached != null && Files.exists(cached) && Files.getLastModifiedTime(cached) >= Files.getLastModifiedTime(audioPath)) {
+            readCache(Files.readString(cached))?.let { return it }
+        }
         val spans =
             try {
                 detect(audioPath)
@@ -33,7 +37,9 @@ open class SpeechDetector(
             }
         if (cached != null) {
             Files.createDirectories(cached.parent)
-            Files.writeString(cached, spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" })
+            val partial = Files.createTempFile(cached.parent, ".vad-", ".json")
+            Files.writeString(partial, spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" })
+            Files.move(partial, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
         return spans
     }
@@ -65,10 +71,17 @@ open class SpeechDetector(
     companion object {
         private const val TIMEOUT_MINUTES = 10L
 
-        private val CACHED_SPAN = Regex("""\[\s*([0-9.eE+-]+)\s*,\s*([0-9.eE+-]+)\s*]""")
+        private const val NUMBER = """[0-9.eE+-]+"""
+        private val CACHED_SPAN = Regex("""\[\s*($NUMBER)\s*,\s*($NUMBER)\s*]""")
+        private val CACHED_LIST = Regex("""\s*\[\s*(\[\s*$NUMBER\s*,\s*$NUMBER\s*]\s*(,\s*\[\s*$NUMBER\s*,\s*$NUMBER\s*]\s*)*)?]\s*""")
 
-        fun readCache(json: String): List<TimeWindow> =
-            CACHED_SPAN.findAll(json).map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }.toList()
+        /** Null for a file cut short or otherwise not the whole list. */
+        fun readCache(json: String): List<TimeWindow>? =
+            if (!CACHED_LIST.matches(json)) {
+                null
+            } else {
+                CACHED_SPAN.findAll(json).map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }.toList()
+            }
 
         private val DETECTED = Regex("""Detected (\d+) speech segments""")
         private val SEGMENT = Regex("""start = ([0-9.]+), end = ([0-9.]+)""")

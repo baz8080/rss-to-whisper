@@ -16,6 +16,8 @@ internal object Retiming {
     fun retime(
         base: WhisperTranscription,
         speech: List<TimeWindow>,
+        /** Cues to leave alone: whisper's loops and filler, which retiming would place on speech they never said. */
+        skip: Set<Int> = emptySet(),
     ): Retimed {
         val starts = speech.map { it.start }
         val tokens = base.words.toMutableList()
@@ -46,6 +48,7 @@ internal object Retiming {
         val opening = mutableMapOf<Int, Int>()
         val moved = mutableSetOf<Int>()
         for ((segment, indices) in bySegment.toSortedMap()) {
+            if (segment in skip) continue
             val words = WindowRepair.spoken(indices.map { tokens[it] }).map { group -> group.map { indices[it] } }
             if (words.isEmpty()) continue
             opening[segment] = words.first().first()
@@ -76,8 +79,9 @@ internal object Retiming {
             val rest = words.drop(ahead.size)
             val newStart = onset - LEAD_SECONDS
             val room = maxOf(rest.firstOrNull()?.let { tokens[it.first()].start } ?: last, newStart + ahead.size * MIN_WORD_SECONDS)
+            // Words after them keep their times unless the moved ones now run into them; a cue that would overrun its end stays.
+            val kept = indices.map { tokens[it] }
             move(ahead.flatten(), first.start, tokens[ahead.last().last()].end, newStart, room)
-            // Words after them keep their times unless the moved ones now run into them.
             var floor = room
             for (i in rest.flatten()) {
                 val t = tokens[i]
@@ -85,11 +89,22 @@ internal object Retiming {
                 tokens[i] = t.copy(start = floor, end = maxOf(floor, t.end + (floor - t.start)))
                 floor = tokens[i].end
             }
+            if (floor > maxOf(last, base.cues[segment].end)) {
+                indices.forEachIndexed { n, i -> tokens[i] = kept[n] }
+                continue
+            }
             moved += segment
             movedCues++
             seconds += newStart - first.start
         }
         if (movedWords == 0 && movedCues == 0) return Retimed(base, 0, 0, 0.0)
+        // Punctuation whisper writes before a cue's first word moves with it.
+        for (n in moved) {
+            val first = opening.getValue(n)
+            for (i in bySegment.getValue(n).takeWhile { it != first }) {
+                tokens[i] = tokens[i].copy(start = tokens[first].start, end = tokens[first].start)
+            }
+        }
         val cues =
             base.cues.mapIndexed { n, cue ->
                 val first = opening[n]?.takeIf { n in moved } ?: return@mapIndexed cue
@@ -98,11 +113,11 @@ internal object Retiming {
         return Retimed(WhisperTranscription.of(cues, tokens, base.run), movedWords, movedCues, seconds)
     }
 
-    /** Barry's listening of 15 cases, 1 to 16 s early: VAD's onset lands about 0.3 s into the first word. */
+    /** VAD's onset lands a little into the first word. */
     private const val LEAD_SECONDS = 0.3
     private const val MIN_HELD_SECONDS = 2.0
 
-    /** Barry's pilot: moved starts 2 s or more early were right; under that VAD often hears a breath mid-turn. */
+    /** Under this VAD often hears a breath mid-turn after whisper's right start. */
     private const val MIN_EARLY_SECONDS = 2.0
 
     /** Speech that began this long before the cue is the cue before's, not this one's. */

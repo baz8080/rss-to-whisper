@@ -73,6 +73,42 @@ class RetimingTest {
         assertEquals(1, retimed.cues)
     }
 
+    @Test
+    fun `filler, and a cue whose moved words would run past its end, are left alone, and punctuation moves with its cue`() {
+        val cues =
+            listOf(
+                Cue(0.0, 30.0, " Thank you."),
+                Cue(40.0, 46.0, " \"Get closer to greatness.\""),
+                Cue(50.0, 55.6, " One two three four five six seven eight."),
+            )
+        val words =
+            listOf(
+                word(" Thank", 0.0, 15.0, 0),
+                word(" you.", 15.0, 30.0, 0),
+                word(" \"", 40.0, 40.0, 1),
+                word("Get", 40.0, 40.5, 1),
+                word(" closer", 41.0, 41.5, 1),
+                word(" to", 42.0, 42.3, 1),
+                word(" greatness.\"", 45.2, 46.0, 1),
+            ) +
+                listOf("One", "two", "three", "four", "five", "six", "seven", "eight.").mapIndexed {
+                        i,
+                        w,
+                    ->
+                    word(" $w", 50.0 + i * 0.7, 50.6 + i * 0.7, 2)
+                }
+        val base = WhisperTranscription.of(cues, words)
+        val speech = listOf(TimeWindow(25.0, 31.0), TimeWindow(44.6, 47.0), TimeWindow(55.2, 56.0))
+
+        val retimed = Retiming.retime(base, speech, skip = setOf(0)).transcription
+
+        assertEquals(base.cues[0], retimed.cues[0])
+        assertEquals(44.3, retimed.cues[1].start, 1e-9)
+        assertEquals(44.3, retimed.words[2].start, 1e-9)
+        assertEquals(base.cues[2], retimed.cues[2])
+        assertEquals(base.words.subList(7, 15), retimed.words.subList(7, 15))
+    }
+
     /** Measured: Spacetime 2024-02-28, 24:14: "Time" said, then held over the music; its start is right. */
     @Test
     fun `a word said and then held, and a cue with no speech under it, are left alone`() {

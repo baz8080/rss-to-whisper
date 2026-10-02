@@ -1642,7 +1642,14 @@ class PodcastPipeline(
             }
         }
         var spliced = WindowRepair.splice(base, replacements)
-        val retimed = if (retime && speech != null) Retiming.retime(spliced, speech) else null
+        val retimed =
+            if (retime && speech != null) {
+                val filler = spliced.cues.indices.filter { WindowRepair.filler(spliced.cues[it], prompt) }
+                val skip = WindowRepair.defectCues(spliced.cues, prompt) + filler
+                Retiming.retime(spliced, speech, skip)
+            } else {
+                null
+            }
         val moved = retimed != null && retimed.words + retimed.cues > 0
         if (retimed != null && moved) {
             spliced = retimed.transcription

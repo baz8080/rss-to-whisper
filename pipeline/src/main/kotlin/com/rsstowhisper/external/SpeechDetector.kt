@@ -23,10 +23,7 @@ open class SpeechDetector(
 ) {
     open fun speech(audioPath: Path): List<TimeWindow> {
         val cached = cache?.resolve("${audioPath.parent.parent.fileName}__${audioPath.parent.fileName}.json")
-        // Audio replaced since is heard again.
-        if (cached != null && Files.exists(cached) && Files.getLastModifiedTime(cached) >= Files.getLastModifiedTime(audioPath)) {
-            readCache(Files.readString(cached))?.let { return it }
-        }
+        if (cached != null && Files.exists(cached)) readCache(Files.readString(cached), Files.size(audioPath))?.let { return it }
         val spans =
             try {
                 detect(audioPath)
@@ -38,7 +35,8 @@ open class SpeechDetector(
         if (cached != null) {
             Files.createDirectories(cached.parent)
             val partial = Files.createTempFile(cached.parent, ".vad-", ".json")
-            Files.writeString(partial, spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" })
+            val list = spans.joinToString(", ", "[", "]") { "[${it.start}, ${it.end}]" }
+            Files.writeString(partial, """{"audio_bytes": ${Files.size(audioPath)}, "spans": $list}""")
             Files.move(partial, cached, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
         }
         return spans
@@ -71,17 +69,28 @@ open class SpeechDetector(
     companion object {
         private const val TIMEOUT_MINUTES = 10L
 
-        private const val NUMBER = """[0-9.eE+-]+"""
-        private val CACHED_SPAN = Regex("""\[\s*($NUMBER)\s*,\s*($NUMBER)\s*]""")
-        private val CACHED_LIST = Regex("""\s*\[\s*(\[\s*$NUMBER\s*,\s*$NUMBER\s*]\s*(,\s*\[\s*$NUMBER\s*,\s*$NUMBER\s*]\s*)*)?]\s*""")
+        private val CACHED_SPAN = Regex("""\[\s*([0-9.eE+-]+)\s*,\s*([0-9.eE+-]+)\s*]""")
+        private val CACHED_ENTRY = Regex("""\{\s*"audio_bytes"\s*:\s*(\d+)\s*,\s*"spans"\s*:\s*(\[.*])\s*}""", RegexOption.DOT_MATCHES_ALL)
 
-        /** Null for a file cut short or otherwise not the whole list. */
-        fun readCache(json: String): List<TimeWindow>? =
-            if (!CACHED_LIST.matches(json)) {
-                null
-            } else {
-                CACHED_SPAN.findAll(json).map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }.toList()
-            }
+        /**
+         * Null for a file cut short or not a whole list, or one written for audio of another size. A bare list,
+         * as #104's cache was written, carries no size and is taken as it is.
+         */
+        fun readCache(
+            json: String,
+            audioBytes: Long,
+        ): List<TimeWindow>? {
+            val entry = CACHED_ENTRY.matchEntire(json.trim())
+            if (entry != null && entry.groupValues[1].toLong() != audioBytes) return null
+            val list = entry?.groupValues?.get(2) ?: json.trim()
+            if (!list.startsWith("[") || !list.endsWith("]")) return null
+            val inner = list.substring(1, list.length - 1)
+            val spans = CACHED_SPAN.findAll(inner).toList()
+            // Nothing but the spans and the commas between them: a file cut short leaves a piece of one.
+            val between = CACHED_SPAN.replace(inner, "")
+            if (between.any { it != ',' && !it.isWhitespace() } || between.count { it == ',' } != maxOf(0, spans.size - 1)) return null
+            return spans.map { TimeWindow(it.groupValues[1].toDouble(), it.groupValues[2].toDouble()) }
+        }
 
         private val DETECTED = Regex("""Detected (\d+) speech segments""")
         private val SEGMENT = Regex("""start = ([0-9.]+), end = ([0-9.]+)""")

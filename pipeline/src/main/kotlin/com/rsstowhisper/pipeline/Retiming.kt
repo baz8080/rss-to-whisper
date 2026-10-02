@@ -47,6 +47,7 @@ internal object Retiming {
         val bySegment = tokens.indices.groupBy { tokens[it].segment }
         val opening = mutableMapOf<Int, Int>()
         val moved = mutableSetOf<Int>()
+        val openingMoved = mutableSetOf<Int>()
         for ((segment, indices) in bySegment.toSortedMap()) {
             if (segment in skip) continue
             val words = WindowRepair.spoken(indices.map { tokens[it] }).map { group -> group.map { indices[it] } }
@@ -62,6 +63,7 @@ internal object Retiming {
                 val newStart = onset - LEAD_SECONDS
                 move(word, start, end, newStart, end)
                 moved += segment
+                if (word == words.first()) openingMoved += segment
                 movedWords++
                 seconds += newStart - start
             }
@@ -94,12 +96,13 @@ internal object Retiming {
                 continue
             }
             moved += segment
+            openingMoved += segment
             movedCues++
             seconds += newStart - first.start
         }
         if (movedWords == 0 && movedCues == 0) return Retimed(base, 0, 0, 0.0)
         // Punctuation whisper writes before a cue's first word moves with it.
-        for (n in moved) {
+        for (n in openingMoved) {
             val first = opening.getValue(n)
             for (i in bySegment.getValue(n).takeWhile { it != first }) {
                 tokens[i] = tokens[i].copy(start = tokens[first].start, end = tokens[first].start)
@@ -107,8 +110,9 @@ internal object Retiming {
         }
         val cues =
             base.cues.mapIndexed { n, cue ->
-                val first = opening[n]?.takeIf { n in moved } ?: return@mapIndexed cue
-                Cue(tokens[first].start, maxOf(cue.end, bySegment.getValue(n).maxOf { tokens[it].end }), cue.text)
+                if (n !in moved) return@mapIndexed cue
+                val start = opening.getValue(n).takeIf { n in openingMoved }?.let { tokens[it].start } ?: cue.start
+                Cue(start, maxOf(cue.end, bySegment.getValue(n).maxOf { tokens[it].end }), cue.text)
             }
         return Retimed(WhisperTranscription.of(cues, tokens, base.run), movedWords, movedCues, seconds)
     }

@@ -12,7 +12,6 @@ import com.rsstowhisper.external.Word
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.attribute.FileTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -2456,13 +2455,12 @@ class WindowRepairTest {
     }
 
     @Test
-    fun `VAD is cached whole, read back instead of run, and heard again for newer audio or a cut-short cache`(
+    fun `VAD is cached with its audio's size, read back instead of run, and heard again if the audio or cache changed`(
         @TempDir tempDir: Path,
     ) {
         val audio = tempDir.resolve("Show").resolve("2024-01-02-abcd1234-hello").resolve("audio.mp3")
         Files.createDirectories(audio.parent)
         Files.writeString(audio, "fake-mp3-bytes")
-        Files.setLastModifiedTime(audio, FileTime.fromMillis(1_000_000))
         val runs = tempDir.resolve("runs")
         val vad = tempDir.resolve("vad.sh")
         Files.writeString(
@@ -2479,11 +2477,18 @@ class WindowRepairTest {
         assertEquals(heard, detector.speech(audio))
         assertEquals(heard, detector.speech(audio))
         assertEquals(1, Files.readAllLines(runs).size)
-        Files.writeString(cached, "[[0.5, 3.25], [4.0")
+        Files.writeString(cached, "{\"audio_bytes\": 14, \"spans\": [[0.5, 3.25], [4.0")
         assertEquals(heard, detector.speech(audio))
-        Files.setLastModifiedTime(audio, FileTime.fromMillis(System.currentTimeMillis() + 60_000))
+        Files.writeString(audio, "fake-mp3-bytes, longer now")
         assertEquals(heard, detector.speech(audio))
-        assertEquals(3, Files.readAllLines(runs).size)
+        Files.writeString(cached, "[[1.0, 2.0], [3.0]")
+        assertEquals(heard, detector.speech(audio))
+        assertEquals(4, Files.readAllLines(runs).size)
+        // A bare list, as #104 wrote its cache, carries no size and is taken as it is.
+        Files.writeString(cached, "[[1.0, 2.0]]")
+        assertEquals(listOf(TimeWindow(1.0, 2.0)), detector.speech(audio))
+        val long = (0 until 4000).joinToString(", ", "[", "]") { "[${it * 2.5}, ${it * 2.5 + 1.25}]" }
+        assertEquals(4000, SpeechDetector.readCache(long, 0)?.size)
     }
 
     /** Measured: Citation Needed 2019-07-17, 12:59: " However" held 5 s before it is said. */

@@ -43,6 +43,26 @@ class RetimingTest {
         assertEquals(1, retimed.words)
     }
 
+    @Test
+    fun `a held word inside a cue leaves the cue's start where it was`() {
+        val base =
+            WhisperTranscription.of(
+                listOf(Cue(99.6, 108.0, " And then, however, it rained.")),
+                listOf(
+                    word(" And", 100.0, 100.3, 0),
+                    word(" then,", 100.3, 100.7, 0),
+                    word(" however,", 100.7, 105.6, 0),
+                    word(" it", 105.6, 105.9, 0),
+                    word(" rained.", 105.9, 108.0, 0),
+                ),
+            )
+
+        val retimed = Retiming.retime(base, listOf(TimeWindow(99.0, 100.7), TimeWindow(105.3, 110.0)))
+
+        assertEquals(105.0, retimed.transcription.words[2].start, 1e-9)
+        assertEquals(99.6, retimed.transcription.cues[0].start, 1e-9)
+    }
+
     /** Measured: Spacetime 2020-11-20, 9:32: "Get" on the tail of "on Space Time", the next words over 13 s of silence. */
     @Test
     fun `a cue's opening words over silence move to its speech, and the words already on it stay`() {

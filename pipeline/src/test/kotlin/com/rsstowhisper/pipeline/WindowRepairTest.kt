@@ -867,6 +867,37 @@ class WindowRepairTest {
         assertTrue("musicians to hear" in vtt, vtt)
     }
 
+    /** Measured: Behind the Bastards 2025-04-10, 1:04:08: a 63 s gap inside a stock-phrase window repair gave up on. */
+    @Test
+    fun `a gap inside a window repair gave up on is still filled`(
+        @TempDir tempDir: Path,
+    ) {
+        val cues = fillerOverPromo.map { if (it.text == " Thank you.") it.copy(text = " Thanks for watching.") else it }
+        val dir = episode(tempDir, cues)
+        val held = serverJson(saidAround[0], Cue(6.0, 36.0, " Thanks for watching."), saidAround[1])
+        val promo =
+            serverJson(
+                saidAround[0],
+                Cue(8.0, 20.0, " Hey, it's Nora Jones, and my podcast is back with more of my favorite musicians."),
+                Cue(20.0, 34.0, " So come hang out with us in the studio and listen to the show."),
+                saidAround[1],
+            )
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                // Six window attempts give up on the stock phrase; the gap's decode follows.
+                vtts = List(6) { held } + promo,
+                speechDetector = FakeSpeechDetector(promoSpeech),
+            )
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), repairWindows = true, repairGaps = true))
+
+        val vtt = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("Nora Jones" in vtt, vtt)
+    }
+
     /** Measured: Universe Today 103, 6:04: a video podcast says "Thanks for watching." and goes on. */
     @Test
     fun `a stock phrase said amid the speech a gap decode recovers is kept`(

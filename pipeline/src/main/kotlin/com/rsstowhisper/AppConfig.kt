@@ -44,6 +44,8 @@ data class AppConfig(
     val vadModel: String? = null,
     /** A folder of what VAD heard in each episode, read before running it and written after: `<podcast>__<episode>.json`. */
     val vadCache: String? = null,
+    /** With VAD, decode each episode as its speech cut into chunks of one window each, rather than whole. */
+    val chunkedDecode: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */

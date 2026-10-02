@@ -75,6 +75,11 @@ loops, stretch-copies and prompt leaks and splices them in, anchored on the good
 either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`
 (optional) let it drop cues over non-speech and judge lost speech by what VAD hears.
 
+With `vad_binary`/`vad_model` set, every decode cuts the speech VAD hears into chunks of one whisper window and sends
+each as its own mp3 clip, unprompted; a chunk with a loop, stretch-copy or prompt leak, or back without punctuation, is
+decoded again with other settings. `chunked_decode: false` in `pods.yaml` decodes whole files instead, as does a feed
+whose language is `auto`.
+
 `--retime` (with VAD, no decode) moves words and cues whisper timed before their speech to just before where VAD hears
 it start; after `--repair-windows`/`--repair-gaps` when combined. `vad_cache` in `pods.yaml` (optional) is a folder of
 VAD results per episode (`<podcast>__<episode>.json`), read before running VAD and written after.

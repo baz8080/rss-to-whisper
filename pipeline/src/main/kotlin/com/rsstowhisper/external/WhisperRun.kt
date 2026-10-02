@@ -28,6 +28,8 @@ data class WhisperRun(
     val base: Map<*, *>? = null,
     /** For a window repair: each window re-decoded, and what came of it. */
     val repairs: List<Map<String, Any?>> = emptyList(),
+    /** For a decode in VAD chunks: how many, and each one decoded again for a defect. */
+    val chunking: Map<String, Any?>? = null,
 ) {
     fun toMap(): Map<String, Any?> =
         mapOf(
@@ -40,7 +42,8 @@ data class WhisperRun(
             "audio_bytes" to audioBytes,
             "pipeline_version" to pipelineVersion,
             "words" to words,
-        ) + if (repairs.isEmpty()) emptyMap() else mapOf("base_run" to base, "repairs" to repairs)
+        ) + (if (repairs.isEmpty()) emptyMap() else mapOf("base_run" to base, "repairs" to repairs)) +
+            (chunking?.let { mapOf("chunking" to it) } ?: emptyMap())
 
     companion object {
         const val FIELD = "whisper_run"

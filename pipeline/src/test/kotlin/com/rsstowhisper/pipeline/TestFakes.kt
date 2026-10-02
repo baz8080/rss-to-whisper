@@ -269,6 +269,7 @@ internal fun buildPipeline(
     feedService: FakeFeedService? = null,
     audioDir: Path? = null,
     speechDetector: SpeechDetector? = null,
+    chunkedDecode: Boolean = true,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
@@ -282,6 +283,7 @@ internal fun buildPipeline(
             language = language,
             qualityRetry = qualityRetry,
             decodeWithoutHistory = decodeWithoutHistory,
+            chunkedDecode = chunkedDecode,
             dryRun = dryRun,
             podcasts = podcasts,
         )

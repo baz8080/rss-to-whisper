@@ -13,6 +13,7 @@ import java.nio.file.Path
 import kotlin.math.floor
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class ChunkedDecodeTest {
@@ -198,6 +199,24 @@ class ChunkedDecodeTest {
         val (dir, _) = redecode(tempDir, listOf(serverJson(0.8, *many.toTypedArray()), adrift))
 
         assertTrue("And then we found something" in vtt(dir))
+    }
+
+    @Test
+    fun `an episode whose words are out of place throughout stops the batch, and the run fails`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, mp3())
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                listOf(podcast),
+                feed = null,
+                vtts = listOf(serverJson(0.8, begins, wordsShift = 12.0), serverJson(39.8, odd, wordsShift = 2.5)),
+                speechDetector = FakeSpeechDetector(speech),
+            )
+
+        assertFalse(pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), force = true)))
+        assertTrue("Thank you." in vtt(dir))
     }
 
     @Test

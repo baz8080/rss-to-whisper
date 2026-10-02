@@ -1479,13 +1479,16 @@ class PodcastPipeline(
         val attempts = if (config.qualityRetry) CHUNK_ATTEMPTS else CHUNK_ATTEMPTS.take(1)
         val pieces = mutableListOf<Pair<WindowRepair.Chunk, WhisperTranscription>>()
         val retried = mutableListOf<Map<String, Any?>>()
+        // Every decode as whisper returned it: stitching re-times a trimmed cue to its words, hiding where they were.
+        val returned = mutableListOf<WhisperTranscription>()
         for (chunk in chunks) {
             val clip = frames.clip(chunk.window)
             var best: ChunkAttempt? = null
             var tried = 0
             for ((conditioned, retry) in attempts) {
-                // A few cues are too few to judge where words sit; the joined episode is judged instead.
+                // A few cues are too few to judge where words sit; all of the episode's decodes are judged together.
                 val decoded = decodeChunk(audioPath, podcast, conditioned, retry, chunk, clip, frames, speech, checkPlacement = false)
+                returned += decoded.map { it.second }
                 tried++
                 val joined = WindowRepair.stitched(decoded.map { it.first }, decoded.map { it.second })
                 val tries =
@@ -1524,8 +1527,11 @@ class PodcastPipeline(
             }
             pieces += kept.pieces
         }
+        misplaced(WindowRepair.joined(returned))?.let {
+            decodesUnreachable++
+            throw it
+        }
         val stitched = WindowRepair.stitched(pieces.map { it.first }, pieces.map { it.second })
-        misplaced(stitched)?.let { throw it }
         val heard = WindowRepair.dropNonSpeech(WindowRepair.Replacement(IntRange.EMPTY, stitched.cues, stitched.words), speech)
         return WhisperTranscription.of(heard.cues, heard.words) to mapOf("chunks" to chunks.size, "retried" to retried)
     }

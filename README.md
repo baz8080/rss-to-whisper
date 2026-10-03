@@ -873,6 +873,7 @@ crossing a speaker change: whisper looping over a conversation crosses those too
 - **Keyed on the audio.** The file records the audio's SHA-256 (taken from the decode's
   `whisper_run` while the size matches), the models and the threshold; an episode with turns for
   all three is skipped. Repairs change the words, never the audio, so they never make turns stale.
+  A transcript from before decodes recorded their audio takes turns made for audio of its mp3's size.
 - **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
 - Alone, `--diarize` decodes nothing and leaves the transcript untouched. With
   `--repair-windows`, `--repair-gaps` or `--retime` it runs first, and the repair uses the turns.

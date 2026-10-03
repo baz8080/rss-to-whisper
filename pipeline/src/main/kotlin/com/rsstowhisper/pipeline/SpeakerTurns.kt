@@ -42,34 +42,47 @@ class SpeakerTurns(
 
         private val mapper = ObjectMapper()
 
-        /** The turns for the audio with [audioSha256], null when there are none or they are another audio's. */
+        /**
+         * The turns for the audio with [audioSha256], null when there are none or they are another audio's. A transcript
+         * from before decodes recorded their audio has no hash to give, and takes turns for audio of its mp3's [audioBytes].
+         */
         fun read(
             episodeDir: Path,
             audioSha256: String?,
+            audioBytes: Long? = null,
         ): SpeakerTurns? {
             val stored = stored(episodeDir) ?: return null
-            if (audioSha256 == null || stored["audio_sha256"] != audioSha256) return null
-            return SpeakerTurns(turnsOf(stored))
+            val same =
+                if (audioSha256 != null) {
+                    stored["audio_sha256"] == audioSha256
+                } else {
+                    audioBytes != null && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes
+                }
+            return if (same) SpeakerTurns(turnsOf(stored)) else null
         }
 
         /** Whether [episodeDir] already has turns for this audio from these [models]. */
         fun current(
             episodeDir: Path,
             audioSha256: String,
+            audioBytes: Long,
             models: Map<String, Any>,
         ): Boolean {
             val stored = stored(episodeDir) ?: return false
-            return stored["audio_sha256"] == audioSha256 && models.all { (key, value) -> stored[key]?.toString() == value.toString() }
+            return stored["audio_sha256"] == audioSha256 && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes &&
+                models.all { (key, value) -> stored[key]?.toString() == value.toString() }
         }
 
         fun write(
             episodeDir: Path,
             audioSha256: String,
+            audioBytes: Long,
             models: Map<String, Any>,
             turns: List<SpeakerTurn>,
         ) {
             val record =
-                mapOf("audio_sha256" to audioSha256) + models + mapOf("turns" to turns.map { listOf(it.start, it.end, it.speaker) })
+                mapOf("audio_sha256" to audioSha256, "audio_bytes" to audioBytes) + models +
+                    mapOf("turns" to turns.map { listOf(it.start, it.end, it.speaker) })
             val partial = Files.createTempFile(episodeDir, ".speaker-turns-", ".json")
             try {
                 Files.writeString(partial, mapper.writeValueAsString(record))

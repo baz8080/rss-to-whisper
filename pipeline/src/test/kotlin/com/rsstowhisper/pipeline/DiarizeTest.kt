@@ -77,7 +77,7 @@ class DiarizeTest {
 
         assertEquals(1, diarizer.calls)
         assertEquals(turns, SpeakerTurns.read(dir, recordedSha)?.turns)
-        assertTrue(SpeakerTurns.current(dir, recordedSha, diarizer.models))
+        assertTrue(SpeakerTurns.current(dir, recordedSha, FAKE_MP3_BYTES.size.toLong(), diarizer.models))
     }
 
     @Test
@@ -216,7 +216,7 @@ class DiarizeTest {
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir)
-        SpeakerTurns.write(dir, recordedSha, FakeSpeakerDiarizer().models, tradedTurns)
+        SpeakerTurns.write(dir, recordedSha, FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
         val out = StringBuilder()
 
@@ -227,11 +227,25 @@ class DiarizeTest {
     }
 
     @Test
+    fun `list-defects uses turns for a transcript that recorded no audio, by the mp3's size`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, sha = null)
+        SpeakerTurns.write(dir, "hashed-audio", FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+        val out = StringBuilder()
+
+        assertTrue(pipeline.listDefects(out))
+
+        assertEquals("", out.toString())
+    }
+
+    @Test
     fun `list-defects ignores turns made for other audio`(
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir)
-        SpeakerTurns.write(dir, "some-other-audio", FakeSpeakerDiarizer().models, tradedTurns)
+        SpeakerTurns.write(dir, "some-other-audio", FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
         val out = StringBuilder()
 
@@ -250,7 +264,13 @@ class DiarizeTest {
                 (0 until 4).map { Cue(24.0 + it * 3, 27.0 + it * 3, " Welcome to the show, with your host.") } +
                 listOf(Cue(36.0, 39.0, " It changed everything for us."))
         val dir = episode(tempDir, cues)
-        SpeakerTurns.write(dir, recordedSha, FakeSpeakerDiarizer().models, tradedTurns + SpeakerTurn(24.0, 36.0, 0))
+        SpeakerTurns.write(
+            dir,
+            recordedSha,
+            FAKE_MP3_BYTES.size.toLong(),
+            FakeSpeakerDiarizer().models,
+            tradedTurns + SpeakerTurn(24.0, 36.0, 0),
+        )
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
         val out = StringBuilder()
 

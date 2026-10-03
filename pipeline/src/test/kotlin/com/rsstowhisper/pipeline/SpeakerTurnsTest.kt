@@ -100,7 +100,7 @@ class SpeakerTurnsTest {
     ) {
         val turns = listOf(SpeakerTurn(0.0, 4.25, 0), SpeakerTurn(4.25, 9.5, 1), SpeakerTurn(9.5, 12.0, 0))
 
-        SpeakerTurns.write(dir, "sha-a", models, turns)
+        SpeakerTurns.write(dir, "sha-a", 100L, models, turns)
         val read = SpeakerTurns.read(dir, "sha-a")
 
         assertNotNull(read)
@@ -112,8 +112,8 @@ class SpeakerTurnsTest {
     fun `writing again replaces the turns and leaves no partial file behind`(
         @TempDir dir: Path,
     ) {
-        SpeakerTurns.write(dir, "sha-a", models, listOf(SpeakerTurn(0.0, 1.0, 0)))
-        SpeakerTurns.write(dir, "sha-b", models, listOf(SpeakerTurn(0.0, 2.0, 1)))
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 1.0, 0)))
+        SpeakerTurns.write(dir, "sha-b", 100L, models, listOf(SpeakerTurn(0.0, 2.0, 1)))
 
         assertEquals(listOf(SpeakerTurn(0.0, 2.0, 1)), SpeakerTurns.read(dir, "sha-b")?.turns)
         assertEquals(listOf(SpeakerTurns.FILENAME), Files.list(dir).use { files -> files.map { it.fileName.toString() }.toList() })
@@ -123,10 +123,29 @@ class SpeakerTurnsTest {
     fun `turns for another audio are not read`(
         @TempDir dir: Path,
     ) {
-        SpeakerTurns.write(dir, "sha-a", models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
 
         assertNull(SpeakerTurns.read(dir, "sha-b"))
         assertNull(SpeakerTurns.read(dir, null))
+    }
+
+    @Test
+    fun `a transcript that recorded no audio takes turns for audio of its mp3's size`(
+        @TempDir dir: Path,
+    ) {
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+
+        assertEquals(listOf(SpeakerTurn(0.0, 4.0, 0)), SpeakerTurns.read(dir, null, 100L)?.turns)
+        assertNull(SpeakerTurns.read(dir, null, 101L))
+    }
+
+    @Test
+    fun `turns are not current for audio of another size`(
+        @TempDir dir: Path,
+    ) {
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 101L, models))
     }
 
     @Test
@@ -134,35 +153,35 @@ class SpeakerTurnsTest {
         @TempDir dir: Path,
     ) {
         assertNull(SpeakerTurns.read(dir, "sha-a"))
-        assertFalse(SpeakerTurns.current(dir, "sha-a", models))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models))
     }
 
     @Test
     fun `turns are current for the audio and models they were made with`(
         @TempDir dir: Path,
     ) {
-        SpeakerTurns.write(dir, "sha-a", models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
 
-        assertTrue(SpeakerTurns.current(dir, "sha-a", models))
+        assertTrue(SpeakerTurns.current(dir, "sha-a", 100L, models))
     }
 
     @Test
     fun `turns are not current for another audio`(
         @TempDir dir: Path,
     ) {
-        SpeakerTurns.write(dir, "sha-a", models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
 
-        assertFalse(SpeakerTurns.current(dir, "sha-b", models))
+        assertFalse(SpeakerTurns.current(dir, "sha-b", 100L, models))
     }
 
     @Test
     fun `turns are not current when a model or the threshold differs`(
         @TempDir dir: Path,
     ) {
-        SpeakerTurns.write(dir, "sha-a", models, listOf(SpeakerTurn(0.0, 4.0, 0)))
+        SpeakerTurns.write(dir, "sha-a", 100L, models, listOf(SpeakerTurn(0.0, 4.0, 0)))
 
-        assertFalse(SpeakerTurns.current(dir, "sha-a", models + ("embedding" to "emb/b.onnx")))
-        assertFalse(SpeakerTurns.current(dir, "sha-a", models + ("segmentation" to "other/model.onnx")))
-        assertFalse(SpeakerTurns.current(dir, "sha-a", models + ("threshold" to 0.6)))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models + ("embedding" to "emb/b.onnx")))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models + ("segmentation" to "other/model.onnx")))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models + ("threshold" to 0.6)))
     }
 }

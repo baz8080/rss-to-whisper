@@ -302,14 +302,15 @@ class PodcastPipeline(
             return false
         }
         val sha256 = audioSha256(episodeDirPath, audioPath)
+        val bytes = Files.size(audioPath)
         val diarizer = requireNotNull(diarizer)
-        if (SpeakerTurns.current(episodeDirPath, sha256, diarizer.models)) {
+        if (SpeakerTurns.current(episodeDirPath, sha256, bytes, diarizer.models)) {
             logger.info("$label already has speaker turns for its audio")
             return false
         }
         val started = System.nanoTime()
         val turns = diarizer.turns(audioPath)
-        SpeakerTurns.write(episodeDirPath, sha256, diarizer.models, turns)
+        SpeakerTurns.write(episodeDirPath, sha256, bytes, diarizer.models, turns)
         logger.info(
             "Diarized $label: ${turns.size} turns, ${turns.map { it.speaker }.toSet().size} voices, " +
                 "${(System.nanoTime() - started) / 1_000_000_000} s",
@@ -338,7 +339,12 @@ class PodcastPipeline(
     private fun speakersFor(
         episodeDirPath: Path,
         transcript: Map<String, Any?>,
-    ): SpeakerTurns? = SpeakerTurns.read(episodeDirPath, (transcript[WhisperRun.FIELD] as? Map<*, *>)?.get("audio_sha256") as? String)
+    ): SpeakerTurns? {
+        if (!Files.exists(episodeDirPath.resolve(SpeakerTurns.FILENAME))) return null
+        val sha256 = (transcript[WhisperRun.FIELD] as? Map<*, *>)?.get("audio_sha256") as? String
+        val bytes = if (sha256 == null) audioFileFor(episodeDirPath).takeIf { Files.exists(it) }?.let { Files.size(it) } else null
+        return SpeakerTurns.read(episodeDirPath, sha256, bytes)
+    }
 
     /**
      * Recorded for every attempt, not every success: the episodes that starve

@@ -36,6 +36,8 @@ data class RetranscribeRequest(
     val repairGaps: Boolean = false,
     /** Move words and cues whisper timed before their speech to where VAD hears it, after any repair. */
     val retime: Boolean = false,
+    /** Write each target's speaker turns first, so the repairs after can tell a line traded between voices from a loop. */
+    val diarize: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 

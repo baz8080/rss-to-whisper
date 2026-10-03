@@ -111,6 +111,7 @@ fun main(argv: Array<String>) {
                         repairWindows = args.repairWindows,
                         repairGaps = args.repairGaps,
                         retime = args.retime,
+                        diarize = args.diarize,
                     ),
                 )
             } else {

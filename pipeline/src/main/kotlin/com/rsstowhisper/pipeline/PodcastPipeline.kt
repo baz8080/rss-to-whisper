@@ -17,6 +17,8 @@ import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.Mp3Frames
+import com.rsstowhisper.external.SpeakerDiarizer
+import com.rsstowhisper.external.SpeakerDiarizerFailed
 import com.rsstowhisper.external.SpeechDetector
 import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
@@ -71,6 +73,10 @@ class PodcastPipeline(
         ),
     private val speechDetector: SpeechDetector? =
         config.vadBinary?.let { binary -> config.vadModel?.let { SpeechDetector(binary, it, config.vadCache?.let { c -> Path.of(c) }) } },
+    private val diarizer: SpeakerDiarizer? =
+        config.diarizePython?.let { python ->
+            SpeakerDiarizer(python, config.diarizeSegmentationModel.orEmpty(), config.diarizeEmbeddingModel.orEmpty())
+        },
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */
     private var orphansRecovered = 0
@@ -189,7 +195,11 @@ class PodcastPipeline(
             return false
         }
 
-        val decodes = !request.retime || request.repairWindows || request.repairGaps
+        if (request.diarize && diarizer == null) {
+            logger.error("--diarize needs diarize_python, diarize_segmentation_model and diarize_embedding_model in pods.yaml")
+            return false
+        }
+        val decodes = request.repairWindows || request.repairGaps || (!request.retime && !request.diarize)
         if (!config.dryRun && decodes && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
@@ -207,14 +217,28 @@ class PodcastPipeline(
             return true
         }
 
-        logger.info("Re-transcribing ${targets.size} episodes")
+        val repairs = request.repairWindows || request.repairGaps || request.retime
+        logger.info(if (request.diarize && !repairs) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes")
         var done = 0
-        var vadFailed = false
+        var diarized = 0
+        var toolFailed = false
         for (target in targets) {
+            if (request.diarize) {
+                try {
+                    if (diarizeEpisode(target)) diarized++
+                } catch (e: SpeakerDiarizerFailed) {
+                    logger.error("Stopping: ${e.message}. Fix diarize_python and the diarize models")
+                    toolFailed = true
+                    break
+                } catch (e: Exception) {
+                    logger.error("Could not diarize ${target.fileName}", e)
+                }
+                if (!repairs) continue
+            }
             val attempted =
                 try {
                     val written =
-                        if (request.repairWindows || request.repairGaps || request.retime) {
+                        if (repairs) {
                             repairEpisode(target, request.repairWindows, request.repairGaps, request.retime)
                         } else {
                             retranscribeEpisode(target, request.force)
@@ -226,7 +250,7 @@ class PodcastPipeline(
                     break
                 } catch (e: SpeechDetectorFailed) {
                     logger.error("Stopping: ${e.message}. Fix vad_binary/vad_model, or remove them to repair without VAD")
-                    vadFailed = true
+                    toolFailed = true
                     break
                 } catch (e: TranscriberUnavailable) {
                     // Nothing was decoded, so nothing was learned about this
@@ -241,9 +265,10 @@ class PodcastPipeline(
                 }
             if (attempted) markRetranscribeAttempted(target)
         }
-        logger.info("Re-transcribed $done of ${targets.size} episodes")
+        if (request.diarize) logger.info("Diarized $diarized of ${targets.size} episodes")
+        if (!request.diarize || repairs) logger.info("Re-transcribed $done of ${targets.size} episodes")
         val paired = verifyBatch(targets)
-        return decodingWorked() && paired && !vadFailed
+        return decodingWorked() && paired && !toolFailed
     }
 
     /** Every target, written or not: one this run declined to replace can still be a broken pair. */
@@ -266,6 +291,53 @@ class PodcastPipeline(
         )
         return false
     }
+
+    /** Writes the episode's speaker turns, unless it has them for this audio and these models already. */
+    private fun diarizeEpisode(episodeDirPath: Path): Boolean {
+        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        val audioPath = audioFileFor(episodeDirPath)
+        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
+            logger.error("Cannot diarize $label: it has no audio")
+            return false
+        }
+        val sha256 = audioSha256(episodeDirPath, audioPath)
+        val diarizer = requireNotNull(diarizer)
+        if (SpeakerTurns.current(episodeDirPath, sha256, diarizer.models)) {
+            logger.info("$label already has speaker turns for its audio")
+            return false
+        }
+        val started = System.nanoTime()
+        val turns = diarizer.turns(audioPath)
+        SpeakerTurns.write(episodeDirPath, sha256, diarizer.models, turns)
+        logger.info(
+            "Diarized $label: ${turns.size} turns, ${turns.map { it.speaker }.toSet().size} voices, " +
+                "${(System.nanoTime() - started) / 1_000_000_000} s",
+        )
+        return true
+    }
+
+    /** The decode's record of the audio when its size still matches, so a network volume is not read twice over. */
+    private fun audioSha256(
+        episodeDirPath: Path,
+        audioPath: Path,
+    ): String {
+        val run = recordedRun(episodeDirPath)
+        val recorded = run?.get("audio_sha256") as? String
+        val bytes = (run?.get("audio_bytes") as? Number)?.toLong()
+        return if (recorded != null && bytes == Files.size(audioPath)) recorded else WhisperRun.sha256(audioPath)
+    }
+
+    private fun recordedRun(episodeDirPath: Path): Map<*, *>? {
+        val jsonPath = episodeDirPath.resolve(TRANSCRIPT_FILENAME)
+        if (!Files.exists(jsonPath)) return null
+        return jsonMapper.readValue(Files.readString(jsonPath), Map::class.java)[WhisperRun.FIELD] as? Map<*, *>
+    }
+
+    /** The turns for the audio the pair was decoded from, if the episode has them. */
+    private fun speakersFor(
+        episodeDirPath: Path,
+        transcript: Map<String, Any?>,
+    ): SpeakerTurns? = SpeakerTurns.read(episodeDirPath, (transcript[WhisperRun.FIELD] as? Map<*, *>)?.get("audio_sha256") as? String)
 
     /**
      * Recorded for every attempt, not every success: the episodes that starve
@@ -468,13 +540,19 @@ class PodcastPipeline(
             }
         var found = 0
         var unreadable = 0
+        var diarized = 0
+        var traded = 0
+        var cleared = 0
         for (line in lines) {
             line.fold(
-                onSuccess = { text ->
-                    if (text != null) {
-                        out.append(text).append('\n')
+                onSuccess = { defect ->
+                    if (defect.text != null) {
+                        out.append(defect.text).append('\n')
                         found++
                     }
+                    if (defect.diarized) diarized++
+                    if (defect.traded > 0) traded++
+                    if (defect.traded > 0 && defect.text == null) cleared++
                 },
                 onFailure = {
                     logger.warn(it.message)
@@ -485,11 +563,14 @@ class PodcastPipeline(
         logger.info(
             "$found of ${dirs.size} episodes have defects to repair" + if (unreadable > 0) "; $unreadable could not be read" else "",
         )
+        logger.info("$diarized episodes have speaker turns; $traded hold repeats traded between voices, which cleared $cleared")
         return unreadable == 0
     }
 
-    /** The episode's --list-defects line, null if it has none; a failure if it cannot be judged. */
-    private fun defectLine(dir: Path): Result<String?> {
+    /** An episode's --list-defects line, null if it has none, and how many cues speaker turns cleared. */
+    private class DefectLine(val text: String?, val diarized: Boolean, val traded: Int)
+
+    private fun defectLine(dir: Path): Result<DefectLine> {
         val label = "${dir.parent.fileName}/${dir.fileName}"
         return try {
             @Suppress("UNCHECKED_CAST")
@@ -500,11 +581,15 @@ class PodcastPipeline(
             }
             val cues = parsed.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
             val podcast = podcastForDir(config.podcasts, dir.parent.fileName.toString())
-            val byKind = WindowRepair.defectsByKind(cues, WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt))
+            val prompt = WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt)
+            val speakers = speakersFor(dir, existing)
+            val byKind = WindowRepair.defectsByKind(cues, prompt, speakers)
             val defects = WindowRepair.defectCues(cues, byKind)
-            if (defects.isEmpty()) return Result.success(null)
+            val traded = if (speakers == null) 0 else (WindowRepair.defectCues(cues, prompt) - defects).size
+            if (defects.isEmpty()) return Result.success(DefectLine(null, speakers != null, traded))
             val kinds = byKind.entries.joinToString("\t") { "${it.key}=${it.value.size}" }
-            Result.success("$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds")
+            val text = "$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds"
+            Result.success(DefectLine(if (speakers == null) text else "$text\ttraded=$traded", speakers != null, traded))
         } catch (e: Exception) {
             Result.failure(IllegalStateException("$label could not be read: ${e.message}", e))
         }
@@ -1634,7 +1719,8 @@ class PodcastPipeline(
 
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
-        val defects = WindowRepair.defectCues(cues, prompt)
+        val speakers = speakersFor(episodeDirPath, existing)
+        val defects = WindowRepair.defectCues(cues, prompt, speakers)
         if (defects.isEmpty() && !fillGaps && !retime) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
@@ -1673,14 +1759,14 @@ class PodcastPipeline(
             val highest = windows.getOrNull(n + 1)?.first ?: cues.lastIndex
             var range = initial
             var widened = 0
-            var tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
+            var tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt, speakers)
             while (tried.best == null && widened < MAX_WIDENINGS) {
                 val first = if (tried.disputedLeft && range.first - 1 >= lowest) range.first - 1 else range.first
                 val last = if (tried.disputedRight && range.last + 1 <= highest) range.last + 1 else range.last
                 if (first == range.first && last == range.last) break
                 range = first..last
                 widened++
-                tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt)
+                tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt, speakers)
             }
             previousLast = range.last
             val best = tried.best
@@ -1709,6 +1795,7 @@ class PodcastPipeline(
                             transcriber.requestFields(language, podcast.initialPrompt, tried.bestConditioned, window, tried.bestRetry)
                         },
                     "speech_checked" to (speech != null),
+                    "speakers_checked" to (speakers != null),
                     "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
                     "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
                     "refused_for_dropped_cue" to tried.droppedCue,
@@ -1722,13 +1809,13 @@ class PodcastPipeline(
                 val clear = listOf(gap.range, gap.plain).filter { r -> windowed.none { overlaps(it, inner(r)) || overlaps(r, inner(it)) } }
                 if (clear.isEmpty()) continue
                 val widenedOver = setOf(gap.plain.first, gap.plain.last) - setOf(gap.range.first, gap.range.last)
-                var filled = tryGap(base, audioPath, podcast, clear.first(), speech, prompt, frames, widenedOver)
+                var filled = tryGap(base, audioPath, podcast, clear.first(), speech, prompt, frames, widenedOver, speakers)
                 // Refused with the edge cues decoded again: anchored on them instead, as whisper wrote them.
                 // Or kept but still short: whisper may hear the gap whole without the edge cues in its clips.
                 val short = filled.best != null && filled.after > WindowRepair.MAX_LOST_SPEECH_SECONDS
                 if ((filled.best == null || short) && clear.first() != gap.plain && gap.plain in clear) {
                     val widened = filled
-                    val plain = tryGap(base, audioPath, podcast, gap.plain, speech, prompt, frames, emptySet())
+                    val plain = tryGap(base, audioPath, podcast, gap.plain, speech, prompt, frames, emptySet(), speakers)
                     val better =
                         plain.best != null && (widened.best == null || plain.after < widened.after - WindowRepair.MIN_GAP_GAIN_SECONDS)
                     filled = (if (better) plain else widened).copy(attempts = widened.attempts + plain.attempts)
@@ -1769,7 +1856,7 @@ class PodcastPipeline(
         val retimed =
             if (retime && speech != null) {
                 val filler = spliced.cues.indices.filter { WindowRepair.filler(spliced.cues[it], prompt) }
-                val skip = WindowRepair.defectCues(spliced.cues, prompt) + filler
+                val skip = WindowRepair.defectCues(spliced.cues, prompt, speakers) + filler
                 Retiming.retime(spliced, speech, skip)
             } else {
                 null
@@ -1874,6 +1961,7 @@ class PodcastPipeline(
         frames: Mp3Frames?,
         /** The cues that anchored the gap before it was widened over them: their words must survive the decode. */
         widenedOver: Set<Int>,
+        speakers: SpeakerTurns?,
     ): Filled {
         // -1 and the cue count stand for the episode's start and end, where there is no cue to anchor to.
         val from = base.cues.getOrNull(range.first)?.end ?: 0.0
@@ -1918,7 +2006,7 @@ class PodcastPipeline(
                     dropped.isNotEmpty() && !outweighed -> "drops a heard cue"
                     WindowRepair.losesEdgeSpeech(base, replacement, strict, speech) ->
                         "leaves an edge cue's speech without words ${WindowRepair.edgeSpeechLost(base, replacement, strict, speech)}"
-                    WindowRepair.defectsAfter(base, replacement, prompt, inner, stock = false) > 0 -> "brings a defect"
+                    WindowRepair.defectsAfter(base, replacement, prompt, inner, stock = false, speakers) > 0 -> "brings a defect"
                     stocked.isNotEmpty() && !outweighed -> "writes a stock phrase"
                     WindowRepair.echoesNeighbours(base, replacement) -> "echoes the cues beside it"
                     after > before - WindowRepair.MIN_GAP_GAIN_SECONDS -> "covers too little (${"%.1f".format(Locale.ROOT, after)} s left)"
@@ -2045,6 +2133,7 @@ class PodcastPipeline(
         defects: Set<Int>,
         speech: List<TimeWindow>?,
         prompt: WindowRepair.Prompt,
+        speakers: SpeakerTurns?,
     ): Tried {
         val window = WindowRepair.window(base.cues, range)
         var best: WindowRepair.Replacement? = null
@@ -2079,7 +2168,7 @@ class PodcastPipeline(
                 droppedCue++
                 continue
             }
-            val after = WindowRepair.defectsAfter(base, replacement, prompt, defects)
+            val after = WindowRepair.defectsAfter(base, replacement, prompt, defects, speakers = speakers)
             val thin = speech?.let { WindowRepair.lostSpeech(base, replacement, it, WindowRepair.CLOSE_COVER_SECONDS) } ?: 0.0
             if (after < bestDefects || (best != null && after == bestDefects && thin < bestThin)) {
                 best = replacement

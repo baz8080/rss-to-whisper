@@ -14,15 +14,14 @@ import java.nio.file.StandardCopyOption
 class SpeakerTurns(
     val turns: List<SpeakerTurn>,
 ) {
-    /** The voice that talks for at least half of [span], null where none does. */
+    /** The one voice that talks for at least half of [span]; null where none does, or where turns overlap and two do. */
     fun voiceOf(span: TimeWindow): Int? {
         val talk = HashMap<Int, Double>()
         for (turn in turns) {
             val overlap = minOf(span.end, turn.end) - maxOf(span.start, turn.start)
             if (overlap > 0) talk.merge(turn.speaker, overlap, Double::plus)
         }
-        val (speaker, seconds) = talk.maxByOrNull { it.value } ?: return null
-        return speaker.takeIf { seconds >= MIN_VOICE_SHARE * (span.end - span.start) }
+        return talk.filterValues { it >= MIN_VOICE_SHARE * (span.end - span.start) }.keys.singleOrNull()
     }
 
     /**

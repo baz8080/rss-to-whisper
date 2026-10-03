@@ -24,10 +24,23 @@ class SpeakerTurnsTest {
     }
 
     @Test
-    fun `a voice that talks for exactly half of a span is its voice`() {
-        val speakers = SpeakerTurns(listOf(SpeakerTurn(0.0, 5.0, 0), SpeakerTurn(5.0, 10.0, 1)))
+    fun `a voice that talks for exactly half of a span, beside quieter ones, is its voice`() {
+        val speakers = SpeakerTurns(listOf(SpeakerTurn(0.0, 5.0, 0), SpeakerTurn(5.0, 8.0, 1), SpeakerTurn(8.0, 10.0, 2)))
 
         assertEquals(0, speakers.voiceOf(TimeWindow(0.0, 10.0)))
+    }
+
+    @Test
+    fun `two voices that each hold half a span have no single voice`() {
+        assertNull(SpeakerTurns(listOf(SpeakerTurn(0.0, 5.0, 0), SpeakerTurn(5.0, 10.0, 1))).voiceOf(TimeWindow(0.0, 10.0)))
+    }
+
+    @Test
+    fun `a lap two overlapping voices both talk through is not traded`() {
+        // Behind the Bastards 2019-03-13, 6:14: one voice holds both laps, another overlaps the second.
+        val speakers = SpeakerTurns(listOf(SpeakerTurn(370.98, 379.97, 83), SpeakerTurn(376.66, 377.96, 82)))
+
+        assertFalse(speakers.traded(listOf(TimeWindow(374.06, 376.74), TimeWindow(376.74, 377.80))))
     }
 
     @Test

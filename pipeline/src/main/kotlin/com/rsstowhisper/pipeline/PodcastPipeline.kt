@@ -585,7 +585,12 @@ class PodcastPipeline(
             val speakers = speakersFor(dir, existing)
             val byKind = WindowRepair.defectsByKind(cues, prompt, speakers)
             val defects = WindowRepair.defectCues(cues, byKind)
-            val traded = if (speakers == null) 0 else (WindowRepair.defectCues(cues, prompt) - defects).size
+            val tradedCues = if (speakers == null) emptySet() else WindowRepair.defectCues(cues, prompt) - defects
+            val traded = tradedCues.size
+            if (traded > 0) {
+                val at = tradedCues.sorted().joinToString(", ") { "%.2f".format(Locale.ROOT, cues[it].start) }
+                logger.debug("$label: traded between voices at $at s")
+            }
             if (defects.isEmpty()) return Result.success(DefectLine(null, speakers != null, traded))
             val kinds = byKind.entries.joinToString("\t") { "${it.key}=${it.value.size}" }
             val text = "$label\tdefects=${defects.size}\twindows=${WindowRepair.windows(cues, defects).size}\t$kinds"

@@ -1,5 +1,7 @@
 package com.rsstowhisper.pipeline
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.LoggerContext
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.external.Cue
@@ -8,6 +10,7 @@ import com.rsstowhisper.external.Transcriber
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
 import org.junit.jupiter.api.io.TempDir
+import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.math.floor
@@ -146,6 +149,26 @@ class ChunkedDecodeTest {
         val retried = mapper.readTree(Files.readString(dir.resolve("transcript.json"))).path("whisper_run").path("chunking").path("retried")
         assertEquals(1, retried.size())
         assertTrue(retried[0].path("conditioned").asBoolean())
+    }
+
+    @Test
+    fun `an episode decoded in chunks is summed up in one line, with its chunks and how many were decoded again`(
+        @TempDir tempDir: Path,
+    ) {
+        val lap = listOf(" We're going to talk about", " the", " whiskey", " sour.")
+        val looped = serverJson(0.8, *(0 until 45).map { Cue(1.0 + it * 0.2, 1.2 + it * 0.2, lap[it % 4]) }.toTypedArray())
+        val logger = (LoggerFactory.getILoggerFactory() as LoggerContext).getLogger("com.rsstowhisper")
+        val level = logger.level
+        logger.level = Level.DEBUG
+
+        val messages =
+            try {
+                logged { redecode(tempDir, listOf(looped, serverJson(0.8, begins), serverJson(39.8, odd))) }
+            } finally {
+                logger.level = level
+            }
+
+        assertEquals(1, messages.count { Regex("Transcribed in [0-9.]+ minutes: 2 chunks, 1 decoded again").matches(it) }, "$messages")
     }
 
     @Test

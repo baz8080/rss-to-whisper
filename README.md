@@ -862,8 +862,10 @@ meets the same wall.
 Half of what the loop and echo rules flagged after #98 was real speech: a line one host says and
 the other repeats, or a quote from an archive clip said again by the host. `--diarize` writes who
 speaks when to each target's `speaker-turns.json`, and with turns there a loop, cycle or echo whose
-laps are each mostly one voice, a different voice at every lap, is not a defect. Not merely laps
-crossing a speaker change: whisper looping over a conversation crosses those too.
+laps are each mostly one voice, a different voice at every lap, is not a defect, so long as whisper
+was sure of every repeat (a mean word probability of 0.9). Not merely laps crossing a speaker change:
+whisper looping over a conversation crosses those too, and its copy of a line written over someone
+else's speech starts unsure of itself.
 
 - **Recipe.** sherpa-onnx offline speaker diarization: pyannote segmentation 3.0, NeMo TitaNet
   small, fast clustering at cosine distance 0.5, on the CPU. The pipeline runs its bundled

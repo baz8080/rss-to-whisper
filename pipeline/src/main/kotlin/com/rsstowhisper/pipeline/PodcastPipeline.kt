@@ -346,6 +346,15 @@ class PodcastPipeline(
         return SpeakerTurns.read(episodeDirPath, sha256, bytes)
     }
 
+    /** With the pair's words, or none for a transcript without them: then no repeat counts as traded. */
+    private fun voicesFor(
+        episodeDirPath: Path,
+        speakers: SpeakerTurns,
+    ): WindowRepair.Voices {
+        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+        return WindowRepair.Voices(speakers, if (Files.exists(wordsPath)) readWords(wordsPath) else emptyList())
+    }
+
     /**
      * Recorded for every attempt, not every success: the episodes that starve
      * the selection are exactly the ones `retranscribeEpisode` keeps refusing.
@@ -590,7 +599,7 @@ class PodcastPipeline(
             val podcast = podcastForDir(config.podcasts, dir.parent.fileName.toString())
             val prompt = WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt)
             val speakers = speakersFor(dir, existing)
-            val byKind = WindowRepair.defectsByKind(cues, prompt, speakers)
+            val byKind = WindowRepair.defectsByKind(cues, prompt, speakers?.let { voicesFor(dir, it) })
             val defects = WindowRepair.defectCues(cues, byKind)
             val tradedCues = if (speakers == null) emptySet() else WindowRepair.defectCues(cues, prompt) - defects
             val traded = tradedCues.size
@@ -1732,7 +1741,7 @@ class PodcastPipeline(
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
         val speakers = speakersFor(episodeDirPath, existing)
-        val defects = WindowRepair.defectCues(cues, prompt, speakers)
+        val defects = WindowRepair.defectCues(cues, prompt, speakers?.let { voicesFor(episodeDirPath, it) })
         if (defects.isEmpty() && !fillGaps && !retime) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
@@ -1868,7 +1877,7 @@ class PodcastPipeline(
         val retimed =
             if (retime && speech != null) {
                 val filler = spliced.cues.indices.filter { WindowRepair.filler(spliced.cues[it], prompt) }
-                val skip = WindowRepair.defectCues(spliced.cues, prompt, speakers) + filler
+                val skip = WindowRepair.defectCues(spliced.cues, prompt, speakers?.let { WindowRepair.Voices(it, spliced.words) }) + filler
                 Retiming.retime(spliced, speech, skip)
             } else {
                 null

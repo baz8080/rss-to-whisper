@@ -48,8 +48,8 @@ internal object WindowRepair {
     fun defectCues(
         cues: List<Cue>,
         prompt: Prompt = Prompt.NONE,
-        speakers: SpeakerTurns? = null,
-    ): Set<Int> = defectCues(cues, defectsByKind(cues, prompt, speakers))
+        voices: Voices? = null,
+    ): Set<Int> = defectCues(cues, defectsByKind(cues, prompt, voices))
 
     /** The cues [byKind] names, as [defectsByKind] found them in [cues]. */
     fun defectCues(
@@ -64,16 +64,16 @@ internal object WindowRepair {
         return defects
     }
 
-    /** Each kind of defect's cues. With [speakers], a repeat traded between voices is not a loop or an echo. */
+    /** Each kind of defect's cues. With [voices], a repeat traded between voices is not a loop or an echo. */
     fun defectsByKind(
         cues: List<Cue>,
         prompt: Prompt = Prompt.NONE,
-        speakers: SpeakerTurns? = null,
+        voices: Voices? = null,
     ): Map<String, Set<Int>> =
         mapOf(
-            "loop" to loops(cues, speakers),
+            "loop" to loops(cues, voices),
             "stretch" to TranscriptQuality.stretchCopyCues(cues).toSet(),
-            "echo" to echoes(cues, speakers).toSet(),
+            "echo" to echoes(cues, voices).toSet(),
             "copy" to longCopies(cues).toSet(),
             "leak" to leaks(cues, prompt),
             "stock" to stock(cues),
@@ -88,7 +88,7 @@ internal object WindowRepair {
     /** Runs of identical cues, with the cue either side that holds the loop's first or last lap. */
     private fun loops(
         cues: List<Cue>,
-        speakers: SpeakerTurns?,
+        voices: Voices?,
     ): Set<Int> {
         val loops = mutableSetOf<Int>()
         var i = 0
@@ -96,7 +96,7 @@ internal object WindowRepair {
             val key = cues[i].text.trim().lowercase()
             var j = i
             while (key.isNotEmpty() && j + 1 < cues.size && cues[j + 1].text.trim().lowercase() == key) j++
-            if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN && speakers?.traded((i..j).map { window(cues, it..it) }) != true) {
+            if (j - i + 1 >= TranscriptQuality.MAX_REPEATED_CUE_RUN && voices?.traded(cues, (i..j).map { it..it }) != true) {
                 loops.addAll(i..j)
                 // The loop's first lap usually arrives inside the cue before it, which
                 // must not survive as the repair's anchor.
@@ -105,7 +105,7 @@ internal object WindowRepair {
             }
             i = j + 1
         }
-        loops += cycles(cues, speakers)
+        loops += cycles(cues, voices)
         loops += cues.indices.filter { loopsWithin(cues[it]) }
         return loops
     }
@@ -113,7 +113,7 @@ internal object WindowRepair {
     /** A few cues repeated in turn: "We're going to talk about | the | whiskey | sour." eight times over. */
     private fun cycles(
         cues: List<Cue>,
-        speakers: SpeakerTurns?,
+        voices: Voices?,
     ): Set<Int> {
         val keys = cues.map { Prompt.wordsOf(it.text) }
         val cycles = mutableSetOf<Int>()
@@ -126,8 +126,8 @@ internal object WindowRepair {
                 if (j - i >= (TranscriptQuality.MAX_REPEATED_CUE_RUN - 1) * period && lap.toSet().size == period &&
                     lap.sumOf { it.size } >= MIN_CYCLE_WORDS
                 ) {
-                    val laps = (i - period until j step period).filter { it + period <= j }.map { window(cues, it until it + period) }
-                    if (speakers?.traded(laps) != true) cycles.addAll(i - period until j)
+                    val laps = (i - period until j step period).filter { it + period <= j }.map { it until it + period }
+                    if (voices?.traded(cues, laps) != true) cycles.addAll(i - period until j)
                     i = j
                 } else {
                     i++
@@ -231,7 +231,7 @@ internal object WindowRepair {
     /** A sentence repeated within a few cues, and any stack of zero-length cues against it. */
     internal fun echoes(
         cues: List<Cue>,
-        speakers: SpeakerTurns? = null,
+        voices: Voices? = null,
     ): Set<Int> {
         val keys =
             cues.map { cue ->
@@ -241,7 +241,7 @@ internal object WindowRepair {
             cues.indices.filter { i ->
                 keys[i].size >= MIN_WORDS_FOR_ECHO &&
                     (maxOf(0, i - ECHO_LOOKBACK_CUES) until i).any {
-                        keys[it] == keys[i] && speakers?.traded(listOf(window(cues, it..it), window(cues, i..i))) != true
+                        keys[it] == keys[i] && voices?.traded(cues, listOf(it..it, i..i)) != true
                     }
             }.toMutableSet()
         val flat =
@@ -280,6 +280,29 @@ internal object WindowRepair {
     }
 
     private val WHITESPACE = Regex("\\s+")
+
+    /** An episode's speaker turns, with the decode's words to say how sure whisper was of each cue. */
+    class Voices(
+        private val turns: SpeakerTurns,
+        words: List<Word>,
+    ) {
+        private val probabilities = words.filter { it.text.isNotBlank() }.groupBy({ it.segment }, { it.probability })
+
+        /** A line traded between voices, every repeat of it one whisper was sure of: a copy pasted over other speech is not. */
+        fun traded(
+            cues: List<Cue>,
+            laps: List<IntRange>,
+        ): Boolean = laps.drop(1).all { sure(it) } && turns.traded(laps.map { window(cues, it) })
+
+        private fun sure(lap: IntRange): Boolean {
+            if (lap.any { it !in probabilities }) return false
+            val said = lap.flatMap { probabilities.getValue(it) }
+            return said.average() >= MIN_REPEAT_PROBABILITY
+        }
+    }
+
+    /** Whisper's copy of a line over someone else's speech starts unsure of itself; a real repeat does not. */
+    private const val MIN_REPEAT_PROBABILITY = 0.9
 
     /** The initial prompt, for telling a cue whisper voiced from it: its punctuation and case vary, and it may stop partway. */
     class Prompt(text: String?) {
@@ -1728,7 +1751,8 @@ internal object WindowRepair {
         // At its own 30 s boundaries a window decode crams in paraphrases of what it just said.
         val crammed = inside.filter { crammed(spliced.cues[it], MIN_CRAMMED_WORDS_IN_DECODE) }
         val stocked = if (stock) stockAfter(base, replacement, defects).map { first + it } else emptyList()
-        return (defectCues(spliced.cues, prompt, speakers) + leaks + crammed + stocked).count { it in inside }
+        val voices = speakers?.let { Voices(it, spliced.words) }
+        return (defectCues(spliced.cues, prompt, voices) + leaks + crammed + stocked).count { it in inside }
     }
 
     /** The replacement's cues that are one of whisper's stock phrases the base did not say there. */

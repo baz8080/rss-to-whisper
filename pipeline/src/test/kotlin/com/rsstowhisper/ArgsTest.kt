@@ -220,6 +220,14 @@ class ArgsTest {
     }
 
     @Test
+    fun `diarize needs targets and has no decode to force`() {
+        assertTrue(parseArgs(arrayOf("--diarize", "--retranscribe-list", "episodes.txt")).diarize)
+        assertFalse(parseArgs(arrayOf("--retranscribe-id", "abcd1234")).diarize)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--diarize")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--diarize", "--retranscribe-id", "abcd1234", "--retranscribe-force")) }
+    }
+
+    @Test
     fun `retime needs targets and has no decode to force`() {
         assertTrue(parseArgs(arrayOf("--retime", "--retranscribe-id", "abcd1234")).retime)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--retime")) }

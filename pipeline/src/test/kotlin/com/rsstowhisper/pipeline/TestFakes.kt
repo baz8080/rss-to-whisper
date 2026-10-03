@@ -13,6 +13,9 @@ import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.external.Mp3Clip
+import com.rsstowhisper.external.SpeakerDiarizer
+import com.rsstowhisper.external.SpeakerDiarizerFailed
+import com.rsstowhisper.external.SpeakerTurn
 import com.rsstowhisper.external.SpeechDetector
 import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
@@ -203,6 +206,24 @@ internal class FakeSpeechDetector(
     }
 }
 
+/** Hears [turns] in every file, or fails the way a missing Python does. */
+internal class FakeSpeakerDiarizer(
+    private val turns: List<SpeakerTurn> = emptyList(),
+    private val fails: Boolean = false,
+    private val modelLabel: String = "fake",
+) : SpeakerDiarizer("python3", "seg/model.onnx", "emb/$modelLabel.onnx") {
+    var calls = 0
+        private set
+
+    override val models: Map<String, Any> get() = mapOf("segmentation" to "seg/model.onnx", "embedding" to "emb/$modelLabel.onnx")
+
+    override fun turns(audioPath: Path): List<SpeakerTurn> {
+        calls++
+        if (fails) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
+        return turns
+    }
+}
+
 internal fun makeEntry(
     title: String?,
     audioUrl: String? = "https://cdn/ep.mp3",
@@ -269,6 +290,7 @@ internal fun buildPipeline(
     feedService: FakeFeedService? = null,
     audioDir: Path? = null,
     speechDetector: SpeechDetector? = null,
+    diarizer: SpeakerDiarizer? = null,
     chunkedDecode: Boolean = true,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
@@ -302,6 +324,7 @@ internal fun buildPipeline(
             feedService = feedSvc,
             transcriber = txSvc,
             speechDetector = speechDetector,
+            diarizer = diarizer,
         )
     return Triple(pipeline, txSvc, feedSvc)
 }

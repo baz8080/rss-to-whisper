@@ -42,8 +42,9 @@ class DiarizeTest {
         sha: String? = recordedSha,
         recordedBytes: Long = FAKE_MP3_BYTES.size.toLong(),
         withWords: Boolean = false,
+        name: String = "2024-01-02-abcd1234-hello",
     ): Path {
-        val dir = dataDir.resolve("Show").resolve("2024-01-02-abcd1234-hello")
+        val dir = dataDir.resolve("Show").resolve(name)
         Files.createDirectories(dir)
         Files.write(dir.resolve("audio.mp3"), FAKE_MP3_BYTES)
         val words =
@@ -156,20 +157,68 @@ class DiarizeTest {
     }
 
     @Test
-    fun `a failing diarizer stops the batch and the run reports it`(
+    fun `a diarizer that fails its check stops the run before any episode`(
         @TempDir tempDir: Path,
     ) {
         val dir = episode(tempDir)
         val diarizer = FakeSpeakerDiarizer(fails = true)
         val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
-        val request = RetranscribeRequest(paths = listOf("Show/${dir.fileName}", "Show/other"), diarize = true)
 
-        val errors = loggedAtError { assertFalse(pipeline.retranscribe(request)) }
+        val errors = loggedAtError { assertFalse(pipeline.retranscribe(diarize(dir))) }
 
-        assertEquals(1, diarizer.calls)
+        assertEquals(0, diarizer.calls)
         assertFalse(Files.exists(dir.resolve(SpeakerTurns.FILENAME)))
         assertEquals(0, txSvc.calls.size)
-        assertTrue(errors.any { "Stopping" in it && "diarize" in it })
+        assertTrue(errors.any { "Cannot continue" in it && "diarize" in it })
+    }
+
+    @Test
+    fun `an episode that cannot be diarized is skipped and the batch goes on`(
+        @TempDir tempDir: Path,
+    ) {
+        val bad = episode(tempDir, name = "2024-01-01-aaaa1111-bad")
+        val good = episode(tempDir, name = "2024-01-02-bbbb2222-good")
+        val diarizer = FakeSpeakerDiarizer(turns, badFiles = setOf(bad.fileName.toString()))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
+        val request = RetranscribeRequest(paths = listOf("Show/${bad.fileName}", "Show/${good.fileName}"), diarize = true)
+
+        val errors = loggedAtError { assertTrue(pipeline.retranscribe(request)) }
+
+        assertEquals(2, diarizer.calls)
+        assertFalse(Files.exists(bad.resolve(SpeakerTurns.FILENAME)))
+        assertEquals(turns, SpeakerTurns.read(good, recordedSha)?.turns)
+        assertTrue(errors.any { "Could not diarize" in it && "ffmpeg could not decode" in it })
+    }
+
+    @Test
+    fun `three episodes in a row that cannot be diarized stop the batch`(
+        @TempDir tempDir: Path,
+    ) {
+        val names = (1..4).map { "2024-01-0$it-abcd000$it-ep" }
+        names.forEach { episode(tempDir, name = it) }
+        val diarizer = FakeSpeakerDiarizer(turns, badFiles = names.toSet())
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
+
+        val errors =
+            loggedAtError { assertFalse(pipeline.retranscribe(RetranscribeRequest(paths = names.map { "Show/$it" }, diarize = true))) }
+
+        assertEquals(3, diarizer.calls)
+        assertTrue(errors.any { "Stopping" in it && "3 episodes in a row" in it })
+    }
+
+    @Test
+    fun `an unreadable turns file is diarized again`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        Files.writeString(dir.resolve(SpeakerTurns.FILENAME), "{\"audio_sha256\": \"recorded-sha\", \"tur")
+        val diarizer = FakeSpeakerDiarizer(turns)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
+
+        assertTrue(pipeline.retranscribe(diarize(dir)))
+
+        assertEquals(1, diarizer.calls)
+        assertEquals(turns, SpeakerTurns.read(dir, recordedSha)?.turns)
     }
 
     @Test
@@ -240,6 +289,25 @@ class DiarizeTest {
         assertTrue(pipeline.listDefects(out))
 
         assertEquals("", out.toString())
+    }
+
+    @Test
+    fun `window repair leaves a loop traded between voices alone, and repairs it without the turns`(
+        @TempDir tempDir: Path,
+    ) {
+        val traded = episode(tempDir, sha = null, withWords = true, name = "2024-01-01-aaaa1111-traded")
+        SpeakerTurns.write(traded, "hashed-audio", FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
+        val untraded = episode(tempDir, sha = null, withWords = true, name = "2024-01-02-bbbb2222-untraded")
+        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+
+        val messages =
+            logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${traded.fileName}"), repairWindows = true)) }
+
+        assertEquals(0, txSvc.calls.size)
+        assertTrue(messages.any { "has no loops" in it })
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${untraded.fileName}"), repairWindows = true))
+        assertTrue(txSvc.calls.isNotEmpty())
     }
 
     @Test

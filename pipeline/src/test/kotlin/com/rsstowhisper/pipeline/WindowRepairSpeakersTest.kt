@@ -2,6 +2,7 @@ package com.rsstowhisper.pipeline
 
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeakerTurn
+import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -109,5 +110,29 @@ class WindowRepairSpeakersTest {
         val traded = SpeakerTurns(listOf(SpeakerTurn(0.0, 3.0, 0), SpeakerTurn(6.0, 9.0, 1)))
 
         assertEquals(setOf(2), WindowRepair.echoes(echoing(), WindowRepair.Voices(traded, emptyList())))
+    }
+
+    @Test
+    fun `a replacement that keeps a traded line brings no defect with the turns, and four without`() {
+        val cues = silmarillion()
+        val base = WhisperTranscription.of(cues, words(cues))
+        val laps = cues.subList(2, 6)
+        val replacement = WindowRepair.Replacement(2..5, laps, words(laps))
+
+        assertEquals(0, WindowRepair.defectsAfter(base, replacement, speakers = turns(0, 1, 0, 1)))
+        assertEquals(4, WindowRepair.defectsAfter(base, replacement))
+    }
+
+    @Test
+    fun `a cycle traded lap by lap between two voices is not a loop`() {
+        val lap = listOf(" Was it the butler, then?", " No, it was the gardener.")
+        val cues =
+            listOf(Cue(0.0, 6.0, " Let me read you the ending.")) +
+                (0 until 4).flatMap { k -> lap.mapIndexed { n, text -> Cue(6.0 + k * 3 + n * 1.5, 7.5 + k * 3 + n * 1.5, text) } } +
+                listOf(Cue(18.0, 21.0, " And that was that."))
+        val byLap = SpeakerTurns((0 until 4).map { SpeakerTurn(6.0 + it * 3, 9.0 + it * 3, it % 2) })
+
+        assertEquals((1..8).toSet(), WindowRepair.defectsByKind(cues).getValue("loop"))
+        assertEquals(emptySet(), WindowRepair.defectsByKind(cues, voices = voices(cues, byLap)).getValue("loop"))
     }
 }

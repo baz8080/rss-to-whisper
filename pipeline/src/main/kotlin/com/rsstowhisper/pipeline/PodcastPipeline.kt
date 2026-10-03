@@ -15,6 +15,7 @@ import com.rsstowhisper.audio.toSecondsMap
 import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Cue
+import com.rsstowhisper.external.EpisodeNotDiarized
 import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.Mp3Frames
 import com.rsstowhisper.external.SpeakerDiarizer
@@ -219,18 +220,37 @@ class PodcastPipeline(
             return true
         }
 
+        if (request.diarize) {
+            try {
+                requireNotNull(diarizer).check()
+            } catch (e: SpeakerDiarizerFailed) {
+                logger.error("${e.message}. Fix diarize_python and the diarize models. Cannot continue")
+                return false
+            }
+        }
+
         logger.info(if (request.diarize && !repairs) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes")
         var done = 0
         var diarized = 0
+        var undiarizedInARow = 0
         var toolFailed = false
         for (target in targets) {
             if (request.diarize) {
                 try {
                     if (diarizeEpisode(target)) diarized++
+                    undiarizedInARow = 0
                 } catch (e: SpeakerDiarizerFailed) {
                     logger.error("Stopping: ${e.message}. Fix diarize_python and the diarize models")
                     toolFailed = true
                     break
+                } catch (e: EpisodeNotDiarized) {
+                    logger.error("Could not diarize ${target.parent.fileName}/${target.fileName}: ${e.message}")
+                    // The check passed, so failing file after file is the tool breaking mid-run, not the files.
+                    if (++undiarizedInARow >= MAX_UNDIARIZED_IN_A_ROW) {
+                        logger.error("Stopping: $undiarizedInARow episodes in a row could not be diarized")
+                        toolFailed = true
+                        break
+                    }
                 } catch (e: Exception) {
                     logger.error("Could not diarize ${target.fileName}", e)
                 }
@@ -268,7 +288,8 @@ class PodcastPipeline(
         }
         if (request.diarize) logger.info("Diarized $diarized of ${targets.size} episodes")
         if (!request.diarize || repairs) logger.info("Re-transcribed $done of ${targets.size} episodes")
-        val paired = verifyBatch(targets)
+        // Diarizing alone writes nothing into a pair.
+        val paired = (request.diarize && !repairs) || verifyBatch(targets)
         return decodingWorked() && paired && !toolFailed
     }
 
@@ -599,9 +620,12 @@ class PodcastPipeline(
             val podcast = podcastForDir(config.podcasts, dir.parent.fileName.toString())
             val prompt = WindowRepair.Prompt(podcast?.initialPrompt ?: config.defaultPrompt)
             val speakers = speakersFor(dir, existing)
-            val byKind = WindowRepair.defectsByKind(cues, prompt, speakers?.let { voicesFor(dir, it) })
+            val unheard = WindowRepair.defectsByKind(cues, prompt)
+            // Turns clear only loops and echoes, so the words are read only for an episode with one.
+            val repeats = unheard.getValue("loop").isNotEmpty() || unheard.getValue("echo").isNotEmpty()
+            val byKind = if (speakers != null && repeats) WindowRepair.defectsByKind(cues, prompt, voicesFor(dir, speakers)) else unheard
             val defects = WindowRepair.defectCues(cues, byKind)
-            val tradedCues = if (speakers == null) emptySet() else WindowRepair.defectCues(cues, prompt) - defects
+            val tradedCues = WindowRepair.defectCues(cues, unheard) - defects
             val traded = tradedCues.size
             if (traded > 0) {
                 val at = tradedCues.sorted().joinToString(", ") { "%.2f".format(Locale.ROOT, cues[it].start) }
@@ -1740,18 +1764,20 @@ class PodcastPipeline(
 
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
+        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
+        val words by lazy { readWords(wordsPath) }
         val speakers = speakersFor(episodeDirPath, existing)
-        val defects = WindowRepair.defectCues(cues, prompt, speakers?.let { voicesFor(episodeDirPath, it) })
+        val voices = speakers?.takeIf { Files.exists(wordsPath) }?.let { WindowRepair.Voices(it, words) }
+        val defects = WindowRepair.defectCues(cues, prompt, voices)
         if (defects.isEmpty() && !fillGaps && !retime) {
             logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
             return false
         }
-        val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
         if (!Files.exists(wordsPath)) {
             logger.warn("Cannot repair $label: its decode has no word timings to splice into; re-transcribe it instead")
             return false
         }
-        val base = WhisperTranscription.of(cues, readWords(wordsPath))
+        val base = WhisperTranscription.of(cues, words)
         val speech =
             speechDetector?.speech(audioPath)?.takeIf { spans ->
                 WindowRepair.plausible(base, defects, spans).also {
@@ -2231,6 +2257,7 @@ class PodcastPipeline(
         private const val LOCK_WAIT_MILLIS = 100L
 
         private const val VERIFY_THREADS = 8
+        private const val MAX_UNDIARIZED_IN_A_ROW = 3
 
         /**
          * Prompted, then without history, then both again warmer, then with a wider beam. whisper can skip speech on one

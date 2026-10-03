@@ -193,6 +193,10 @@ internal fun parseArgs(argv: Array<String>): Args {
     if (args.diarize && !args.isRetranscribe) {
         error("--diarize needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
     }
+    // Diarizing alone marks no attempt, so the least-recently-attempted window would never move on.
+    if (args.diarize && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.repairWindows && !args.repairGaps && !args.retime) {
+        error("--diarize alone selects the same --retranscribe-limit episodes every run; drop the limit or name the targets")
+    }
     if (args.diarize && args.retranscribeForce) {
         error("--diarize decodes nothing, so --retranscribe-force does not apply")
     }

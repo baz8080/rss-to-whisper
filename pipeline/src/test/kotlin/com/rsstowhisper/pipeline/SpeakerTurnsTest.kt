@@ -162,6 +162,19 @@ class SpeakerTurnsTest {
     }
 
     @Test
+    fun `a turns file that will not parse, or holds a malformed turn, reads as none and is not current`(
+        @TempDir dir: Path,
+    ) {
+        Files.writeString(dir.resolve(SpeakerTurns.FILENAME), "{\"audio_sha256\": \"sha-a\", \"tur")
+        assertNull(SpeakerTurns.read(dir, "sha-a"))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models))
+
+        Files.writeString(dir.resolve(SpeakerTurns.FILENAME), """{"audio_sha256": "sha-a", "audio_bytes": 100, "turns": [[0.0, "x", 1]]}""")
+        assertNull(SpeakerTurns.read(dir, "sha-a"))
+        assertFalse(SpeakerTurns.current(dir, "sha-a", 100L, models))
+    }
+
+    @Test
     fun `an episode with no turns file reads as none`(
         @TempDir dir: Path,
     ) {

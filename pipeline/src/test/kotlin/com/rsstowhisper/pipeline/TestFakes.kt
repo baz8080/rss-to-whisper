@@ -12,6 +12,7 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.EpisodeNotDiarized
 import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.SpeakerDiarizer
 import com.rsstowhisper.external.SpeakerDiarizerFailed
@@ -211,15 +212,21 @@ internal class FakeSpeakerDiarizer(
     private val turns: List<SpeakerTurn> = emptyList(),
     private val fails: Boolean = false,
     private val modelLabel: String = "fake",
+    /** Episode directory names whose audio cannot be diarized. */
+    private val badFiles: Set<String> = emptySet(),
 ) : SpeakerDiarizer("python3", "seg/model.onnx", "emb/$modelLabel.onnx") {
     var calls = 0
         private set
 
     override val models: Map<String, Any> get() = mapOf("segmentation" to "seg/model.onnx", "embedding" to "emb/$modelLabel.onnx")
 
+    override fun check() {
+        if (fails) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
+    }
+
     override fun turns(audioPath: Path): List<SpeakerTurn> {
         calls++
-        if (fails) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
+        if (audioPath.parent.fileName.toString() in badFiles) throw EpisodeNotDiarized("ffmpeg could not decode $audioPath")
         return turns
     }
 }

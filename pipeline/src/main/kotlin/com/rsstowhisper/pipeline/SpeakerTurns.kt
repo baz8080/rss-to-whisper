@@ -3,6 +3,7 @@ package com.rsstowhisper.pipeline
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.external.SpeakerTurn
 import com.rsstowhisper.external.TimeWindow
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -57,7 +58,7 @@ class SpeakerTurns(
                 } else {
                     audioBytes != null && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes
                 }
-            return if (same) SpeakerTurns(turnsOf(stored)) else null
+            return if (same) turnsOf(stored)?.let { SpeakerTurns(it) } else null
         }
 
         /** Whether [episodeDir] already has turns for this audio from these [models]. */
@@ -69,7 +70,7 @@ class SpeakerTurns(
         ): Boolean {
             val stored = stored(episodeDir) ?: return false
             return stored["audio_sha256"] == audioSha256 && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes &&
-                models.all { (key, value) -> stored[key]?.toString() == value.toString() }
+                models.all { (key, value) -> stored[key]?.toString() == value.toString() } && turnsOf(stored) != null
         }
 
         fun write(
@@ -91,16 +92,26 @@ class SpeakerTurns(
             }
         }
 
+        /** Null for a file that is missing or will not parse: it reads as no turns, and is diarized again. */
         private fun stored(episodeDir: Path): Map<*, *>? {
             val file = episodeDir.resolve(FILENAME)
             if (!Files.exists(file)) return null
-            return mapper.readValue(Files.readString(file), Map::class.java)
+            return try {
+                mapper.readValue(Files.readString(file), Map::class.java)
+            } catch (e: IOException) {
+                null
+            }
         }
 
-        private fun turnsOf(stored: Map<*, *>): List<SpeakerTurn> =
-            (stored["turns"] as? List<*>).orEmpty().map { entry ->
-                val turn = entry as List<*>
-                SpeakerTurn((turn[0] as Number).toDouble(), (turn[1] as Number).toDouble(), (turn[2] as Number).toInt())
+        private fun turnsOf(stored: Map<*, *>): List<SpeakerTurn>? {
+            val list = stored["turns"] as? List<*> ?: return null
+            return list.map { entry ->
+                val turn = entry as? List<*> ?: return null
+                val start = (turn.getOrNull(0) as? Number)?.toDouble() ?: return null
+                val end = (turn.getOrNull(1) as? Number)?.toDouble() ?: return null
+                val speaker = (turn.getOrNull(2) as? Number)?.toInt() ?: return null
+                SpeakerTurn(start, end, speaker)
             }
+        }
     }
 }

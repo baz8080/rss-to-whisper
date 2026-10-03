@@ -877,6 +877,9 @@ else's speech starts unsure of itself.
   all three is skipped. Repairs change the words, never the audio, so they never make turns stale.
   A transcript from before decodes recorded their audio takes turns made for audio of its mp3's size.
 - **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
+- **Failures.** A setup that can't run (no sherpa-onnx, no ffmpeg, a model that won't load) stops the run
+  before the first episode. An episode that can't be diarized is logged and skipped; three in a row stop it.
+  Alone it records no attempt, so it refuses `--retranscribe-limit` with `--retranscribe-flagged`.
 - Alone, `--diarize` decodes nothing and leaves the transcript untouched. With
   `--repair-windows`, `--repair-gaps` or `--retime` it runs first, and the repair uses the turns.
   `--list-defects` uses whatever turns are stored, adds `traded=<cues>` to an episode's line, and

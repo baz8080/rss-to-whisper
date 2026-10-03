@@ -853,6 +853,34 @@ meets the same wall.
 - Needs `vad_binary` and `vad_model`. It can run with `--repair-windows` in the same pass; a gap
   inside a defect window is left to that window.
 
+### Speaker turns
+
+```bash
+./transcribe --diarize --retranscribe-list episodes.txt
+```
+
+Half of what the loop and echo rules flagged after #98 was real speech: a line one host says and
+the other repeats, or a quote from an archive clip said again by the host. `--diarize` writes who
+speaks when to each target's `speaker-turns.json`, and with turns there a loop, cycle or echo whose
+laps are each mostly one voice, a different voice at every lap, is not a defect. Not merely laps
+crossing a speaker change: whisper looping over a conversation crosses those too.
+
+- **Recipe.** sherpa-onnx offline speaker diarization: pyannote segmentation 3.0, NeMo TitaNet
+  small, fast clustering at cosine distance 0.5, on the CPU. The pipeline runs its bundled
+  `diarize.py` under `diarize_python`, a Python with `sherpa-onnx` and `sherpa-onnx-core`, given
+  `diarize_segmentation_model` and `diarize_embedding_model` in `pods.yaml`. ffmpeg decodes the
+  audio. About 2 min for an hour of audio on 4 threads.
+- **Keyed on the audio.** The file records the audio's SHA-256 (taken from the decode's
+  `whisper_run` while the size matches), the models and the threshold; an episode with turns for
+  all three is skipped. Repairs change the words, never the audio, so they never make turns stale.
+- **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
+- Alone, `--diarize` decodes nothing and leaves the transcript untouched. With
+  `--repair-windows`, `--repair-gaps` or `--retime` it runs first, and the repair uses the turns.
+  `--list-defects` uses whatever turns are stored, adds `traded=<cues>` to an episode's line, and
+  says how many episodes the turns cleared.
+- Short trades (under a second or two a lap) and several voices at once are one turn to this
+  recipe, and stay flagged.
+
 ### Re-transcribing an episode
 
 Redoing an episode used to mean deleting its `transcript.json` by hand. With the quality

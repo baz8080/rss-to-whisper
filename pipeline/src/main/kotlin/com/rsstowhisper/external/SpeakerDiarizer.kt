@@ -27,6 +27,7 @@ open class SpeakerDiarizer(
     private val python: String,
     private val segmentation: String,
     private val embedding: String,
+    private val threads: Int = 4,
     private val timeoutSeconds: Long = TIMEOUT_MINUTES * 60,
     private val checkSeconds: Long = CHECK_MINUTES * 60,
 ) {
@@ -85,7 +86,7 @@ open class SpeakerDiarizer(
             }
             val command =
                 listOf(python, script.toString(), "--segmentation", segmentation, "--embedding", embedding) +
-                    listOf("--threshold", THRESHOLD.toString(), "--threads", THREADS.toString()) + args
+                    listOf("--threshold", THRESHOLD.toString(), "--threads", threads.toString()) + args
             val process =
                 try {
                     ProcessBuilder(command).redirectOutput(out.toFile()).redirectError(Redirect.to(err.toFile())).start()
@@ -110,8 +111,6 @@ open class SpeakerDiarizer(
         /** sherpa-onnx's default cosine distance at which two voices are one speaker. */
         const val THRESHOLD = 0.5
 
-        /** The Mac's CPU is shared with the whisper server. */
-        private const val THREADS = 4
         private const val TIMEOUT_MINUTES = 60L
         private const val CHECK_MINUTES = 5L
 

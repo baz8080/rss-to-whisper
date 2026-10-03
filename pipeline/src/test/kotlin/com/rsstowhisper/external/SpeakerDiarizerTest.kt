@@ -73,7 +73,18 @@ class SpeakerDiarizerTest {
     private fun diarizer(
         python: String,
         timeoutSeconds: Long = 30,
-    ) = SpeakerDiarizer(python, "seg/model.onnx", "emb/titanet.onnx", timeoutSeconds = timeoutSeconds)
+        threads: Int = 4,
+    ) = SpeakerDiarizer(python, "seg/model.onnx", "emb/titanet.onnx", threads, timeoutSeconds = timeoutSeconds)
+
+    @Test
+    fun `the thread count reaches the script`(
+        @TempDir dir: Path,
+    ) {
+        val stub = stub(dir, audio = "case \"$*\" in *\"--threads 2 \"*) echo '[]' ;; *) exit 1 ;; esac")
+
+        assertEquals(emptyList(), diarizer(stub, threads = 2).turns(audio))
+        assertFailsWith<EpisodeNotDiarized> { diarizer(stub, threads = 4).turns(audio) }
+    }
 
     private val audio = Path.of("Show", "episode", "audio.mp3")
 

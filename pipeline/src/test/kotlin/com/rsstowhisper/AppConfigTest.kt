@@ -589,4 +589,24 @@ class AppConfigTest {
             }
         assertTrue(e.message!!.contains("Une Emission"), e.message!!)
     }
+
+    @Test
+    fun `a partial diarize config is refused, and a whole or absent one is not`() {
+        val whole = AppConfig(diarizePython = "python3", diarizeSegmentationModel = "seg/model.onnx", diarizeEmbeddingModel = "emb/a.onnx")
+
+        whole.validate()
+        AppConfig().validate()
+        for (
+        partial in
+        listOf(
+            whole.copy(diarizePython = null),
+            whole.copy(diarizeSegmentationModel = null),
+            whole.copy(diarizeEmbeddingModel = null),
+            AppConfig(diarizePython = "python3"),
+        )
+        ) {
+            val error = assertFailsWith<IllegalArgumentException> { partial.validate() }
+            assertTrue("set together or not at all" in error.message.orEmpty())
+        }
+    }
 }

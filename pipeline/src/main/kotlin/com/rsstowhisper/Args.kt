@@ -69,6 +69,12 @@ internal val USAGE =
                                  to where VAD hears it start, with no decode;
                                  after any repair above. Needs vad_binary and
                                  vad_model
+      --diarize                  Write each target's speaker turns to
+                                 speaker-turns.json, keyed on its audio, before
+                                 any repair above; alone, nothing is decoded.
+                                 A repeat traded between voices is then not a
+                                 loop or echo. Needs diarize_python and the
+                                 diarize models
       --retranscribe-force      Keep the new decode even if it scores worse.
                                  Only with --retranscribe, --retranscribe-id or
                                  --retranscribe-list,
@@ -105,6 +111,7 @@ internal data class Args(
     val repairWindows: Boolean = false,
     val repairGaps: Boolean = false,
     val retime: Boolean = false,
+    val diarize: Boolean = false,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -128,6 +135,7 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--repair-windows" -> args.copy(repairWindows = true)
                 "--repair-gaps" -> args.copy(repairGaps = true)
                 "--retime" -> args.copy(retime = true)
+                "--diarize" -> args.copy(diarize = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
@@ -181,6 +189,16 @@ internal fun parseArgs(argv: Array<String>): Args {
     }
     if (args.retime && !args.isRetranscribe) {
         error("--retime needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.diarize && !args.isRetranscribe) {
+        error("--diarize needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    // Diarizing alone marks no attempt, so the least-recently-attempted window would never move on.
+    if (args.diarize && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.repairWindows && !args.repairGaps && !args.retime) {
+        error("--diarize alone selects the same --retranscribe-limit episodes every run; drop the limit or name the targets")
+    }
+    if (args.diarize && args.retranscribeForce) {
+        error("--diarize decodes nothing, so --retranscribe-force does not apply")
     }
     if (args.retime && args.retranscribeForce) {
         error("--retime moves word times without a decode, so --retranscribe-force does not apply")

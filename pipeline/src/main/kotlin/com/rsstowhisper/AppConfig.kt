@@ -44,6 +44,10 @@ data class AppConfig(
     val vadModel: String? = null,
     /** A folder of what VAD heard in each episode, read before running it and written after: `<podcast>__<episode>.json`. */
     val vadCache: String? = null,
+    /** A Python with sherpa-onnx, and its two models, for `--diarize`: speaker turns from the bundled `diarize.py`. */
+    val diarizePython: String? = null,
+    val diarizeSegmentationModel: String? = null,
+    val diarizeEmbeddingModel: String? = null,
     /** With VAD, decode each episode as its speech cut into chunks of one window each, rather than whole. */
     val chunkedDecode: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
@@ -60,6 +64,9 @@ data class AppConfig(
      */
     internal fun validate() {
         require((vadBinary == null) == (vadModel == null)) { "vad_binary and vad_model are set together or not at all" }
+        require(listOf(diarizePython, diarizeSegmentationModel, diarizeEmbeddingModel).map { it == null }.toSet().size == 1) {
+            "diarize_python, diarize_segmentation_model and diarize_embedding_model are set together or not at all"
+        }
         checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {

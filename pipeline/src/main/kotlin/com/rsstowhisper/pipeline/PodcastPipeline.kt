@@ -211,13 +211,14 @@ class PodcastPipeline(
             return false
         }
 
+        val repairs = request.repairWindows || request.repairGaps || request.retime
+        val verb = if (request.diarize && !repairs) "diarize" else "re-transcribe"
         if (config.dryRun) {
-            targets.forEach { logger.info("Would re-transcribe ${it.parent.fileName}/${it.fileName}") }
-            logger.info("Dry run: would re-transcribe ${targets.size} episodes")
+            targets.forEach { logger.info("Would $verb ${it.parent.fileName}/${it.fileName}") }
+            logger.info("Dry run: would $verb ${targets.size} episodes")
             return true
         }
 
-        val repairs = request.repairWindows || request.repairGaps || request.retime
         logger.info(if (request.diarize && !repairs) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes")
         var done = 0
         var diarized = 0

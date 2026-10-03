@@ -1,6 +1,7 @@
 package com.rsstowhisper.pipeline
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import com.rsstowhisper.external.SpeakerDiarizer
 import com.rsstowhisper.external.SpeakerTurn
 import com.rsstowhisper.external.TimeWindow
 import java.io.IOException
@@ -105,13 +106,7 @@ class SpeakerTurns(
 
         private fun turnsOf(stored: Map<*, *>): List<SpeakerTurn>? {
             val list = stored["turns"] as? List<*> ?: return null
-            return list.map { entry ->
-                val turn = entry as? List<*> ?: return null
-                val start = (turn.getOrNull(0) as? Number)?.toDouble() ?: return null
-                val end = (turn.getOrNull(1) as? Number)?.toDouble() ?: return null
-                val speaker = (turn.getOrNull(2) as? Number)?.toInt() ?: return null
-                SpeakerTurn(start, end, speaker)
-            }
+            return list.map { SpeakerDiarizer.turnOf(it) ?: return null }
         }
     }
 }

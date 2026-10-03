@@ -27,6 +27,8 @@ open class SpeakerDiarizer(
     private val python: String,
     private val segmentation: String,
     private val embedding: String,
+    private val timeoutSeconds: Long = TIMEOUT_MINUTES * 60,
+    private val checkSeconds: Long = CHECK_MINUTES * 60,
 ) {
     /** What the turns depend on besides the audio; turns stored under any other are stale. */
     open val models: Map<String, Any> get() =
@@ -38,14 +40,14 @@ open class SpeakerDiarizer(
 
     /** That Python has sherpa-onnx, ffmpeg is on PATH and the models load: whatever fails after this is the file's. */
     open fun check() {
-        val (exit, _, why) = run(listOf("--check"), CHECK_MINUTES) ?: throw SpeakerDiarizerFailed("The diarize check did not finish")
+        val (exit, _, why) = run(listOf("--check"), checkSeconds) ?: throw SpeakerDiarizerFailed("The diarize check did not finish")
         if (exit != 0) throw SpeakerDiarizerFailed("The diarize check failed: $why")
     }
 
     open fun turns(audioPath: Path): List<SpeakerTurn> {
         val (exit, out, why) =
-            run(listOf(audioPath.toString()), TIMEOUT_MINUTES)
-                ?: throw EpisodeNotDiarized("Diarization did not finish on $audioPath within $TIMEOUT_MINUTES minutes")
+            run(listOf(audioPath.toString()), timeoutSeconds)
+                ?: throw EpisodeNotDiarized("Diarization did not finish on $audioPath within ${timeoutSeconds / 60} minutes")
         if (exit != 0) throw EpisodeNotDiarized("Diarization exited $exit on $audioPath: $why")
         return try {
             parse(out)
@@ -54,10 +56,25 @@ open class SpeakerDiarizer(
         }
     }
 
-    /** Exit code, stdout and the last line of stderr; null if it ran out of time. The script is written afresh for each run. */
+    /**
+     * Exit code, stdout and the last line of stderr; null if it ran out of time. The script is written afresh for each
+     * run, since a run of days outlasts the temp folder's cleanup; a temp folder that can't be written is a setup failure.
+     */
     private fun run(
         args: List<String>,
-        minutes: Long,
+        seconds: Long,
+    ): Triple<Int, String, String>? =
+        try {
+            attempt(args, seconds)
+        } catch (e: SpeakerDiarizerFailed) {
+            throw e
+        } catch (e: IOException) {
+            throw SpeakerDiarizerFailed("Cannot run diarization: ${e.message}", e)
+        }
+
+    private fun attempt(
+        args: List<String>,
+        seconds: Long,
     ): Triple<Int, String, String>? {
         val script = Files.createTempFile("diarize-", ".py")
         val out = Files.createTempFile("diarize-", ".json")
@@ -75,7 +92,9 @@ open class SpeakerDiarizer(
                 } catch (e: IOException) {
                     throw SpeakerDiarizerFailed("Cannot run $python: ${e.message}", e)
                 }
-            if (!process.waitFor(minutes, TimeUnit.MINUTES)) {
+            if (!process.waitFor(seconds, TimeUnit.SECONDS)) {
+                // Or the ffmpeg it started decodes on without it.
+                process.descendants().forEach { it.destroyForcibly() }
                 process.destroyForcibly()
                 return null
             }
@@ -109,15 +128,18 @@ open class SpeakerDiarizer(
                     throw SpeakerDiarizerFailed("Diarization printed something other than a list of turns: ${e.message}", e)
                 }
             return list.map { entry ->
-                val turn = entry as? List<*>
-                val start = (turn?.getOrNull(0) as? Number)?.toDouble()
-                val end = (turn?.getOrNull(1) as? Number)?.toDouble()
-                val speaker = (turn?.getOrNull(2) as? Number)?.toInt()
-                if (turn?.size != 3 || start == null || end == null || speaker == null) {
-                    throw SpeakerDiarizerFailed("Diarization printed a turn that is not [start, end, speaker]: $entry")
-                }
-                SpeakerTurn(start, end, speaker)
+                turnOf(entry) ?: throw SpeakerDiarizerFailed("Diarization printed a turn that is not [start, end, speaker]: $entry")
             }
+        }
+
+        /** `[start, end, speaker]`, as diarize.py prints a turn and speaker-turns.json stores it; null for anything else. */
+        fun turnOf(entry: Any?): SpeakerTurn? {
+            val turn = entry as? List<*> ?: return null
+            if (turn.size != 3) return null
+            val start = (turn[0] as? Number)?.toDouble() ?: return null
+            val end = (turn[1] as? Number)?.toDouble() ?: return null
+            val speaker = (turn[2] as? Number)?.toInt() ?: return null
+            return SpeakerTurn(start, end, speaker)
         }
     }
 }

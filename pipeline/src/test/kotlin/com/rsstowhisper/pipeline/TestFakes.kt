@@ -214,6 +214,8 @@ internal class FakeSpeakerDiarizer(
     private val modelLabel: String = "fake",
     /** Episode directory names whose audio cannot be diarized. */
     private val badFiles: Set<String> = emptySet(),
+    /** The check fails once this many files have been tried: the tool breaking mid-run. */
+    private val breaksAfter: Int = Int.MAX_VALUE,
 ) : SpeakerDiarizer("python3", "seg/model.onnx", "emb/$modelLabel.onnx") {
     var calls = 0
         private set
@@ -221,7 +223,7 @@ internal class FakeSpeakerDiarizer(
     override val models: Map<String, Any> get() = mapOf("segmentation" to "seg/model.onnx", "embedding" to "emb/$modelLabel.onnx")
 
     override fun check() {
-        if (fails) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
+        if (fails || calls >= breaksAfter) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
     }
 
     override fun turns(audioPath: Path): List<SpeakerTurn> {

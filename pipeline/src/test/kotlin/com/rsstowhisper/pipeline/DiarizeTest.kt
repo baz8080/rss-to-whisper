@@ -191,7 +191,7 @@ class DiarizeTest {
     }
 
     @Test
-    fun `three episodes in a row that cannot be diarized stop the batch`(
+    fun `episodes in a row that cannot be diarized go on while the check still passes`(
         @TempDir tempDir: Path,
     ) {
         val names = (1..4).map { "2024-01-0$it-abcd000$it-ep" }
@@ -199,8 +199,22 @@ class DiarizeTest {
         val diarizer = FakeSpeakerDiarizer(turns, badFiles = names.toSet())
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
 
-        val errors =
-            loggedAtError { assertFalse(pipeline.retranscribe(RetranscribeRequest(paths = names.map { "Show/$it" }, diarize = true))) }
+        assertTrue(pipeline.retranscribe(RetranscribeRequest(paths = names.map { "Show/$it" }, diarize = true)))
+
+        assertEquals(4, diarizer.calls)
+    }
+
+    @Test
+    fun `three episodes in a row that cannot be diarized stop the batch once the check fails too`(
+        @TempDir tempDir: Path,
+    ) {
+        val names = (1..4).map { "2024-01-0$it-abcd000$it-ep" }
+        names.forEach { episode(tempDir, name = it) }
+        val diarizer = FakeSpeakerDiarizer(turns, badFiles = names.toSet(), breaksAfter = 3)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, diarizer = diarizer)
+        val request = RetranscribeRequest(paths = names.map { "Show/$it" }, diarize = true)
+
+        val errors = loggedAtError { assertFalse(pipeline.retranscribe(request)) }
 
         assertEquals(3, diarizer.calls)
         assertTrue(errors.any { "Stopping" in it && "3 episodes in a row" in it })

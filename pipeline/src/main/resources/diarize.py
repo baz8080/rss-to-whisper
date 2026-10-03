@@ -42,7 +42,7 @@ try:
 except subprocess.CalledProcessError as e:
     sys.exit(f"ffmpeg could not decode {args.audio}: {e.stderr.decode(errors='replace').strip()}")
 
-# Freed before sherpa makes its own copy: a long episode's samples run to a gigabyte.
+# Freed before sherpa makes its own copy of the samples.
 samples = array("f")
 samples.frombytes(raw)
 del raw

@@ -245,11 +245,16 @@ class PodcastPipeline(
                     break
                 } catch (e: EpisodeNotDiarized) {
                     logger.error("Could not diarize ${target.parent.fileName}/${target.fileName}: ${e.message}")
-                    // The check passed, so failing file after file is the tool breaking mid-run, not the files.
+                    // Bad or long files bunch up by show; only a failed check says the tool itself broke.
                     if (++undiarizedInARow >= MAX_UNDIARIZED_IN_A_ROW) {
-                        logger.error("Stopping: $undiarizedInARow episodes in a row could not be diarized")
-                        toolFailed = true
-                        break
+                        try {
+                            requireNotNull(diarizer).check()
+                            undiarizedInARow = 0
+                        } catch (e: SpeakerDiarizerFailed) {
+                            logger.error("Stopping: $undiarizedInARow episodes in a row could not be diarized, and ${e.message}")
+                            toolFailed = true
+                            break
+                        }
                     }
                 } catch (e: Exception) {
                     logger.error("Could not diarize ${target.fileName}", e)
@@ -367,13 +372,21 @@ class PodcastPipeline(
         return SpeakerTurns.read(episodeDirPath, sha256, bytes)
     }
 
-    /** With the pair's words, or none for a transcript without them: then no repeat counts as traded. */
+    /** With the pair's words, or none for a transcript without them or with unreadable ones: then no repeat counts as traded. */
     private fun voicesFor(
         episodeDirPath: Path,
         speakers: SpeakerTurns,
     ): WindowRepair.Voices {
         val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
-        return WindowRepair.Voices(speakers, if (Files.exists(wordsPath)) readWords(wordsPath) else emptyList())
+        val words =
+            try {
+                if (Files.exists(wordsPath)) readWords(wordsPath) else emptyList()
+            } catch (e: Exception) {
+                val label = "${episodeDirPath.parent.fileName}/${episodeDirPath.fileName}"
+                logger.warn("Cannot read the words of $label (${e.message}); judging it without its turns")
+                emptyList()
+            }
+        return WindowRepair.Voices(speakers, words)
     }
 
     /**

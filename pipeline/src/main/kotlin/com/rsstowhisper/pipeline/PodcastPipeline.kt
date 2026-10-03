@@ -1445,7 +1445,8 @@ class PodcastPipeline(
         Files.deleteIfExists(episodePath.resolve("transcript.txt"))
 
         val elapsedMinutes = (System.currentTimeMillis() - startTime) / 60000.0
-        logger.debug("Transcribed in: ${"%.2f".format(Locale.ROOT, elapsedMinutes)} Minutes")
+        val chunks = chunking?.let { ": ${it["chunks"]} chunks, ${(it["retried"] as List<*>).size} decoded again" } ?: ""
+        logger.debug("Transcribed in ${"%.1f".format(Locale.ROOT, elapsedMinutes)} minutes$chunks")
 
         val run =
             WhisperRun(

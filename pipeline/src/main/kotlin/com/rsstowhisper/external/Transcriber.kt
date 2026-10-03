@@ -141,8 +141,6 @@ open class Transcriber(
                 .post(requestBody)
                 .build()
 
-        logger.debug("Sending {} to whisper server", audioPath.fileName)
-
         val response =
             try {
                 httpClient.newCall(request).execute()

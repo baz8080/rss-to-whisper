@@ -16,6 +16,7 @@ import com.rsstowhisper.createPath
 import com.rsstowhisper.escapeFilename
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.EpisodeNotDiarized
+import com.rsstowhisper.external.Fingerprinter
 import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.Mp3Frames
 import com.rsstowhisper.external.SpeakerDiarizer
@@ -620,6 +621,84 @@ class PodcastPipeline(
         )
         logger.info("$diarized episodes have speaker turns; $traded hold repeats traded between voices, which cleared $cleared")
         return unreadable == 0
+    }
+
+    /** The sounds heard in several of a podcast's episodes, as candidates for Barry to name. Reads only. */
+    fun findRecurringAudio(
+        podcastName: String,
+        out: Path,
+    ): Boolean {
+        val binary = config.fingerprintBinary
+        if (binary == null) {
+            logger.error("--find-recurring-audio needs fingerprint_binary in pods.yaml")
+            return false
+        }
+        val podcast = podcastForDir(config.podcasts, podcastName)
+        if (podcast == null) {
+            logger.error("No podcast in pods.yaml is called $podcastName")
+            return false
+        }
+        val showDir = dataRoot.resolve(escapeFilename(podcast.name))
+        if (!Files.isDirectory(showDir)) {
+            logger.error("$showDir is missing")
+            return false
+        }
+        val episodes =
+            Files.list(showDir).use { it.toList() }
+                .filter { Files.exists(it.resolve(TRANSCRIPT_FILENAME)) && Files.exists(audioFileFor(it)) }
+                .sortedBy { it.fileName.toString() }
+                .map { RecurringAudioSurvey.Episode(it.fileName.toString(), it, audioFileFor(it)) }
+        logger.info("Fingerprinting ${episodes.size} episodes of ${podcast.name}")
+        val fingerprinter = Fingerprinter(binary, config.fingerprintCache?.let { Path.of(it) })
+        return RecurringAudioSurvey(fingerprinter, VERIFY_THREADS) { readWords(it.resolve(WhisperTranscription.WORDS_FILENAME)) }
+            .write(episodes, out.resolve(escapeFilename(podcast.name)))
+    }
+
+    /**
+     * Each labelled sound in [labels] -- a TSV with show, label, source_episode, source_from, source_to, candidate and
+     * note columns -- cut from its source episode's fingerprint into the show's recurring_audio file. A cut that does
+     * not find itself again in its source is refused.
+     */
+    fun addRecurringAudio(labels: Path): Boolean {
+        val dir = config.recurringAudio?.let { Path.of(it) }
+        val binary = config.fingerprintBinary
+        if (dir == null || binary == null) {
+            logger.error("--add-recurring-audio needs recurring_audio and fingerprint_binary in pods.yaml")
+            return false
+        }
+        val fingerprinter = Fingerprinter(binary, config.fingerprintCache?.let { Path.of(it) })
+        val lines = Files.readAllLines(labels).filter { it.isNotBlank() }
+        val header = lines.first().split('\t')
+        val rows = lines.drop(1).map { line -> header.zip(line.split('\t')).toMap() }
+        var ok = true
+        for ((show, showRows) in rows.groupBy { it.getValue("show") }) {
+            val podcast = podcastForDir(config.podcasts, show)
+            if (podcast == null) {
+                logger.error("No podcast in pods.yaml has the directory $show")
+                ok = false
+                continue
+            }
+            val added = mutableListOf<Reference>()
+            for (row in showRows) {
+                val kind = LABEL_KINDS[row.getValue("label")] ?: continue
+                val episode = row.getValue("source_episode")
+                val (from, to) = row.getValue("source_from").toDouble() to row.getValue("source_to").toDouble()
+                val values = fingerprinter.fingerprint(audioFileFor(dataRoot.resolve(show).resolve(episode))).values
+                val range = RecurringAudio.values(from, to)
+                val cut = values.copyOfRange(range.first, minOf(values.size, range.last + 1))
+                val id = "${kind.label}-${row.getValue("candidate")}"
+                val found = RecurringAudio.matches(cut, values).filter { it.start < to && from < it.end }
+                if (cut.size < RecurringReferences.MIN_VALUES || found.sumOf { it.end - it.start } < 0.75 * (to - from)) {
+                    logger.error("$show $id, cut from $episode $from-$to s, does not find itself there again; not added")
+                    ok = false
+                    continue
+                }
+                added += Reference(id, kind, episode, from, to, cut, row["note"]?.takeIf { it.isNotBlank() })
+            }
+            RecurringReferences.add(dir, escapeFilename(podcast.name), podcast.name, added)
+            logger.info("${podcast.name}: ${added.size} references added")
+        }
+        return ok
     }
 
     /** An episode's --list-defects line, null if it has none, and how many cues speaker turns cleared. */
@@ -2276,6 +2355,16 @@ class PodcastPipeline(
 
         private const val VERIFY_THREADS = 8
         private const val MAX_UNDIARIZED_IN_A_ROW = 3
+
+        /** The listening page's letters. X (not one sound) and ? (unsure) are not stored. */
+        private val LABEL_KINDS =
+            mapOf(
+                "I" to Reference.Kind.INTRO,
+                "O" to Reference.Kind.OUTRO,
+                "M" to Reference.Kind.MUSIC,
+                "A" to Reference.Kind.AD,
+                "S" to Reference.Kind.SPEECH,
+            )
 
         /**
          * Prompted, then without history, then both again warmer, then with a wider beam. whisper can skip speech on one

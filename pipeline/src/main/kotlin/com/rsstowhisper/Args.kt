@@ -45,6 +45,15 @@ internal val USAGE =
       --list-defects         List every episode --repair-windows would find
                              loops, copies, echoes or leaks in, with counts by
                              kind; works as a --retranscribe-list. Reads only
+      --find-recurring-audio <podcast>
+                             Fingerprint the podcast's episodes and list the
+                             sounds heard in several of them, into
+                             --recurring-audio-out <dir>. Needs fingerprint_binary;
+                             reads only, never contacts whisper
+      --add-recurring-audio <labels.tsv>
+                             Store each labelled sound (I, O, M, A, S) in the
+                             recurring_audio folder, cut from its source
+                             episode's fingerprint. Never contacts whisper
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -108,6 +117,9 @@ internal data class Args(
     val retranscribeList: String? = null,
     val verifyPairs: Boolean = false,
     val listDefects: Boolean = false,
+    val findRecurringAudio: String? = null,
+    val recurringAudioOut: String? = null,
+    val addRecurringAudio: String? = null,
     val repairWindows: Boolean = false,
     val repairGaps: Boolean = false,
     val retime: Boolean = false,
@@ -132,6 +144,9 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--whisper-model" -> args.copy(whisperModel = valueFor(flag, argv, ++i))
                 "--verify-pairs" -> args.copy(verifyPairs = true)
                 "--list-defects" -> args.copy(listDefects = true)
+                "--find-recurring-audio" -> args.copy(findRecurringAudio = valueFor(flag, argv, ++i))
+                "--recurring-audio-out" -> args.copy(recurringAudioOut = valueFor(flag, argv, ++i))
+                "--add-recurring-audio" -> args.copy(addRecurringAudio = valueFor(flag, argv, ++i))
                 "--repair-windows" -> args.copy(repairWindows = true)
                 "--repair-gaps" -> args.copy(repairGaps = true)
                 "--retime" -> args.copy(retime = true)
@@ -214,6 +229,17 @@ internal fun parseArgs(argv: Array<String>): Args {
     }
     if (args.listDefects && (args.isRetranscribe || args.verifyPairs)) {
         error("--list-defects only reads; run its output with --retranscribe-list and --repair-windows")
+    }
+    if ((args.findRecurringAudio == null) != (args.recurringAudioOut == null)) {
+        error("--find-recurring-audio and --recurring-audio-out are given together")
+    }
+    if (args.findRecurringAudio != null && (args.isRetranscribe || args.verifyPairs || args.listDefects)) {
+        error("--find-recurring-audio only reads, and runs on its own")
+    }
+    if (args.addRecurringAudio != null &&
+        (args.isRetranscribe || args.verifyPairs || args.listDefects || args.findRecurringAudio != null)
+    ) {
+        error("--add-recurring-audio runs on its own")
     }
     return args
 }

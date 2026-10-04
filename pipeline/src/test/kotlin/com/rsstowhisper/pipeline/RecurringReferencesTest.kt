@@ -1,0 +1,62 @@
+package com.rsstowhisper.pipeline
+
+import com.rsstowhisper.PodcastConfig
+import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.assertThrows
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
+import java.nio.file.Path
+import kotlin.test.assertContentEquals
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+
+class RecurringReferencesTest {
+    private val theme = IntArray(40) { it * 7919 - Int.MAX_VALUE / 2 }
+
+    private fun ref(
+        id: String,
+        kind: Reference.Kind = Reference.Kind.INTRO,
+        values: IntArray = theme,
+    ) = Reference(id, kind, "2020-01-01-abcd1234-Ep", 10.0, 15.0, values)
+
+    @Test
+    fun `references read back as written, values above 2^31 included`(
+        @TempDir dir: Path,
+    ) {
+        val values = theme.copyOf().also { it[0] = 4293918828L.toInt() }
+        RecurringReferences.add(dir, "Shite-Talk", "Shite Talk", listOf(ref("intro-1", values = values), ref("ad-3", Reference.Kind.AD)))
+        val refs = RecurringReferences.load(dir).of(PodcastConfig(name = "Shite Talk", url = "u"))
+        assertEquals(listOf("intro-1", "ad-3"), refs.map { it.id })
+        assertContentEquals(values, refs[0].fingerprint)
+        assertTrue(refs[0].kind.marks)
+        assertTrue(!refs[1].kind.marks)
+    }
+
+    @Test
+    fun `an id already in the file is refused`(
+        @TempDir dir: Path,
+    ) {
+        RecurringReferences.add(dir, "Show", "Show", listOf(ref("intro-1")))
+        assertThrows<IllegalStateException> { RecurringReferences.add(dir, "Show", "Show", listOf(ref("intro-1"))) }
+    }
+
+    @Test
+    fun `a file with an unknown kind or too few values is refused, not skipped`(
+        @TempDir dir: Path,
+    ) {
+        RecurringReferences.add(dir, "Show", "Show", listOf(ref("intro-1")))
+        val file = dir.resolve("Show.json")
+        Files.writeString(file, Files.readString(file).replace("\"intro\"", "\"jingle\""))
+        assertThrows<IllegalStateException> { RecurringReferences.load(dir) }
+        RecurringReferences.add(dir, "Other", "Other", listOf(ref("intro-2", values = theme.copyOf(8))))
+        Files.delete(file)
+        assertThrows<IllegalArgumentException> { RecurringReferences.load(dir) }
+    }
+
+    @Test
+    fun `a missing folder holds no references`(
+        @TempDir dir: Path,
+    ) {
+        assertEquals(0, RecurringReferences.load(dir.resolve("none")).size)
+    }
+}

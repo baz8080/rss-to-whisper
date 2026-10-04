@@ -76,7 +76,12 @@ class PodcastPipeline(
         config.vadBinary?.let { binary -> config.vadModel?.let { SpeechDetector(binary, it, config.vadCache?.let { c -> Path.of(c) }) } },
     private val diarizer: SpeakerDiarizer? =
         config.diarizePython?.let { python ->
-            SpeakerDiarizer(python, config.diarizeSegmentationModel.orEmpty(), config.diarizeEmbeddingModel.orEmpty())
+            SpeakerDiarizer(
+                python,
+                config.diarizeSegmentationModel.orEmpty(),
+                config.diarizeEmbeddingModel.orEmpty(),
+                config.diarizeThreads,
+            )
         },
 ) {
     /** Spent across the whole run, not per podcast, so one show cannot use up the budget. */

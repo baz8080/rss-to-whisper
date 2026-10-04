@@ -48,6 +48,8 @@ data class AppConfig(
     val diarizePython: String? = null,
     val diarizeSegmentationModel: String? = null,
     val diarizeEmbeddingModel: String? = null,
+    /** CPU threads for each diarization; several runners at fewer threads each get through more episodes. */
+    val diarizeThreads: Int = 4,
     /** With VAD, decode each episode as its speech cut into chunks of one window each, rather than whole. */
     val chunkedDecode: Boolean = true,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
@@ -67,6 +69,7 @@ data class AppConfig(
         require(listOf(diarizePython, diarizeSegmentationModel, diarizeEmbeddingModel).map { it == null }.toSet().size == 1) {
             "diarize_python, diarize_segmentation_model and diarize_embedding_model are set together or not at all"
         }
+        require(diarizeThreads >= 1) { "diarize_threads must be at least 1" }
         checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {

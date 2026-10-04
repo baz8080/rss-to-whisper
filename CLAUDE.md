@@ -86,7 +86,8 @@ VAD results per episode (`<podcast>__<episode>.json`), read before running VAD a
 
 `--diarize` (with any re-transcription target, no decode) writes each episode's speaker turns to `speaker-turns.json`,
 keyed on its audio's SHA-256, with sherpa-onnx run by the bundled `diarize.py` under `diarize_python` (with
-`diarize_segmentation_model`/`diarize_embedding_model` in `pods.yaml`; needs ffmpeg). The turns never go into the pair.
+`diarize_segmentation_model`/`diarize_embedding_model` in `pods.yaml`, and `diarize_threads` per run, default 4; needs
+ffmpeg). The turns never go into the pair.
 Where an episode has them, a loop, cycle or echo whose laps are each one voice, changing at every lap, and whose repeats
 whisper was sure of, is not a defect.
 

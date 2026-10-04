@@ -609,4 +609,11 @@ class AppConfigTest {
             assertTrue("set together or not at all" in error.message.orEmpty())
         }
     }
+
+    @Test
+    fun `diarize_threads must be at least one`() {
+        AppConfig(diarizeThreads = 2).validate()
+        val error = assertFailsWith<IllegalArgumentException> { AppConfig(diarizeThreads = 0).validate() }
+        assertTrue("diarize_threads" in error.message.orEmpty())
+    }
 }

@@ -16,14 +16,9 @@ import java.util.concurrent.TimeUnit
 /** fpcalc could not be run or said something unreadable. */
 class FingerprinterFailed(message: String, cause: Throwable? = null) : IOException(message, cause)
 
-/**
- * An episode's Chromaprint sub-fingerprints, one per [HOP] seconds from the start of the file.
- *
- * @param duration whole seconds, as fpcalc reports it: estimated from the bit rate, so far out for some VBR files
- */
+/** An episode's Chromaprint sub-fingerprints, one per [HOP] seconds from the start of the file. */
 class Fingerprint(
     val values: IntArray,
-    val duration: Int,
 )
 
 /** Chromaprint's raw fingerprint of a whole file, from its `fpcalc` tool, which decodes the mp3 itself. */
@@ -80,7 +75,7 @@ open class Fingerprinter(
             // Junk after the last frame stops it within seconds of the end; earlier may be the volume, so try again next time.
             // Measured against the frames, not fpcalc's DURATION: that is a bit-rate estimate, far out for some VBR files.
             val read = fingerprint.values.size * HOP
-            val length = Mp3Frames.of(audioPath)?.duration
+            val length = synchronized(WHOLE_FILE_READS) { Mp3Frames.of(audioPath)?.duration }
             val nearEnd = length != null && read >= length - PARTIAL_SLACK_SECONDS
             if (!nearEnd) {
                 val of = length?.let { "%.0f".format(Locale.ROOT, it) } ?: "an unknown length of"
@@ -100,12 +95,13 @@ open class Fingerprinter(
         private const val PARTIAL_READ = 3
         private const val PARTIAL_SLACK_SECONDS = 5.0
         private val logger = LoggerFactory.getLogger(Fingerprinter::class.java)
+
+        /** One mp3 at a time held whole to time its frames: a few partial reads at once could each be a 200 MB episode. */
+        private val WHOLE_FILE_READS = Any()
         private const val CACHE_MAGIC = 0x46503031 // "FP01"
 
         fun parse(output: String): Fingerprint {
             val lines = output.lineSequence().associate { it.substringBefore('=') to it.substringAfter('=', "") }
-            val duration =
-                lines["DURATION"]?.trim()?.toIntOrNull() ?: throw FingerprinterFailed("fpcalc printed no DURATION")
             val printed = lines["FINGERPRINT"]?.trim().orEmpty()
             if (printed.isEmpty()) throw FingerprinterFailed("fpcalc printed no FINGERPRINT")
             val values =
@@ -115,7 +111,7 @@ open class Fingerprinter(
                 } catch (e: NumberFormatException) {
                     throw FingerprinterFailed("fpcalc printed a FINGERPRINT that is not a list of numbers", e)
                 }
-            return Fingerprint(values, duration)
+            return Fingerprint(values)
         }
 
         fun cacheBytes(
@@ -126,7 +122,8 @@ open class Fingerprinter(
             DataOutputStream(bytes).use { out ->
                 out.writeInt(CACHE_MAGIC)
                 out.writeLong(audioBytes)
-                out.writeInt(fingerprint.duration)
+                // Where fpcalc's DURATION was kept; unread, and kept so earlier cache files still read.
+                out.writeInt(0)
                 out.writeInt(fingerprint.values.size)
                 fingerprint.values.forEach { out.writeInt(it) }
             }
@@ -141,10 +138,10 @@ open class Fingerprinter(
             try {
                 DataInputStream(bytes.inputStream()).use { input ->
                     if (input.readInt() != CACHE_MAGIC || input.readLong() != audioBytes) return null
-                    val duration = input.readInt()
+                    input.readInt()
                     val count = input.readInt()
                     if (count <= 0 || bytes.size != 20 + 4 * count) return null
-                    Fingerprint(IntArray(count) { input.readInt() }, duration)
+                    Fingerprint(IntArray(count) { input.readInt() })
                 }
             } catch (e: EOFException) {
                 null

@@ -25,6 +25,7 @@ class FingerprinterTest {
     @Test
     fun `output without a fingerprint is refused`() {
         assertThrows<FingerprinterFailed> { Fingerprinter.parse("DURATION=10\n") }
+        assertEquals(2, Fingerprinter.parse("DURATION=2929.5\nFINGERPRINT=1,2\n").values.size)
         assertThrows<FingerprinterFailed> { Fingerprinter.parse("DURATION=10\nFINGERPRINT=\n") }
         assertThrows<FingerprinterFailed> { Fingerprinter.parse("") }
     }
@@ -40,11 +41,10 @@ class FingerprinterTest {
 
     @Test
     fun `the cache reads back what it wrote, for audio of the same size only`() {
-        val fingerprint = Fingerprint(intArrayOf(1, -2, Int.MAX_VALUE, Int.MIN_VALUE), 1)
+        val fingerprint = Fingerprint(intArrayOf(1, -2, Int.MAX_VALUE, Int.MIN_VALUE))
         val bytes = Fingerprinter.cacheBytes(fingerprint, 1234)
         val read = assertNotNull(Fingerprinter.readCache(bytes, 1234))
         assertContentEquals(fingerprint.values, read.values)
-        assertEquals(1, read.duration)
         assertNull(Fingerprinter.readCache(bytes, 1235))
         assertNull(Fingerprinter.readCache(bytes.copyOf(bytes.size - 2), 1234))
     }
@@ -56,7 +56,7 @@ class FingerprinterTest {
         val audio = Files.createDirectories(dir.resolve("show/episode")).resolve("audio.mp3")
         Files.write(audio, ByteArray(10))
         val cache = Files.createDirectories(dir.resolve("cache"))
-        Files.write(cache.resolve("show__episode.fp"), Fingerprinter.cacheBytes(Fingerprint(intArrayOf(7, 8), 0), 10))
+        Files.write(cache.resolve("show__episode.fp"), Fingerprinter.cacheBytes(Fingerprint(intArrayOf(7, 8)), 10))
         assertContentEquals(intArrayOf(7, 8), Fingerprinter("no-such-fpcalc", cache).fingerprint(audio).values)
     }
 

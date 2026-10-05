@@ -671,11 +671,10 @@ class PodcastPipeline(
                 return false
             }
         val fingerprinter = Fingerprinter(binary, config.fingerprintCache?.let { Path.of(it) })
-        val lines = Files.readAllLines(labels).filter { it.isNotBlank() }
-        val header = lines.first().split('\t')
-        val rows = lines.drop(1).map { line -> header.zip(line.split('\t')).toMap() }
-        var ok = true
-        for ((show, showRows) in rows.groupBy { it.getValue("show") }) {
+        val (rows, problems) = RecurringReferences.parseLabels(Files.readAllLines(labels))
+        problems.forEach { logger.error("$labels: $it; not added") }
+        var ok = problems.isEmpty()
+        for ((show, showRows) in rows.groupBy { it.show }) {
             val podcast = podcastForDir(config.podcasts, show)
             if (podcast == null) {
                 logger.error("No podcast in pods.yaml has the directory $show")
@@ -685,8 +684,8 @@ class PodcastPipeline(
             val existing = stored.of(podcast).map { it.id }.toSet()
             val added = mutableListOf<Reference>()
             for (row in showRows) {
-                val kind = LABEL_KINDS[row.getValue("label")] ?: continue
-                val id = "${kind.label}-${row.getValue("candidate")}"
+                val kind = LABEL_KINDS[row.label] ?: continue
+                val id = "${kind.label}-${row.candidate}"
                 if (id in existing) {
                     logger.info("$show already has $id; skipped")
                     continue
@@ -696,8 +695,7 @@ class PodcastPipeline(
                     ok = false
                     continue
                 }
-                val episode = row.getValue("source_episode")
-                val (from, to) = row.getValue("source_from").toDouble() to row.getValue("source_to").toDouble()
+                val (episode, from, to) = Triple(row.episode, row.from, row.to)
                 val values =
                     try {
                         fingerprinter.fingerprint(audioFileFor(dataRoot.resolve(show).resolve(episode))).values
@@ -713,7 +711,7 @@ class PodcastPipeline(
                     ok = false
                     continue
                 }
-                added += Reference(id, kind, episode, from, to, cut, row["note"]?.takeIf { it.isNotBlank() })
+                added += Reference(id, kind, episode, from, to, cut, row.note)
             }
             try {
                 RecurringReferences.add(dir, escapeFilename(podcast.name), podcast.name, added)

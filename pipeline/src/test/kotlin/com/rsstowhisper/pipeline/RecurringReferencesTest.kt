@@ -87,4 +87,24 @@ class RecurringReferencesTest {
         assertEquals(null, RecurringReferences.cut(episode, 20.0, 20.1))
         assertEquals(null, RecurringReferences.cut(episode, 110.0, 130.0))
     }
+
+    @Test
+    fun `a labels row that cannot be read is reported, and the rest are kept`() {
+        val header = "entry\tshow\tcandidate\tlabel\tsource_episode\tsource_from\tsource_to\tnote"
+        val (rows, problems) =
+            RecurringReferences.parseLabels(
+                listOf(
+                    header,
+                    "1\tShite-Talk\t1\tI\tep\t162.8\t191.5\t",
+                    "2\tShite-Talk\t3\tA\tep\t1:23\t191.5\tbad time",
+                    "3\tShite-Talk\t4",
+                    "4\tShite-Talk\t5\tO\tep\t10\t20\ta note",
+                ),
+            )
+        assertEquals(listOf("1", "5"), rows.map { it.candidate })
+        assertEquals(listOf(null, "a note"), rows.map { it.note })
+        assertEquals(listOf("row 3", "row 4"), problems.map { it.substringBefore(" has") })
+        assertEquals(listOf("no header row"), RecurringReferences.parseLabels(emptyList()).second)
+        assertTrue(RecurringReferences.parseLabels(listOf("show\tlabel")).second.single().startsWith("no candidate"))
+    }
 }

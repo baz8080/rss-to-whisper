@@ -38,6 +38,17 @@ internal class Reference(
     }
 }
 
+/** One row of a listening page's labels: a candidate, the letter it got, and the stretch to cut its reference from. */
+internal class LabelRow(
+    val show: String,
+    val label: String,
+    val candidate: String,
+    val episode: String,
+    val from: Double,
+    val to: Double,
+    val note: String?,
+)
+
 /** Each show's references, one `<show directory>.json` per show in a folder. */
 internal class RecurringReferences(
     private val byShow: Map<String, List<Reference>>,
@@ -56,6 +67,39 @@ internal class RecurringReferences(
         const val MIN_VALUES = 16
 
         val NONE = RecurringReferences(emptyMap())
+
+        private val LABEL_COLUMNS = listOf("show", "label", "candidate", "source_episode", "source_from", "source_to")
+
+        /** The rows of a labels TSV, and a line for each row that cannot be read. */
+        fun parseLabels(lines: List<String>): Pair<List<LabelRow>, List<String>> {
+            val text = lines.filter { it.isNotBlank() }
+            if (text.isEmpty()) return emptyList<LabelRow>() to listOf("no header row")
+            val header = text.first().split('\t')
+            val missing = LABEL_COLUMNS.filter { it !in header }
+            if (missing.isNotEmpty()) return emptyList<LabelRow>() to listOf("no ${missing.joinToString(", ")} column")
+            val rows = mutableListOf<LabelRow>()
+            val problems = mutableListOf<String>()
+            for ((n, line) in text.drop(1).withIndex()) {
+                val cells = header.zip(line.split('\t')).toMap()
+                val from = cells["source_from"]?.toDoubleOrNull()
+                val to = cells["source_to"]?.toDoubleOrNull()
+                if (LABEL_COLUMNS.any { cells[it].isNullOrBlank() } || from == null || to == null) {
+                    problems += "row ${n + 2} has an empty, missing or unreadable cell"
+                    continue
+                }
+                rows +=
+                    LabelRow(
+                        show = cells.getValue("show"),
+                        label = cells.getValue("label"),
+                        candidate = cells.getValue("candidate"),
+                        episode = cells.getValue("source_episode"),
+                        from = from,
+                        to = to,
+                        note = cells["note"]?.takeIf { it.isNotBlank() },
+                    )
+            }
+            return rows to problems
+        }
 
         /** The values of [episode] whose window is `[from, to]`, or null where that falls outside it or is too short. */
         fun cut(

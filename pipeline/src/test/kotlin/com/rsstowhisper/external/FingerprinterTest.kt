@@ -63,24 +63,29 @@ class FingerprinterTest {
     private fun fakeFpcalc(
         dir: Path,
         exit: Int,
+        duration: Int = 10,
     ): String {
-        val script = dir.resolve("fpcalc-$exit")
-        Files.writeString(script, "#!/bin/sh\necho DURATION=10\necho FINGERPRINT=1,2,3,4\nexit $exit\n")
+        val script = dir.resolve("fpcalc-$exit-$duration")
+        Files.writeString(script, "#!/bin/sh\necho DURATION=$duration\necho FINGERPRINT=${(1..16).joinToString(",")}\nexit $exit\n")
         script.toFile().setExecutable(true)
         return script.toString()
     }
 
     @Test
-    fun `a partial read is used but not cached, a whole one is cached`(
+    fun `a read stopped short is used but not cached, and one read to near its end is cached`(
         @TempDir dir: Path,
     ) {
         val audio = Files.createDirectories(dir.resolve("show/episode")).resolve("audio.mp3")
         Files.write(audio, ByteArray(10))
         val cache = dir.resolve("cache")
-        assertContentEquals(intArrayOf(1, 2, 3, 4), Fingerprinter(fakeFpcalc(dir, 3), cache).fingerprint(audio).values)
-        assertTrue(!Files.exists(cache.resolve("show__episode.fp")))
-        Fingerprinter(fakeFpcalc(dir, 0), cache).fingerprint(audio)
-        assertTrue(Files.exists(cache.resolve("show__episode.fp")))
+        val fp = cache.resolve("show__episode.fp")
+        assertEquals(16, Fingerprinter(fakeFpcalc(dir, 3, duration = 60), cache).fingerprint(audio).values.size)
+        assertTrue(!Files.exists(fp))
+        Fingerprinter(fakeFpcalc(dir, 3, duration = 2), cache).fingerprint(audio)
+        assertTrue(Files.exists(fp))
+        Files.delete(fp)
+        Fingerprinter(fakeFpcalc(dir, 0, duration = 60), cache).fingerprint(audio)
+        assertTrue(Files.exists(fp))
         assertThrows<FingerprinterFailed> { Fingerprinter(fakeFpcalc(dir, 1)).fingerprint(audio) }
     }
 }

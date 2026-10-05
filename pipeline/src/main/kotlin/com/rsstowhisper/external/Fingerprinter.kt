@@ -1,5 +1,6 @@
 package com.rsstowhisper.external
 
+import org.slf4j.LoggerFactory
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -9,6 +10,7 @@ import java.lang.ProcessBuilder.Redirect
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /** fpcalc could not be run or said something unreadable. */
@@ -40,7 +42,6 @@ open class Fingerprinter(
             } catch (e: IOException) {
                 throw FingerprinterFailed("Cannot run $binary on $audioPath: ${e.message}", e)
             }
-        // A read error part way may be the volume rather than the file: try again next time.
         if (cached != null && whole) {
             Files.createDirectories(cached.parent)
             val partial = Files.createTempFile(cached.parent, ".fp-", ".fp")
@@ -50,7 +51,7 @@ open class Fingerprinter(
         return fingerprint
     }
 
-    /** The fingerprint, and whether fpcalc read the whole file. */
+    /** The fingerprint, and whether it is worth keeping: fpcalc read the whole file, or stopped only near its end. */
     private fun compute(audioPath: Path): Pair<Fingerprint, Boolean> {
         // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
         val out = Files.createTempFile("fp-", ".txt")
@@ -74,7 +75,17 @@ open class Fingerprinter(
                     "$binary exited ${process.exitValue()} on $audioPath",
                 )
             }
-            return parse(Files.readString(out)) to (process.exitValue() == 0)
+            val fingerprint = parse(Files.readString(out))
+            if (process.exitValue() == 0) return fingerprint to true
+            // Junk after the last frame stops it within seconds of the end; earlier may be the volume, so try again next time.
+            val read = fingerprint.values.size * HOP
+            val nearEnd = read >= fingerprint.duration - PARTIAL_SLACK_SECONDS
+            if (!nearEnd) {
+                logger.warn(
+                    "$binary read $audioPath only to %.0f of %d s; not cached".format(Locale.ROOT, read, fingerprint.duration),
+                )
+            }
+            return fingerprint to nearEnd
         } finally {
             Files.deleteIfExists(out)
         }
@@ -86,6 +97,8 @@ open class Fingerprinter(
 
         private const val TIMEOUT_MINUTES = 10L
         private const val PARTIAL_READ = 3
+        private const val PARTIAL_SLACK_SECONDS = 5.0
+        private val logger = LoggerFactory.getLogger(Fingerprinter::class.java)
         private const val CACHE_MAGIC = 0x46503031 // "FP01"
 
         fun parse(output: String): Fingerprint {

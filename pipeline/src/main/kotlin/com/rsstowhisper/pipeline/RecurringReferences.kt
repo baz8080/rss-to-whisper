@@ -57,6 +57,17 @@ internal class RecurringReferences(
 
         val NONE = RecurringReferences(emptyMap())
 
+        /** The values of [episode] whose window is `[from, to]`, or null where that falls outside it or is too short. */
+        fun cut(
+            episode: IntArray,
+            from: Double,
+            to: Double,
+        ): IntArray? {
+            val range = RecurringAudio.values(from, to)
+            if (range.first < 0 || range.last >= episode.size || range.count() < MIN_VALUES) return null
+            return episode.copyOfRange(range.first, range.last + 1)
+        }
+
         /** Refuses the folder rather than skip a file: a reference that quietly stopped acting would put lyrics back. */
         fun load(dir: Path): RecurringReferences {
             if (!Files.isDirectory(dir)) return NONE
@@ -79,7 +90,7 @@ internal class RecurringReferences(
                         from = node.path("source").path("from").asDouble(),
                         to = node.path("source").path("to").asDouble(),
                         fingerprint = values,
-                        note = node.path("note").takeUnless(JsonNode::isMissingNode)?.asText(),
+                        note = node.path("note").takeIf(JsonNode::isTextual)?.asText(),
                     )
                 }
             refs.groupBy { it.id }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { error("${file.fileName}: id $it is used twice") }
@@ -97,6 +108,7 @@ internal class RecurringReferences(
             val file = dir.resolve("$show.json")
             val existing = if (Files.exists(file)) read(file) else emptyList()
             added.firstOrNull { a -> existing.any { it.id == a.id } }?.let { error("$show already has a reference ${it.id}") }
+            added.groupBy { it.id }.filterValues { it.size > 1 }.keys.firstOrNull()?.let { error("$show: id $it is added twice") }
             val all = existing + added
             val json =
                 mapOf(

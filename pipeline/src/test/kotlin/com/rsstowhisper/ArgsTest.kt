@@ -266,6 +266,12 @@ class ArgsTest {
     }
 
     @Test
+    fun `add-recurring-audio writes, so a dry run is refused`() {
+        assertEquals("labels.tsv", parseArgs(arrayOf("--add-recurring-audio", "labels.tsv")).addRecurringAudio)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--add-recurring-audio", "labels.tsv", "--dry-run")) }
+    }
+
+    @Test
     fun `verify-pairs is its own run`() {
         assertTrue(parseArgs(arrayOf("--verify-pairs")).verifyPairs)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--verify-pairs", "--retranscribe-id", "abcd1234")) }

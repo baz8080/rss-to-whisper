@@ -241,6 +241,9 @@ internal fun parseArgs(argv: Array<String>): Args {
     ) {
         error("--add-recurring-audio runs on its own")
     }
+    if (args.addRecurringAudio != null && args.dryRun) {
+        error("--add-recurring-audio writes the recurring_audio folder, so --dry-run does not apply")
+    }
     return args
 }
 

@@ -32,7 +32,7 @@ open class Fingerprinter(
     open fun fingerprint(audioPath: Path): Fingerprint {
         val cached = cache?.resolve("${audioPath.parent.parent.fileName}__${audioPath.parent.fileName}.fp")
         if (cached != null && Files.exists(cached)) readCache(Files.readAllBytes(cached), Files.size(audioPath))?.let { return it }
-        val fingerprint =
+        val (fingerprint, whole) =
             try {
                 compute(audioPath)
             } catch (e: FingerprinterFailed) {
@@ -40,7 +40,8 @@ open class Fingerprinter(
             } catch (e: IOException) {
                 throw FingerprinterFailed("Cannot run $binary on $audioPath: ${e.message}", e)
             }
-        if (cached != null) {
+        // A read error part way may be the volume rather than the file: try again next time.
+        if (cached != null && whole) {
             Files.createDirectories(cached.parent)
             val partial = Files.createTempFile(cached.parent, ".fp-", ".fp")
             Files.write(partial, cacheBytes(fingerprint, Files.size(audioPath)))
@@ -49,7 +50,8 @@ open class Fingerprinter(
         return fingerprint
     }
 
-    private fun compute(audioPath: Path): Fingerprint {
+    /** The fingerprint, and whether fpcalc read the whole file. */
+    private fun compute(audioPath: Path): Pair<Fingerprint, Boolean> {
         // To a file, not a pipe: reading a pipe to its end would wait out a hung process and never reach the timeout.
         val out = Files.createTempFile("fp-", ".txt")
         try {
@@ -72,7 +74,7 @@ open class Fingerprinter(
                     "$binary exited ${process.exitValue()} on $audioPath",
                 )
             }
-            return parse(Files.readString(out))
+            return parse(Files.readString(out)) to (process.exitValue() == 0)
         } finally {
             Files.deleteIfExists(out)
         }

@@ -59,4 +59,32 @@ class RecurringReferencesTest {
     ) {
         assertEquals(0, RecurringReferences.load(dir.resolve("none")).size)
     }
+
+    @Test
+    fun `a reference without a note keeps none through another write`(
+        @TempDir dir: Path,
+    ) {
+        RecurringReferences.add(dir, "Show", "Show", listOf(ref("intro-1")))
+        RecurringReferences.add(dir, "Show", "Show", listOf(ref("outro-2", Reference.Kind.OUTRO)))
+        val refs = RecurringReferences.load(dir).of(PodcastConfig(name = "Show", url = "u"))
+        assertEquals(listOf(null, null), refs.map { it.note })
+    }
+
+    @Test
+    fun `an id twice in one batch is refused before anything is written`(
+        @TempDir dir: Path,
+    ) {
+        assertThrows<IllegalStateException> { RecurringReferences.add(dir, "Show", "Show", listOf(ref("intro-1"), ref("intro-1"))) }
+        assertTrue(!Files.exists(dir.resolve("Show.json")))
+    }
+
+    @Test
+    fun `a cut outside the episode or too short is null`() {
+        val episode = IntArray(1000) { it }
+        val inside = RecurringAudio.window(100, 200)
+        assertEquals(100, RecurringReferences.cut(episode, inside.start, inside.end)?.size)
+        assertEquals(null, RecurringReferences.cut(episode, 0.5, 20.0))
+        assertEquals(null, RecurringReferences.cut(episode, 20.0, 20.1))
+        assertEquals(null, RecurringReferences.cut(episode, 110.0, 130.0))
+    }
 }

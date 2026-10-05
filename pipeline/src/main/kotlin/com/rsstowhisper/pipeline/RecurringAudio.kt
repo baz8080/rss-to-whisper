@@ -2,6 +2,7 @@ package com.rsstowhisper.pipeline
 
 import com.rsstowhisper.external.Fingerprinter.Companion.HOP
 import com.rsstowhisper.external.TimeWindow
+import java.util.TreeSet
 
 /** Audio heard again across a show's episodes -- a theme, a jingle, a promo -- found by its Chromaprint fingerprint. */
 internal object RecurringAudio {
@@ -149,18 +150,17 @@ internal object RecurringAudio {
             } else {
                 (0 until anchors).map { it * (episodes.size - 1) / (anchors - 1) }.distinct()
             }
-        val found = mutableListOf<Pair<Int, Int>>()
-        val runs = mutableListOf<Run>()
-        for (anchor in picked) {
-            val index = Index(episodes[anchor].second)
-            for ((i, episode) in episodes.withIndex()) {
-                if (i == anchor) continue
-                for (run in shared(episode.second, index, minLength)) {
-                    found += i to anchor
-                    runs += run
+        // Each anchor's comparisons are independent; an ordered stream keeps the result the same on every run.
+        val perAnchor =
+            picked.parallelStream().map { anchor ->
+                val index = Index(episodes[anchor].second)
+                episodes.indices.filter { it != anchor }.flatMap {
+                        i ->
+                    shared(episodes[i].second, index, minLength).map { (i to anchor) to it }
                 }
-            }
-        }
+            }.toList().flatten()
+        val found = perAnchor.map { it.first }
+        val runs = perAnchor.map { it.second }
         val (pairs, pieces) = split(found, runs, minLength / 2)
         val occurrences = mutableListOf<Occurrence>()
         val links = mutableListOf<Pair<Int, Int>>()
@@ -251,19 +251,26 @@ internal object RecurringAudio {
     ): Pair<List<Pair<Int, Int>>, List<Run>> {
         var (ps, rs) = pairs to runs
         repeat(MAX_SPLIT_ROUNDS) {
-            val edges = HashMap<Int, MutableSet<Int>>()
+            val edges = HashMap<Int, TreeSet<Int>>()
             for ((pair, run) in ps.zip(rs)) {
-                edges.getOrPut(pair.first) { sortedSetOf() } += listOf(run.start, run.end)
-                edges.getOrPut(pair.second) { sortedSetOf() } += listOf(run.start + run.offset, run.end + run.offset)
+                edges.getOrPut(pair.first) { TreeSet() } += listOf(run.start, run.end)
+                edges.getOrPut(pair.second) { TreeSet() } += listOf(run.start + run.offset, run.end + run.offset)
             }
             val nextPairs = mutableListOf<Pair<Int, Int>>()
             val nextRuns = mutableListOf<Run>()
             var cut = false
             for ((pair, run) in ps.zip(rs)) {
+                val (lo, hi) = run.start + minPiece to run.end - minPiece
+                if (lo > hi) {
+                    nextPairs += pair
+                    nextRuns += run
+                    continue
+                }
                 val inside =
-                    (edges.getValue(pair.first) + edges.getValue(pair.second).map { it - run.offset })
-                        .filter { it >= run.start + minPiece && it <= run.end - minPiece }
-                        .sorted()
+                    (
+                        edges.getValue(pair.first).subSet(lo, true, hi, true) +
+                            edges.getValue(pair.second).subSet(lo + run.offset, true, hi + run.offset, true).map { it - run.offset }
+                    ).sorted()
                 val points = mutableListOf(run.start)
                 inside.forEach { if (it - points.last() >= minPiece) points += it }
                 if (run.end - points.last() < minPiece && points.size > 1) points.removeAt(points.size - 1)

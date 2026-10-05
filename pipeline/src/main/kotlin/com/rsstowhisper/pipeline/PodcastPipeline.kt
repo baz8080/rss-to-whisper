@@ -36,6 +36,7 @@ import com.rsstowhisper.resolvePath
 import com.rsstowhisper.timeToSeconds
 import okhttp3.OkHttpClient
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
@@ -654,11 +655,7 @@ class PodcastPipeline(
             .write(episodes, out.resolve(escapeFilename(podcast.name)))
     }
 
-    /**
-     * Each labelled sound in [labels] -- a TSV with show, label, source_episode, source_from, source_to, candidate and
-     * note columns -- cut from its source episode's fingerprint into the show's recurring_audio file. A cut that does
-     * not find itself again in its source is refused.
-     */
+    /** Stores each labelled sound in [labels] in its show's recurring_audio file; a row already stored is skipped. */
     fun addRecurringAudio(labels: Path): Boolean {
         val dir = config.recurringAudio?.let { Path.of(it) }
         val binary = config.fingerprintBinary
@@ -666,6 +663,13 @@ class PodcastPipeline(
             logger.error("--add-recurring-audio needs recurring_audio and fingerprint_binary in pods.yaml")
             return false
         }
+        val stored =
+            try {
+                RecurringReferences.load(dir)
+            } catch (e: Exception) {
+                logger.error("Cannot read the recurring_audio folder $dir: ${e.message}")
+                return false
+            }
         val fingerprinter = Fingerprinter(binary, config.fingerprintCache?.let { Path.of(it) })
         val lines = Files.readAllLines(labels).filter { it.isNotBlank() }
         val header = lines.first().split('\t')
@@ -678,25 +682,46 @@ class PodcastPipeline(
                 ok = false
                 continue
             }
+            val existing = stored.of(podcast).map { it.id }.toSet()
             val added = mutableListOf<Reference>()
             for (row in showRows) {
                 val kind = LABEL_KINDS[row.getValue("label")] ?: continue
+                val id = "${kind.label}-${row.getValue("candidate")}"
+                if (id in existing) {
+                    logger.info("$show already has $id; skipped")
+                    continue
+                }
+                if (added.any { it.id == id }) {
+                    logger.error("$show $id is labelled twice in $labels; only the first is added")
+                    ok = false
+                    continue
+                }
                 val episode = row.getValue("source_episode")
                 val (from, to) = row.getValue("source_from").toDouble() to row.getValue("source_to").toDouble()
-                val values = fingerprinter.fingerprint(audioFileFor(dataRoot.resolve(show).resolve(episode))).values
-                val range = RecurringAudio.values(from, to)
-                val cut = values.copyOfRange(range.first, minOf(values.size, range.last + 1))
-                val id = "${kind.label}-${row.getValue("candidate")}"
-                val found = RecurringAudio.matches(cut, values).filter { it.start < to && from < it.end }
-                if (cut.size < RecurringReferences.MIN_VALUES || found.sumOf { it.end - it.start } < 0.75 * (to - from)) {
+                val values =
+                    try {
+                        fingerprinter.fingerprint(audioFileFor(dataRoot.resolve(show).resolve(episode))).values
+                    } catch (e: IOException) {
+                        logger.error("$show $id: cannot fingerprint $episode (${e.message}); not added")
+                        ok = false
+                        continue
+                    }
+                val cut = RecurringReferences.cut(values, from, to)
+                val found = cut?.let { RecurringAudio.matches(it, values).filter { w -> w.start < to && from < w.end } }.orEmpty()
+                if (cut == null || found.sumOf { it.end - it.start } < 0.75 * (to - from)) {
                     logger.error("$show $id, cut from $episode $from-$to s, does not find itself there again; not added")
                     ok = false
                     continue
                 }
                 added += Reference(id, kind, episode, from, to, cut, row["note"]?.takeIf { it.isNotBlank() })
             }
-            RecurringReferences.add(dir, escapeFilename(podcast.name), podcast.name, added)
-            logger.info("${podcast.name}: ${added.size} references added")
+            try {
+                RecurringReferences.add(dir, escapeFilename(podcast.name), podcast.name, added)
+                logger.info("${podcast.name}: ${added.size} references added")
+            } catch (e: Exception) {
+                logger.error("Cannot add ${podcast.name}'s references: ${e.message}")
+                ok = false
+            }
         }
         return ok
     }

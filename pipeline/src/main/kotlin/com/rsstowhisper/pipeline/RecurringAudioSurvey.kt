@@ -42,7 +42,8 @@ internal class RecurringAudioSurvey(
         val clusters =
             RecurringAudio.discover(heard.map { (e, f) -> e.name to f.values })
                 .filter { it.episodes >= maxOf(MIN_EPISODES, (MIN_SHARE * heard.size).toInt()) }
-        val byName = heard.associate { (e, f) -> e.name to (e to f.duration) }
+        // fpcalc's DURATION is a bit-rate estimate, far out for some VBR files; the values cover what it decoded.
+        val byName = heard.associate { (e, f) -> e.name to (e to f.values.size * HOP) }
         val spoken = HashMap<String, List<Word>>()
 
         fun said(o: RecurringAudio.Occurrence): String {

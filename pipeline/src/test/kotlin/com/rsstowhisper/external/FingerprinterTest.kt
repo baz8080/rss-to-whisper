@@ -71,19 +71,30 @@ class FingerprinterTest {
         return script.toString()
     }
 
+    /** [count] silent MPEG-1 Layer III frames at 44.1 kHz, 1,152 samples each: [count] * 26 ms of audio. */
+    private fun frames(count: Int): ByteArray {
+        val frame = ByteArray(417).also { intArrayOf(0xFF, 0xFB, 0x90, 0x64).forEachIndexed { i, v -> it[i] = v.toByte() } }
+        return ByteArray(frame.size * count) { frame[it % frame.size] }
+    }
+
     @Test
     fun `a read stopped short is used but not cached, and one read to near its end is cached`(
         @TempDir dir: Path,
     ) {
         val audio = Files.createDirectories(dir.resolve("show/episode")).resolve("audio.mp3")
-        Files.write(audio, ByteArray(10))
         val cache = dir.resolve("cache")
         val fp = cache.resolve("show__episode.fp")
-        assertEquals(16, Fingerprinter(fakeFpcalc(dir, 3, duration = 60), cache).fingerprint(audio).values.size)
+        // fpcalc's DURATION is ignored: the frames say how long the file is, and 16 values hear about 2 s of it.
+        Files.write(audio, frames(1000))
+        assertEquals(16, Fingerprinter(fakeFpcalc(dir, 3, duration = 2), cache).fingerprint(audio).values.size)
         assertTrue(!Files.exists(fp))
-        Fingerprinter(fakeFpcalc(dir, 3, duration = 2), cache).fingerprint(audio)
+        Files.write(audio, frames(100))
+        Fingerprinter(fakeFpcalc(dir, 3, duration = 60), cache).fingerprint(audio)
         assertTrue(Files.exists(fp))
         Files.delete(fp)
+        Files.write(audio, ByteArray(10))
+        Fingerprinter(fakeFpcalc(dir, 3), cache).fingerprint(audio)
+        assertTrue(!Files.exists(fp), "a file of unknown length is not cached after a partial read")
         Fingerprinter(fakeFpcalc(dir, 0, duration = 60), cache).fingerprint(audio)
         assertTrue(Files.exists(fp))
         assertThrows<FingerprinterFailed> { Fingerprinter(fakeFpcalc(dir, 1)).fingerprint(audio) }

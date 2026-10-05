@@ -78,12 +78,13 @@ open class Fingerprinter(
             val fingerprint = parse(Files.readString(out))
             if (process.exitValue() == 0) return fingerprint to true
             // Junk after the last frame stops it within seconds of the end; earlier may be the volume, so try again next time.
+            // Measured against the frames, not fpcalc's DURATION: that is a bit-rate estimate, far out for some VBR files.
             val read = fingerprint.values.size * HOP
-            val nearEnd = read >= fingerprint.duration - PARTIAL_SLACK_SECONDS
+            val length = Mp3Frames.of(audioPath)?.duration
+            val nearEnd = length != null && read >= length - PARTIAL_SLACK_SECONDS
             if (!nearEnd) {
-                logger.warn(
-                    "$binary read $audioPath only to %.0f of %d s; not cached".format(Locale.ROOT, read, fingerprint.duration),
-                )
+                val of = length?.let { "%.0f".format(Locale.ROOT, it) } ?: "an unknown length of"
+                logger.warn("$binary read $audioPath only to %.0f of $of s; not cached".format(Locale.ROOT, read))
             }
             return fingerprint to nearEnd
         } finally {

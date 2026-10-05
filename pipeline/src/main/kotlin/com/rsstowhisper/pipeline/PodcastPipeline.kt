@@ -671,7 +671,14 @@ class PodcastPipeline(
                 return false
             }
         val fingerprinter = Fingerprinter(binary, config.fingerprintCache?.let { Path.of(it) })
-        val (rows, problems) = RecurringReferences.parseLabels(Files.readAllLines(labels))
+        val lines =
+            try {
+                Files.readAllLines(labels)
+            } catch (e: IOException) {
+                logger.error("Cannot read $labels (${e.message})")
+                return false
+            }
+        val (rows, problems) = RecurringReferences.parseLabels(lines)
         problems.forEach { logger.error("$labels: $it; not added") }
         var ok = problems.isEmpty()
         for ((show, showRows) in rows.groupBy { it.show }) {

@@ -72,19 +72,19 @@ internal class RecurringReferences(
 
         /** The rows of a labels TSV, and a line for each row that cannot be read. */
         fun parseLabels(lines: List<String>): Pair<List<LabelRow>, List<String>> {
-            val text = lines.filter { it.isNotBlank() }
+            val text = lines.withIndex().filter { it.value.isNotBlank() }
             if (text.isEmpty()) return emptyList<LabelRow>() to listOf("no header row")
-            val header = text.first().split('\t')
+            val header = text.first().value.split('\t')
             val missing = LABEL_COLUMNS.filter { it !in header }
             if (missing.isNotEmpty()) return emptyList<LabelRow>() to listOf("no ${missing.joinToString(", ")} column")
             val rows = mutableListOf<LabelRow>()
             val problems = mutableListOf<String>()
-            for ((n, line) in text.drop(1).withIndex()) {
+            for ((n, line) in text.drop(1)) {
                 val cells = header.zip(line.split('\t')).toMap()
                 val from = cells["source_from"]?.toDoubleOrNull()
                 val to = cells["source_to"]?.toDoubleOrNull()
                 if (LABEL_COLUMNS.any { cells[it].isNullOrBlank() } || from == null || to == null) {
-                    problems += "row ${n + 2} has an empty, missing or unreadable cell"
+                    problems += "line ${n + 1} has an empty, missing or unreadable cell"
                     continue
                 }
                 rows +=

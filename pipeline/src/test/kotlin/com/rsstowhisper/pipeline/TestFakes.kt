@@ -216,18 +216,28 @@ internal class FakeSpeakerDiarizer(
     private val badFiles: Set<String> = emptySet(),
     /** The check fails once this many files have been tried: the tool breaking mid-run. */
     private val breaksAfter: Int = Int.MAX_VALUE,
+    private val onTurns: ((Path) -> Unit)? = null,
 ) : SpeakerDiarizer("python3", "seg/model.onnx", "emb/$modelLabel.onnx") {
     var calls = 0
         private set
+    var checks = 0
+        private set
+    val timeouts = mutableListOf<Long>()
 
     override val models: Map<String, Any> get() = mapOf("segmentation" to "seg/model.onnx", "embedding" to "emb/$modelLabel.onnx")
 
     override fun check() {
+        checks++
         if (fails || calls >= breaksAfter) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
     }
 
-    override fun turns(audioPath: Path): List<SpeakerTurn> {
+    override fun turns(
+        audioPath: Path,
+        timeoutSeconds: Long,
+    ): List<SpeakerTurn> {
         calls++
+        timeouts += timeoutSeconds
+        onTurns?.invoke(audioPath)
         if (audioPath.parent.fileName.toString() in badFiles) throw EpisodeNotDiarized("ffmpeg could not decode $audioPath")
         return turns
     }

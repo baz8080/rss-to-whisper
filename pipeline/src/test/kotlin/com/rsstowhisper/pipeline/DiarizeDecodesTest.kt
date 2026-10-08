@@ -7,6 +7,8 @@ import com.rsstowhisper.external.WhisperRun
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -84,7 +86,7 @@ class DiarizeDecodesTest {
                 diarizer = FakeSpeakerDiarizer(turns, badFiles = setOf(bad)),
             )
 
-        val messages = logged { assertTrue(pipeline.run()) }
+        val messages = logged { assertEquals(emptyList(), loggedAtError { assertTrue(pipeline.run()) }) }
 
         assertTrue(messages.any { it.startsWith("Could not diarize Show/$bad") }, "logged: $messages")
         assertTrue(Files.exists(dirOf(tempDir, "One").resolve("transcript.json")))
@@ -132,5 +134,58 @@ class DiarizeDecodesTest {
 
         assertFalse(Files.exists(dirOf(tempDir, "One").resolve(SpeakerTurns.FILENAME)))
         assertTrue(messages.none { "diariz" in it }, "logged: $messages")
+    }
+
+    @Test
+    fun `the next decode does not wait for the last one's diarization`(
+        @TempDir tempDir: Path,
+    ) {
+        val two = dirOf(tempDir, "Two").fileName.toString()
+        val secondDecode = CountDownLatch(1)
+        var overlapped = false
+        val diarizer =
+            FakeSpeakerDiarizer(turns, onTurns = { audio ->
+                if (audio.parent.fileName.toString() != two) overlapped = secondDecode.await(10, TimeUnit.SECONDS)
+            })
+        val (pipeline, _, _) =
+            buildPipeline(
+                tempDir,
+                podcasts,
+                makeFeed(*entries.toTypedArray()),
+                diarizer = diarizer,
+                onTranscribe = { audio -> if (audio.parent.fileName.toString() == two) secondDecode.countDown() },
+            )
+
+        assertTrue(pipeline.run())
+
+        assertTrue(overlapped)
+        assertEquals(2, diarizedTotal(pipeline))
+    }
+
+    @Test
+    fun `a run with nothing to decode never checks the diarizer`(
+        @TempDir tempDir: Path,
+    ) {
+        val diarizer = FakeSpeakerDiarizer(turns)
+        buildPipeline(tempDir, podcasts, makeFeed(entries[0]), diarizer = diarizer).first.run()
+        val (again, _, _) = buildPipeline(tempDir, podcasts, makeFeed(entries[0]), diarizer = diarizer)
+
+        assertTrue(again.run())
+
+        assertEquals(1, diarizer.checks)
+    }
+
+    @Test
+    fun `each diarization gets a timeout scaled to its episode, well under the batch default`(
+        @TempDir tempDir: Path,
+    ) {
+        val diarizer = FakeSpeakerDiarizer(turns)
+        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, makeFeed(entries[0]), diarizer = diarizer)
+
+        pipeline.run()
+
+        assertTrue(diarizer.timeouts.single() < 60 * 60, "timeouts: ${diarizer.timeouts}")
+        assertEquals(25 * 60L, PodcastPipeline.diarizeTimeoutSeconds(3600))
+        assertEquals(55 * 60L, PodcastPipeline.diarizeTimeoutSeconds(null))
     }
 }

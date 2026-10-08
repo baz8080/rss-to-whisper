@@ -879,11 +879,12 @@ else's speech starts unsure of itself.
   A transcript from before decodes recorded their audio takes turns made for audio of its mp3's size.
 - **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
 - **New episodes.** With the diarize settings in `pods.yaml`, a normal run diarizes each episode it
-  transcribes or recovers, straight after its decode, and `--dry-run` lists them as "Would diarize".
-  Nothing about it fails an episode or the run: a setup that can't run is a warning and the run decodes
-  without turns, an episode that can't be diarized is a warning, and three in a row that fail a fresh
-  check stop diarizing for the rest of the run. `--diarize` fills any gaps later. `latest-run.json`
-  counts the episodes diarized.
+  transcribes or recovers, on its own thread while the next one decodes, and waits for the last of them
+  before it finishes. `--dry-run` lists them as "Would diarize". Each gets 10 minutes plus a quarter of
+  its length before it counts as stuck. Nothing about it fails an episode or the run: a setup that fails
+  the check (made before the first one) is a warning and the run decodes without turns, an episode that
+  can't be diarized is a warning, and three in a row that fail a fresh check stop diarizing for the rest
+  of the run. `--diarize` fills any gaps later. `latest-run.json` counts the episodes diarized.
 - **Failures.** With `--diarize`, a setup that can't run (no sherpa-onnx, no ffmpeg, a model that won't load) stops the run
   before the first episode. An episode that can't be diarized is logged and skipped; three in a row stop it.
   Alone it records no attempt, so it refuses `--retranscribe-limit` with `--retranscribe-flagged`.

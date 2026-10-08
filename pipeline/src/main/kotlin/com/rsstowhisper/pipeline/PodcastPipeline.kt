@@ -55,6 +55,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.GZIPInputStream
 
 class PodcastPipeline(
@@ -90,9 +91,13 @@ class PodcastPipeline(
     private var wouldTranscribe = 0
     private var wouldRecover = 0
 
-    /** Whether this run diarizes what it decodes; off for the rest of the run once the tool stops working. */
-    private var diarizeDecodes = false
-    private var decodesUndiarizedInARow = 0
+    /** Diarizes each saved decode on its own thread, so whisper never waits on it; null when the run doesn't diarize. */
+    private var diarizeQueue: ExecutorService? = null
+    private val diarizesQueued = AtomicInteger()
+
+    // The diarize thread's own: null until its first episode checks the tool, false once the tool stops working.
+    private var diarizerUsable: Boolean? = null
+    private val decodesUndiarized = UndiarizedStreak()
 
     internal val report = RunReport()
 
@@ -144,8 +149,11 @@ class PodcastPipeline(
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
-        diarizeDecodes = diarizer != null && !config.dryRun && diarizerWorks()
-        decodesUndiarizedInARow = 0
+        diarizerUsable = null
+        decodesUndiarized.reset()
+        if (diarizer != null && !config.dryRun) {
+            diarizeQueue = Executors.newSingleThreadExecutor { Thread(it, "diarize").apply { isDaemon = true } }
+        }
 
         try {
             for (podcast in config.podcasts) {
@@ -154,6 +162,7 @@ class PodcastPipeline(
         } catch (e: WordTimesMisplaced) {
             logger.error("Stopping: ${e.message}")
         } finally {
+            finishDiarizing()
             // A dry run does no work, so a report of it would be a record of
             // none -- and latest-run.json would lose the last real run.
             if (!config.dryRun) report.write(dataDir)
@@ -165,33 +174,83 @@ class PodcastPipeline(
         return decodingWorked()
     }
 
-    private fun diarizerWorks(): Boolean =
-        try {
-            requireNotNull(diarizer).check()
-            true
-        } catch (e: SpeakerDiarizerFailed) {
-            logger.warn("${e.message}. This run will not diarize; --diarize can add the turns later")
-            false
-        }
-
     /** A decode is already saved, so nothing here fails the episode or the run. */
     private fun diarizeDecoded(
         podcast: PodcastConfig,
         episodeDirPath: Path,
+        durationSeconds: Int?,
     ) {
-        if (!diarizeDecodes) return
-        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        val queue = diarizeQueue ?: return
+        val counts = report.forPodcast(podcast.name)
+        diarizesQueued.incrementAndGet()
+        queue.execute {
+            try {
+                diarizeInBackground(counts, episodeDirPath, durationSeconds)
+            } finally {
+                diarizesQueued.decrementAndGet()
+            }
+        }
+    }
+
+    private fun diarizeInBackground(
+        counts: RunReport.Counts,
+        episodeDirPath: Path,
+        durationSeconds: Int?,
+    ) {
+        if (diarizerUsable == null) {
+            diarizerUsable =
+                try {
+                    requireNotNull(diarizer).check()
+                    true
+                } catch (e: SpeakerDiarizerFailed) {
+                    logger.warn("${e.message}. This run will not diarize; --diarize can add the turns later")
+                    false
+                }
+        }
+        if (diarizerUsable != true) return
         try {
-            if (diarizeEpisode(episodeDirPath)) report.forPodcast(podcast.name).diarized++
-            decodesUndiarizedInARow = 0
+            if (diarizeEpisode(episodeDirPath, diarizeTimeoutSeconds(durationSeconds))) counts.diarized++
+            decodesUndiarized.reset()
         } catch (e: SpeakerDiarizerFailed) {
             logger.warn("${e.message}. The rest of this run will not diarize")
-            diarizeDecodes = false
+            diarizerUsable = false
         } catch (e: Exception) {
-            logger.warn("Could not diarize $label: ${e.message}")
-            if (++decodesUndiarizedInARow >= MAX_UNDIARIZED_IN_A_ROW) {
-                diarizeDecodes = diarizerWorks()
-                decodesUndiarizedInARow = 0
+            logger.warn("Could not diarize ${episodeDirPath.parent.fileName}/${episodeDirPath.fileName}: ${e.message}")
+            decodesUndiarized.failed()?.let {
+                logger.warn(
+                    "$MAX_UNDIARIZED_IN_A_ROW episodes in a row could not be diarized, and ${it.message}. The rest of this run will not",
+                )
+                diarizerUsable = false
+            }
+        }
+    }
+
+    /** The report counts what was diarized, so it waits for the turns still queued. */
+    private fun finishDiarizing() {
+        val queue = diarizeQueue ?: return
+        diarizeQueue = null
+        queue.shutdown()
+        diarizesQueued.get().takeIf { it > 0 }?.let { logger.info("Waiting for $it episodes to finish diarizing") }
+        queue.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS)
+    }
+
+    /** Bad or long files bunch up by show; only a failed check after a run of them says the tool itself broke. */
+    private inner class UndiarizedStreak {
+        private var count = 0
+
+        fun reset() {
+            count = 0
+        }
+
+        /** The check's failure once [MAX_UNDIARIZED_IN_A_ROW] episodes in a row could not be diarized; null to carry on. */
+        fun failed(): SpeakerDiarizerFailed? {
+            if (++count < MAX_UNDIARIZED_IN_A_ROW) return null
+            count = 0
+            return try {
+                requireNotNull(diarizer).check()
+                null
+            } catch (e: SpeakerDiarizerFailed) {
+                e
             }
         }
     }
@@ -274,29 +333,24 @@ class PodcastPipeline(
         logger.info(if (request.diarize && !repairs) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes")
         var done = 0
         var diarized = 0
-        var undiarizedInARow = 0
+        val undiarized = UndiarizedStreak()
         var toolFailed = false
         for (target in targets) {
             if (request.diarize) {
                 try {
                     if (diarizeEpisode(target)) diarized++
-                    undiarizedInARow = 0
+                    undiarized.reset()
                 } catch (e: SpeakerDiarizerFailed) {
                     logger.error("Stopping: ${e.message}. Fix diarize_python and the diarize models")
                     toolFailed = true
                     break
                 } catch (e: EpisodeNotDiarized) {
                     logger.error("Could not diarize ${target.parent.fileName}/${target.fileName}: ${e.message}")
-                    // Bad or long files bunch up by show; only a failed check says the tool itself broke.
-                    if (++undiarizedInARow >= MAX_UNDIARIZED_IN_A_ROW) {
-                        try {
-                            requireNotNull(diarizer).check()
-                            undiarizedInARow = 0
-                        } catch (e: SpeakerDiarizerFailed) {
-                            logger.error("Stopping: $undiarizedInARow episodes in a row could not be diarized, and ${e.message}")
-                            toolFailed = true
-                            break
-                        }
+                    val broken = undiarized.failed()
+                    if (broken != null) {
+                        logger.error("Stopping: $MAX_UNDIARIZED_IN_A_ROW episodes in a row could not be diarized, and ${broken.message}")
+                        toolFailed = true
+                        break
                     }
                 } catch (e: Exception) {
                     logger.error("Could not diarize ${target.fileName}", e)
@@ -362,13 +416,13 @@ class PodcastPipeline(
     }
 
     /** Writes the episode's speaker turns, unless it has them for this audio and these models already. */
-    private fun diarizeEpisode(episodeDirPath: Path): Boolean {
+    private fun diarizeEpisode(
+        episodeDirPath: Path,
+        timeoutSeconds: Long? = null,
+    ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
-        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
-            logger.error("Cannot diarize $label: it has no audio")
-            return false
-        }
+        if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) throw EpisodeNotDiarized("it has no audio")
         val sha256 = audioSha256(episodeDirPath, audioPath)
         val bytes = Files.size(audioPath)
         val diarizer = requireNotNull(diarizer)
@@ -377,7 +431,7 @@ class PodcastPipeline(
             return false
         }
         val started = System.nanoTime()
-        val turns = diarizer.turns(audioPath)
+        val turns = if (timeoutSeconds == null) diarizer.turns(audioPath) else diarizer.turns(audioPath, timeoutSeconds)
         SpeakerTurns.write(episodeDirPath, sha256, bytes, diarizer.models, turns)
         logger.info(
             "Diarized $label: ${turns.size} turns, ${turns.map { it.speaker }.toSet().size} voices, " +
@@ -848,7 +902,7 @@ class PodcastPipeline(
                         )
                     if (writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)) {
                         counts.transcribed++
-                        diarizeDecoded(podcast, episode.episodeDirPath)
+                        diarizeDecoded(podcast, episode.episodeDirPath, scored.transcription.durationSeconds)
                     } else {
                         counts.failed++
                     }
@@ -1207,7 +1261,7 @@ class PodcastPipeline(
         // Counting an orphan recovered when nothing was written both misreports
         // the run and spends a slot of orphan_recovery_limit on it.
         if (!writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)) return false
-        diarizeDecoded(podcast, episodeDirPath)
+        diarizeDecoded(podcast, episodeDirPath, transcription.durationSeconds)
         return true
     }
 
@@ -2320,6 +2374,9 @@ class PodcastPipeline(
 
         private const val VERIFY_THREADS = 8
         private const val MAX_UNDIARIZED_IN_A_ROW = 3
+
+        /** Several times the ~2 min per hour of audio measured at 4 threads, so only a stuck file runs out; 3 h when unknown. */
+        internal fun diarizeTimeoutSeconds(durationSeconds: Int?): Long = 10 * 60L + (durationSeconds ?: (3 * 3600)) / 4
 
         /**
          * Prompted, then without history, then both again warmer, then with a wider beam. whisper can skip speech on one

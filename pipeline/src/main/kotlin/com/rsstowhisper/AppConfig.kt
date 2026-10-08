@@ -44,7 +44,7 @@ data class AppConfig(
     val vadModel: String? = null,
     /** A folder of what VAD heard in each episode, read before running it and written after: `<podcast>__<episode>.json`. */
     val vadCache: String? = null,
-    /** A Python with sherpa-onnx, and its two models, for `--diarize`: speaker turns from the bundled `diarize.py`. */
+    /** A Python with sherpa-onnx, and its two models: speaker turns from the bundled `diarize.py`, for `--diarize` and new decodes. */
     val diarizePython: String? = null,
     val diarizeSegmentationModel: String? = null,
     val diarizeEmbeddingModel: String? = null,

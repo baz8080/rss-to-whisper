@@ -90,6 +90,10 @@ class PodcastPipeline(
     private var wouldTranscribe = 0
     private var wouldRecover = 0
 
+    /** Whether this run diarizes what it decodes; off for the rest of the run once the tool stops working. */
+    private var diarizeDecodes = false
+    private var decodesUndiarizedInARow = 0
+
     internal val report = RunReport()
 
     private val dataRoot = Path.of(config.dataDirectory).normalize()
@@ -140,6 +144,8 @@ class PodcastPipeline(
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
         }
+        diarizeDecodes = diarizer != null && !config.dryRun && diarizerWorks()
+        decodesUndiarizedInARow = 0
 
         try {
             for (podcast in config.podcasts) {
@@ -157,6 +163,37 @@ class PodcastPipeline(
             return true
         }
         return decodingWorked()
+    }
+
+    private fun diarizerWorks(): Boolean =
+        try {
+            requireNotNull(diarizer).check()
+            true
+        } catch (e: SpeakerDiarizerFailed) {
+            logger.warn("${e.message}. This run will not diarize; --diarize can add the turns later")
+            false
+        }
+
+    /** A decode is already saved, so nothing here fails the episode or the run. */
+    private fun diarizeDecoded(
+        podcast: PodcastConfig,
+        episodeDirPath: Path,
+    ) {
+        if (!diarizeDecodes) return
+        val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
+        try {
+            if (diarizeEpisode(episodeDirPath)) report.forPodcast(podcast.name).diarized++
+            decodesUndiarizedInARow = 0
+        } catch (e: SpeakerDiarizerFailed) {
+            logger.warn("${e.message}. The rest of this run will not diarize")
+            diarizeDecodes = false
+        } catch (e: Exception) {
+            logger.warn("Could not diarize $label: ${e.message}")
+            if (++decodesUndiarizedInARow >= MAX_UNDIARIZED_IN_A_ROW) {
+                diarizeDecodes = diarizerWorks()
+                decodesUndiarizedInARow = 0
+            }
+        }
     }
 
     private fun resetDecodeTally() {
@@ -748,7 +785,10 @@ class PodcastPipeline(
         }
 
         if (config.dryRun) {
-            pending.forEach { logger.info("Would transcribe ${podcast.name}/${it.episodeDirPath.fileName}") }
+            pending.forEach {
+                logger.info("Would transcribe ${podcast.name}/${it.episodeDirPath.fileName}")
+                if (diarizer != null) logger.info("Would diarize ${podcast.name}/${it.episodeDirPath.fileName}")
+            }
             logger.info("${podcast.name}: would transcribe ${pending.size} episodes")
             wouldTranscribe += pending.size
         } else {
@@ -808,6 +848,7 @@ class PodcastPipeline(
                         )
                     if (writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)) {
                         counts.transcribed++
+                        diarizeDecoded(podcast, episode.episodeDirPath)
                     } else {
                         counts.failed++
                     }
@@ -1108,6 +1149,7 @@ class PodcastPipeline(
     ): Boolean {
         if (!hasUsableAudio(episodeDirPath, parsed)) return false
         logger.info("Would recover ${podcast.name}/${parsed.dirName}")
+        if (diarizer != null) logger.info("Would diarize ${podcast.name}/${parsed.dirName}")
         wouldRecover++
         return true
     }
@@ -1164,7 +1206,9 @@ class PodcastPipeline(
 
         // Counting an orphan recovered when nothing was written both misreports
         // the run and spends a slot of orphan_recovery_limit on it.
-        return writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)
+        if (!writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)) return false
+        diarizeDecoded(podcast, episodeDirPath)
+        return true
     }
 
     /**

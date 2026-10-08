@@ -92,6 +92,10 @@ there is a warning, never a failed episode or run.
 Where an episode has them, a loop, cycle or echo whose laps are each one voice, changing at every lap, and whose repeats
 whisper was sure of, is not a defect.
 
+`--find-recurring-audio <podcast> --recurring-audio-out <dir>` fingerprints a show's episodes with `fpcalc`
+(`fingerprint_binary`, optional `fingerprint_cache` in `pods.yaml`) and lists the sounds heard in several of them, to be
+labelled by ear; `--add-recurring-audio <labels.tsv>` stores the labelled ones in the `recurring_audio` folder.
+
 `--retranscribe-flagged` selects least-recently-attempted first, tracked by a
 `retranscribe-attempted` file per episode, so its limit is a rolling window.
 `--retranscribe-force` keeps a worse-scoring decode for explicitly named targets, and is

@@ -616,4 +616,21 @@ class AppConfigTest {
         val error = assertFailsWith<IllegalArgumentException> { AppConfig(diarizeThreads = 0).validate() }
         assertTrue("diarize_threads" in error.message.orEmpty())
     }
+
+    @Test
+    fun `recurring_audio needs fingerprint_binary`(
+        @TempDir tmp: Path,
+    ) {
+        val yaml = tmp.resolve("pods.yaml").toFile()
+        yaml.writeText("recurring_audio: /refs\n")
+        val env =
+            mapOf(
+                "PIPELINE_CONFIG_PATH" to yaml.absolutePath,
+                "PIPELINE_DATA_DIRECTORY" to "/data",
+                "PIPELINE_WHISPER_SERVER_URL" to "http://w",
+            )
+        assertFailsWith<IllegalArgumentException> { AppConfig.load(env) }
+        yaml.writeText("recurring_audio: /refs\nfingerprint_binary: /bin/fpcalc\n")
+        assertEquals("/refs", AppConfig.load(env).recurringAudio)
+    }
 }

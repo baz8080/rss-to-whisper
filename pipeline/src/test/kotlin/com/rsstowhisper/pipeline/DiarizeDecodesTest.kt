@@ -176,15 +176,18 @@ class DiarizeDecodesTest {
     }
 
     @Test
-    fun `each diarization gets a timeout scaled to its episode, well under the batch default`(
+    fun `each diarization gets a timeout scaled to its audio, not to where the decoded speech ends`(
         @TempDir tempDir: Path,
     ) {
+        val frame = ByteArray(417).also { f -> intArrayOf(0xFF, 0xFB, 0x90, 0x64).forEachIndexed { i, v -> f[i] = v.toByte() } }
+        val fourHundredSeconds = (0..(400 * 44_100 / 1152)).flatMap { frame.asList() }.toByteArray()
         val diarizer = FakeSpeakerDiarizer(turns)
-        val (pipeline, _, _) = buildPipeline(tempDir, podcasts, makeFeed(entries[0]), diarizer = diarizer)
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, podcasts, makeFeed(entries[0]), audioBytes = fourHundredSeconds, diarizer = diarizer)
 
         pipeline.run()
 
-        assertTrue(diarizer.timeouts.single() < 60 * 60, "timeouts: ${diarizer.timeouts}")
+        assertEquals(PodcastPipeline.diarizeTimeoutSeconds(400), diarizer.timeouts.single())
         assertEquals(25 * 60L, PodcastPipeline.diarizeTimeoutSeconds(3600))
         assertEquals(55 * 60L, PodcastPipeline.diarizeTimeoutSeconds(null))
     }

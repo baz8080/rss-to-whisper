@@ -178,14 +178,13 @@ class PodcastPipeline(
     private fun diarizeDecoded(
         podcast: PodcastConfig,
         episodeDirPath: Path,
-        durationSeconds: Int?,
     ) {
         val queue = diarizeQueue ?: return
         val counts = report.forPodcast(podcast.name)
         diarizesQueued.incrementAndGet()
         queue.execute {
             try {
-                diarizeInBackground(counts, episodeDirPath, durationSeconds)
+                diarizeInBackground(counts, episodeDirPath)
             } finally {
                 diarizesQueued.decrementAndGet()
             }
@@ -195,7 +194,6 @@ class PodcastPipeline(
     private fun diarizeInBackground(
         counts: RunReport.Counts,
         episodeDirPath: Path,
-        durationSeconds: Int?,
     ) {
         if (diarizerUsable == null) {
             diarizerUsable =
@@ -209,7 +207,9 @@ class PodcastPipeline(
         }
         if (diarizerUsable != true) return
         try {
-            if (diarizeEpisode(episodeDirPath, diarizeTimeoutSeconds(durationSeconds))) counts.diarized++
+            // The decode's own duration is where its speech ends, which can be far short of the file sherpa-onnx reads.
+            val seconds = Mp3Frames.of(audioFileFor(episodeDirPath))?.duration?.toInt()
+            if (diarizeEpisode(episodeDirPath, diarizeTimeoutSeconds(seconds))) counts.diarized++
             decodesUndiarized.reset()
         } catch (e: SpeakerDiarizerFailed) {
             logger.warn("${e.message}. The rest of this run will not diarize")
@@ -902,7 +902,7 @@ class PodcastPipeline(
                         )
                     if (writeEpisodeJson(feed, entry, episode.mp3Info, episode.episodeDirPath, podcast.collections, scored)) {
                         counts.transcribed++
-                        diarizeDecoded(podcast, episode.episodeDirPath, scored.transcription.durationSeconds)
+                        diarizeDecoded(podcast, episode.episodeDirPath)
                     } else {
                         counts.failed++
                     }
@@ -1261,7 +1261,7 @@ class PodcastPipeline(
         // Counting an orphan recovered when nothing was written both misreports
         // the run and spends a slot of orphan_recovery_limit on it.
         if (!writeTranscriptArtifacts(episodeDirPath, parsed.title ?: parsed.dirName, transcription, episodeDict)) return false
-        diarizeDecoded(podcast, episodeDirPath, transcription.durationSeconds)
+        diarizeDecoded(podcast, episodeDirPath)
         return true
     }
 
@@ -2375,7 +2375,7 @@ class PodcastPipeline(
         private const val VERIFY_THREADS = 8
         private const val MAX_UNDIARIZED_IN_A_ROW = 3
 
-        /** Several times the ~2 min per hour of audio measured at 4 threads, so only a stuck file runs out; 3 h when unknown. */
+        /** Several times the ~2 min per hour of audio measured at 4 threads, so only a stuck file runs out; 3 h when not an mp3 we can read. */
         internal fun diarizeTimeoutSeconds(durationSeconds: Int?): Long = 10 * 60L + (durationSeconds ?: (3 * 3600)) / 4
 
         /**

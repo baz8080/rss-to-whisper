@@ -21,6 +21,7 @@ internal class RunReport {
     class Counts {
         var transcribed = 0
         var recovered = 0
+        var diarized = 0
         var failed = 0
         val skipped = linkedMapOf<String, Int>()
     }
@@ -51,6 +52,7 @@ internal class RunReport {
                 mapOf(
                     "transcribed" to podcasts.values.sumOf { it.transcribed },
                     "recovered" to podcasts.values.sumOf { it.recovered },
+                    "diarized" to podcasts.values.sumOf { it.diarized },
                     "failed" to podcasts.values.sumOf { it.failed },
                     "skipped" to podcasts.values.sumOf { counts -> counts.skipped.values.sum() },
                 ),
@@ -59,6 +61,7 @@ internal class RunReport {
                     mapOf(
                         "transcribed" to counts.transcribed,
                         "recovered" to counts.recovered,
+                        "diarized" to counts.diarized,
                         "failed" to counts.failed,
                         "skipped" to counts.skipped,
                     )

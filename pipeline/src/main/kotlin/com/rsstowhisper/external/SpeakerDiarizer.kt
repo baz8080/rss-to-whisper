@@ -45,7 +45,10 @@ open class SpeakerDiarizer(
         if (exit != 0) throw SpeakerDiarizerFailed("The diarize check failed: $why")
     }
 
-    open fun turns(audioPath: Path): List<SpeakerTurn> {
+    open fun turns(
+        audioPath: Path,
+        timeoutSeconds: Long = this.timeoutSeconds,
+    ): List<SpeakerTurn> {
         val (exit, out, why) =
             run(listOf(audioPath.toString()), timeoutSeconds)
                 ?: throw EpisodeNotDiarized("Diarization did not finish on $audioPath within ${timeoutSeconds / 60} minutes")

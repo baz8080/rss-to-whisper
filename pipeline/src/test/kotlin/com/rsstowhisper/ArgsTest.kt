@@ -251,6 +251,27 @@ class ArgsTest {
     }
 
     @Test
+    fun `find-recurring-audio names where it writes, and runs on its own`() {
+        val args = parseArgs(arrayOf("--find-recurring-audio", "Shite Talk", "--recurring-audio-out", "/tmp/out"))
+        assertEquals("Shite Talk", args.findRecurringAudio)
+        assertEquals("/tmp/out", args.recurringAudioOut)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--find-recurring-audio", "Shite Talk")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--recurring-audio-out", "/tmp/out")) }
+        assertFailsWith<IllegalStateException> {
+            parseArgs(arrayOf("--find-recurring-audio", "x", "--recurring-audio-out", "/tmp/out", "--retranscribe-id", "abcd1234"))
+        }
+        assertFailsWith<IllegalStateException> {
+            parseArgs(arrayOf("--find-recurring-audio", "x", "--recurring-audio-out", "/tmp/out", "--list-defects"))
+        }
+    }
+
+    @Test
+    fun `add-recurring-audio writes, so a dry run is refused`() {
+        assertEquals("labels.tsv", parseArgs(arrayOf("--add-recurring-audio", "labels.tsv")).addRecurringAudio)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--add-recurring-audio", "labels.tsv", "--dry-run")) }
+    }
+
+    @Test
     fun `verify-pairs is its own run`() {
         assertTrue(parseArgs(arrayOf("--verify-pairs")).verifyPairs)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--verify-pairs", "--retranscribe-id", "abcd1234")) }

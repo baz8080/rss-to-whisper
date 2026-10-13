@@ -569,6 +569,7 @@ below supply the three required values.
 | `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
 | `--list-defects` | No equivalent; see [Repairing windows](#repairing-windows) |
 | `--repair-gaps` | No equivalent; see [Filling gaps](#filling-gaps) |
+| `--find-recurring-audio <podcast>`, `--recurring-audio-out <dir>`, `--add-recurring-audio <labels.tsv>` | No equivalent; see [Recurring audio](#recurring-audio) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -894,6 +895,32 @@ else's speech starts unsure of itself.
   says how many episodes the turns cleared.
 - Short trades (under a second or two a lap) and several voices at once are one turn to this
   recipe, and stay flagged.
+
+### Recurring audio
+
+Shows play the same audio in episode after episode: a theme, an ident, an outro, a sponsor read. VAD hears sung or
+spoken themes as speech, and whisper writes them into the transcript (Shite Talk's theme comes back as lyrics,
+whole-file or chunked). Recurring audio is found by its [Chromaprint](https://acoustid.org/chromaprint) fingerprint,
+from `fpcalc` (`brew install chromaprint`), named in `pods.yaml`:
+
+```yaml
+fingerprint_binary: /opt/homebrew/bin/fpcalc
+fingerprint_cache: /path/to/fp-cache      # optional: one <podcast>__<episode>.fp per episode
+recurring_audio: /path/to/references      # one <show directory>.json per show
+```
+
+Finding them is read-only and never contacts whisper:
+
+```bash
+./transcribe --find-recurring-audio "Shite Talk" --recurring-audio-out ~/recurring
+```
+
+Every episode is compared with 16 spread through the show, and each sound heard in at least 3 episodes (and 5%)
+is written to `<out>/<show>/candidates.tsv` and `candidates.json`: how many episodes, where, how long, and what the
+transcripts say over it. Each candidate is labelled by ear: `I` intro, `O` outro, `M` music, `A` ad or promo,
+`S` speech. Then `--add-recurring-audio <labels.tsv>` (columns `show`, `candidate`, `label`, `source_episode`,
+`source_from`, `source_to`, `note`) cuts each from its source episode's fingerprint into the show's file, refusing
+one that does not find itself there again.
 
 ### Re-transcribing an episode
 

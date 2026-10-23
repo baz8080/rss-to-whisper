@@ -2,7 +2,6 @@ package com.rsstowhisper.pipeline
 
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeakerTurn
-import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -110,17 +109,6 @@ class WindowRepairSpeakersTest {
         val traded = SpeakerTurns(listOf(SpeakerTurn(0.0, 3.0, 0), SpeakerTurn(6.0, 9.0, 1)))
 
         assertEquals(setOf(2), WindowRepair.echoes(echoing(), WindowRepair.Voices(traded, emptyList())))
-    }
-
-    @Test
-    fun `a replacement that keeps a traded line brings no defect with the turns, and four without`() {
-        val cues = silmarillion()
-        val base = WhisperTranscription.of(cues, words(cues))
-        val laps = cues.subList(2, 6)
-        val replacement = WindowRepair.Replacement(2..5, laps, words(laps))
-
-        assertEquals(0, WindowRepair.defectsAfter(base, replacement, speakers = turns(0, 1, 0, 1)))
-        assertEquals(4, WindowRepair.defectsAfter(base, replacement))
     }
 
     @Test

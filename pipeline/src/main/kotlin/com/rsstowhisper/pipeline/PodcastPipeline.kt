@@ -118,8 +118,6 @@ class PodcastPipeline(
             ?.joinToString("|") { """\b${Regex.escape(it.trim())}\b""" }
             ?.toRegex(RegexOption.IGNORE_CASE)
 
-    private val recordJson = ObjectMapper()
-
     private val jsonMapper =
         ObjectMapper().apply {
             enable(SerializationFeature.INDENT_OUTPUT)
@@ -301,7 +299,11 @@ class PodcastPipeline(
             logger.error("--diarize needs diarize_python, diarize_segmentation_model and diarize_embedding_model in pods.yaml")
             return false
         }
-        val decodes = request.repairWindows || request.repairGaps || (!request.retime && !request.diarize)
+        if (request.retime && speechDetector == null) {
+            logger.error("--retime needs vad_binary and vad_model in pods.yaml")
+            return false
+        }
+        val decodes = !request.retime && !request.diarize
         if (!config.dryRun && decodes && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
             return false
@@ -313,8 +315,7 @@ class PodcastPipeline(
             return false
         }
 
-        val repairs = request.repairWindows || request.repairGaps || request.retime
-        val verb = if (request.diarize && !repairs) "diarize" else "re-transcribe"
+        val verb = if (request.diarize && !request.retime) "diarize" else "re-transcribe"
         if (config.dryRun) {
             targets.forEach { logger.info("Would $verb ${it.parent.fileName}/${it.fileName}") }
             logger.info("Dry run: would $verb ${targets.size} episodes")
@@ -330,7 +331,9 @@ class PodcastPipeline(
             }
         }
 
-        logger.info(if (request.diarize && !repairs) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes")
+        logger.info(
+            if (request.diarize && !request.retime) "Diarizing ${targets.size} episodes" else "Re-transcribing ${targets.size} episodes",
+        )
         var done = 0
         var diarized = 0
         val undiarized = UndiarizedStreak()
@@ -355,13 +358,13 @@ class PodcastPipeline(
                 } catch (e: Exception) {
                     logger.error("Could not diarize ${target.fileName}", e)
                 }
-                if (!repairs) continue
+                if (!request.retime) continue
             }
             val attempted =
                 try {
                     val written =
-                        if (repairs) {
-                            repairEpisode(target, request.repairWindows, request.repairGaps, request.retime)
+                        if (request.retime) {
+                            retimeEpisode(target)
                         } else {
                             retranscribeEpisode(target, request.force)
                         }
@@ -371,7 +374,7 @@ class PodcastPipeline(
                     logger.error("Stopping: ${e.message}")
                     break
                 } catch (e: SpeechDetectorFailed) {
-                    logger.error("Stopping: ${e.message}. Fix vad_binary/vad_model, or remove them to repair without VAD")
+                    logger.error("Stopping: ${e.message}. Fix vad_binary/vad_model")
                     toolFailed = true
                     break
                 } catch (e: TranscriberUnavailable) {
@@ -388,9 +391,9 @@ class PodcastPipeline(
             if (attempted) markRetranscribeAttempted(target)
         }
         if (request.diarize) logger.info("Diarized $diarized of ${targets.size} episodes")
-        if (!request.diarize || repairs) logger.info("Re-transcribed $done of ${targets.size} episodes")
+        if (!request.diarize || request.retime) logger.info("Re-transcribed $done of ${targets.size} episodes")
         // Diarizing alone writes nothing into a pair.
-        val paired = (request.diarize && !repairs) || verifyBatch(targets)
+        val paired = (request.diarize && !request.retime) || verifyBatch(targets)
         return decodingWorked() && paired && !toolFailed
     }
 
@@ -423,7 +426,7 @@ class PodcastPipeline(
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) throw EpisodeNotDiarized("it has no audio")
-        val sha256 = audioSha256(episodeDirPath, audioPath)
+        val sha256 = audioSha256(recordedRun(episodeDirPath), audioPath)
         val bytes = Files.size(audioPath)
         val diarizer = requireNotNull(diarizer)
         if (SpeakerTurns.current(episodeDirPath, sha256, bytes, diarizer.models)) {
@@ -442,10 +445,9 @@ class PodcastPipeline(
 
     /** The decode's record of the audio when its size still matches, so a network volume is not read twice over. */
     private fun audioSha256(
-        episodeDirPath: Path,
+        run: Map<*, *>?,
         audioPath: Path,
     ): String {
-        val run = recordedRun(episodeDirPath)
         val recorded = run?.get("audio_sha256") as? String
         val bytes = (run?.get("audio_bytes") as? Number)?.toLong()
         return if (recorded != null && bytes == Files.size(audioPath)) recorded else WhisperRun.sha256(audioPath)
@@ -660,8 +662,8 @@ class PodcastPipeline(
     }
 
     /**
-     * Every episode --repair-windows would find something in, by the same rules: one <podcast>/<episode> per line,
-     * then its defect cues, windows and each kind, so the output works as a --retranscribe-list. Reads only.
+     * Every episode with a defect: one <podcast>/<episode> per line, then its defect cues, the windows around them and
+     * each kind, so the output works as a --retranscribe-list. Reads only.
      */
     fun listDefects(out: Appendable = System.out): Boolean {
         val dataDir = Path.of(config.dataDirectory)
@@ -707,7 +709,7 @@ class PodcastPipeline(
             )
         }
         logger.info(
-            "$found of ${dirs.size} episodes have defects to repair" + if (unreadable > 0) "; $unreadable could not be read" else "",
+            "$found of ${dirs.size} episodes have defects" + if (unreadable > 0) "; $unreadable could not be read" else "",
         )
         logger.info("$diarized episodes have speaker turns; $traded hold repeats traded between voices, which cleared $cleared")
         return unreadable == 0
@@ -1734,7 +1736,7 @@ class PodcastPipeline(
             var tried = 0
             for ((conditioned, retry) in attempts) {
                 // A few cues are too few to judge where words sit; all of the episode's decodes are judged together.
-                val decoded = decodeChunk(audioPath, podcast, conditioned, retry, chunk, clip, frames, speech, checkPlacement = false)
+                val decoded = decodeChunk(audioPath, podcast, conditioned, retry, chunk, clip, frames, speech)
                 returned += decoded.map { it.second }
                 tried++
                 val joined = WindowRepair.stitched(decoded.map { it.first }, decoded.map { it.second })
@@ -1744,8 +1746,8 @@ class PodcastPipeline(
                         conditioned,
                         retry,
                         WindowRepair.defectCues(joined.cues, prompt).size,
-                        WindowRepair.unpunctuated(WindowRepair.Replacement(IntRange.EMPTY, joined.cues, joined.words)),
-                        WindowRepair.uncovered(joined.words, speech, chunk.window.start, chunk.window.end, GAP_SCORE_COVER_SECONDS),
+                        WindowRepair.unpunctuated(joined),
+                        WindowRepair.uncovered(joined.words, speech, chunk.window.start, chunk.window.end, SCORE_COVER_SECONDS),
                     )
                 if (best == null || tries.beats(best)) best = tries
                 if (best.defects == 0 && !best.unpunctuated) break
@@ -1779,8 +1781,7 @@ class PodcastPipeline(
             throw it
         }
         val stitched = WindowRepair.stitched(pieces.map { it.first }, pieces.map { it.second })
-        val heard = WindowRepair.dropNonSpeech(WindowRepair.Replacement(IntRange.EMPTY, stitched.cues, stitched.words), speech)
-        return WhisperTranscription.of(heard.cues, heard.words) to mapOf("chunks" to chunks.size, "retried" to retried)
+        return WindowRepair.dropNonSpeech(stitched, speech) to mapOf("chunks" to chunks.size, "retried" to retried)
     }
 
     /** One request to whisper, counted for the exit code, and refused if its word times are unusable. */
@@ -1832,35 +1833,26 @@ class PodcastPipeline(
         )
     }
 
-    /**
-     * Re-decodes only the windows around an episode's defects and splices in the
-     * attempt that leaves each window with fewer defects than it had and no speech lost.
-     * Only a pair already from one decode is repaired: the splice keeps its words.
-     */
-    private fun repairEpisode(
-        episodeDirPath: Path,
-        fixDefects: Boolean = true,
-        fillGaps: Boolean = false,
-        retime: Boolean = false,
-    ): Boolean {
+    /** Moves the words and cues whisper timed before their speech to where VAD hears it start, with no decode. */
+    private fun retimeEpisode(episodeDirPath: Path): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) {
-            logger.error("Cannot repair $label: it has no audio")
+            logger.error("Cannot retime $label: it has no audio")
             return false
         }
         when (val verdict = TranscriptPair.check(episodeDirPath)) {
             TranscriptPair.Consistent -> Unit
             TranscriptPair.Unpaired -> {
-                logger.warn("Cannot repair $label: it has no word timings to splice into; re-transcribe it instead")
+                logger.warn("Cannot retime $label: it has no word timings to move; re-transcribe it instead")
                 return false
             }
             is TranscriptPair.Diverged -> {
-                logger.warn("Cannot repair $label: ${verdict.reason}; re-transcribe it instead")
+                logger.warn("Cannot retime $label: ${verdict.reason}; re-transcribe it instead")
                 return false
             }
             is TranscriptPair.Unreadable -> {
-                logger.warn("Cannot repair $label: ${verdict.reason}")
+                logger.warn("Cannot retime $label: ${verdict.reason}")
                 return false
             }
         }
@@ -1873,7 +1865,7 @@ class PodcastPipeline(
             ) as Map<String, Any?>
         val parsedCues = TranscriptPair.parseCues(existing["episode_transcript"]?.toString().orEmpty())
         if (parsedCues.any { it.start == null || it.end == null }) {
-            logger.warn("Cannot repair $label: a cue timestamp does not parse; re-transcribe it instead")
+            logger.warn("Cannot retime $label: a cue timestamp does not parse; re-transcribe it instead")
             return false
         }
         val cues = parsedCues.map { Cue(it.start!!, it.end!!, it.text.trimEnd('\n')) }
@@ -1881,343 +1873,62 @@ class PodcastPipeline(
         val podcast = podcastFor(episodeDirPath)
         val prompt = WindowRepair.Prompt(podcast.initialPrompt ?: config.defaultPrompt)
         val wordsPath = episodeDirPath.resolve(WhisperTranscription.WORDS_FILENAME)
-        val words by lazy { readWords(wordsPath) }
-        val speakers = speakersFor(episodeDirPath, existing)
-        val voices = speakers?.takeIf { Files.exists(wordsPath) }?.let { WindowRepair.Voices(it, words) }
-        val defects = WindowRepair.defectCues(cues, prompt, voices)
-        if (defects.isEmpty() && !fillGaps && !retime) {
-            logger.info("$label has no loops, stretch-copies or prompt leaks to repair")
-            return false
-        }
         if (!Files.exists(wordsPath)) {
-            logger.warn("Cannot repair $label: its decode has no word timings to splice into; re-transcribe it instead")
+            logger.warn("Cannot retime $label: its decode has no word timings to move; re-transcribe it instead")
             return false
         }
-        val base = WhisperTranscription.of(cues, words)
-        val speech =
-            speechDetector?.speech(audioPath)?.takeIf { spans ->
-                WindowRepair.plausible(base, defects, spans).also {
-                    if (!it) logger.warn("VAD hears no speech under most of $label's cues; repairing it without VAD")
-                }
-            }
-
-        if (fillGaps && speech == null) {
-            logger.warn("Cannot fill gaps in $label: gap repair needs vad_binary and vad_model, and VAD that hears its speech")
-            if (!fixDefects || defects.isEmpty()) return false
+        val base = WhisperTranscription.of(cues, readWords(wordsPath))
+        val voices = speakersFor(episodeDirPath, existing)?.let { WindowRepair.Voices(it, base.words) }
+        val defects = WindowRepair.defectCues(cues, prompt, voices)
+        val detector = speechDetector
+        if (detector == null) {
+            logger.warn("Cannot retime $label: it needs vad_binary and vad_model")
+            return false
         }
-        if (retime && speech == null) {
-            logger.warn("Cannot retime $label: it needs vad_binary and vad_model, and VAD that hears its speech")
-            if (!fillGaps && (!fixDefects || defects.isEmpty())) return false
+        val speech = detector.speech(audioPath)
+        if (!WindowRepair.plausible(base, defects, speech)) {
+            logger.warn("VAD hears no speech under most of $label's cues; not retiming it")
+            return false
+        }
+
+        val filler = cues.indices.filter { WindowRepair.filler(cues[it], prompt) }
+        val retimed = Retiming.retime(base, speech, defects + filler)
+        if (retimed.words + retimed.cues == 0) {
+            logger.info("$label has no early cues to retime")
+            return false
         }
 
         val language = podcast.language ?: config.language
-        val replacements = mutableListOf<WindowRepair.Replacement>()
-        val repairs = mutableListOf<Map<String, Any?>>()
-        val windows = if (fixDefects) WindowRepair.windows(cues, defects) else emptyList()
-        val windowed = mutableListOf<IntRange>()
-        var previousLast = 0
-        for ((n, initial) in windows.withIndex()) {
-            // Widening may share an anchor with the windows either side, never reach into what they replace.
-            val lowest = previousLast
-            val highest = windows.getOrNull(n + 1)?.first ?: cues.lastIndex
-            var range = initial
-            var widened = 0
-            var tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt, speakers)
-            while (tried.best == null && widened < MAX_WIDENINGS) {
-                val first = if (tried.disputedLeft && range.first - 1 >= lowest) range.first - 1 else range.first
-                val last = if (tried.disputedRight && range.last + 1 <= highest) range.last + 1 else range.last
-                if (first == range.first && last == range.last) break
-                range = first..last
-                widened++
-                tried = tryWindow(base, audioPath, podcast, range, defects, speech, prompt, speakers)
-            }
-            previousLast = range.last
-            val best = tried.best
-            // Only a window replaced holds its gaps; one given up on leaves them to gap repair, as a later run would.
-            if (best != null) windowed += range
-            val window = WindowRepair.window(cues, range)
-            val before = WindowRepair.defectsBefore(base, range, defects)
-            repairs +=
-                mapOf(
-                    "start" to window.start,
-                    "end" to window.end,
-                    "cues" to listOf(range.first, range.last),
-                    "widened" to widened,
-                    "defects_before" to before,
-                    "defects_after" to if (best != null) tried.bestDefects else before,
-                    "conditioned" to if (best != null) tried.bestConditioned else null,
-                    "retry" to tried.bestRetry.takeIf { best != null && it.isNotEmpty() },
-                    "applied" to (best != null),
-                    "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
-                    "anchor_left" to best?.anchorLeft,
-                    "anchor_right" to best?.anchorRight,
-                    "gap_left_s" to best?.let { WindowRepair.gaps(base, range, it).first },
-                    "gap_right_s" to best?.let { WindowRepair.gaps(base, range, it).second },
-                    "request" to
-                        best?.let {
-                            transcriber.requestFields(language, podcast.initialPrompt, tried.bestConditioned, window, tried.bestRetry)
-                        },
-                    "speech_checked" to (speech != null),
-                    "speakers_checked" to (speakers != null),
-                    "unpunctuated" to best?.let { WindowRepair.unpunctuated(it) },
-                    "refused_for_lost_speech_s" to tried.lost.map { Math.round(it * 10) / 10.0 },
-                    "refused_for_dropped_cue" to tried.droppedCue,
-                )
-            best?.let { replacements += WindowRepair.fitStretched(it, speech) }
-        }
-        if (fillGaps && speech != null && base.cues.isNotEmpty()) {
-            val frames by lazy { Mp3Frames.of(audioPath) }
-            for (gap in WindowRepair.gapWindows(base, speech)) {
-                // Sharing an anchor is fine: only a cue one replaces and the other needs is a clash.
-                val clear = listOf(gap.range, gap.plain).filter { r -> windowed.none { overlaps(it, inner(r)) || overlaps(r, inner(it)) } }
-                if (clear.isEmpty()) continue
-                val widenedOver = setOf(gap.plain.first, gap.plain.last) - setOf(gap.range.first, gap.range.last)
-                var filled = tryGap(base, audioPath, podcast, clear.first(), speech, prompt, frames, widenedOver, speakers)
-                // Refused with the edge cues decoded again: anchored on them instead, as whisper wrote them.
-                // Or kept but still short: whisper may hear the gap whole without the edge cues in its clips.
-                val short = filled.best != null && filled.after > WindowRepair.MAX_LOST_SPEECH_SECONDS
-                if ((filled.best == null || short) && clear.first() != gap.plain && gap.plain in clear) {
-                    val widened = filled
-                    val plain = tryGap(base, audioPath, podcast, gap.plain, speech, prompt, frames, emptySet(), speakers)
-                    val better =
-                        plain.best != null && (widened.best == null || plain.after < widened.after - WindowRepair.MIN_GAP_GAIN_SECONDS)
-                    filled = (if (better) plain else widened).copy(attempts = widened.attempts + plain.attempts)
-                }
-                val best = filled.best
-                repairs +=
-                    mapOf(
-                        "kind" to "gap",
-                        "start" to filled.from,
-                        "end" to filled.to,
-                        "cues" to listOf(filled.range.first, filled.range.last),
-                        "edges_redecoded" to (filled.range != gap.plain),
-                        "chunks" to filled.chunks.map { listOf(it.window.start, it.window.end) },
-                        "clips" to filled.clipped,
-                        "uncovered_before_s" to Math.round(filled.before * 10) / 10.0,
-                        "uncovered_after_s" to Math.round(filled.after * 10) / 10.0,
-                        "defects_before" to 0,
-                        "defects_after" to 0,
-                        "conditioned" to if (best != null) filled.conditioned else null,
-                        "retry" to filled.retry.takeIf { best != null && it.isNotEmpty() },
-                        "applied" to (best != null),
-                        "attempts" to filled.attempts,
-                        "replaced_cues" to best?.let { listOf(it.range.first, it.range.last) },
-                        "anchor_left" to best?.anchorLeft,
-                        "anchor_right" to best?.anchorRight,
-                        "request" to
-                            best?.let {
-                                val first = filled.chunks.first().window.takeUnless { filled.clipped }
-                                transcriber.requestFields(language, podcast.initialPrompt, filled.conditioned, first, filled.retry)
-                            },
-                    )
-                // An episode with every gap refused writes no record; the log keeps its attempts.
-                if (logger.isDebugEnabled) logger.debug("Gap record: {}", recordJson.writeValueAsString(repairs.last()))
-                best?.let { replacements += WindowRepair.fitStretched(it, speech) }
-            }
-        }
-        var spliced = WindowRepair.splice(base, replacements)
-        val retimed =
-            if (retime && speech != null) {
-                val filler = spliced.cues.indices.filter { WindowRepair.filler(spliced.cues[it], prompt) }
-                val skip = WindowRepair.defectCues(spliced.cues, prompt, speakers?.let { WindowRepair.Voices(it, spliced.words) }) + filler
-                Retiming.retime(spliced, speech, skip)
-            } else {
-                null
-            }
-        val moved = retimed != null && retimed.words + retimed.cues > 0
-        if (retimed != null && moved) {
-            spliced = retimed.transcription
-            repairs +=
-                mapOf(
-                    "kind" to "retime",
-                    "words_moved" to retimed.words,
-                    "cues_moved" to retimed.cues,
-                    "seconds_moved" to Math.round(retimed.seconds * 10) / 10.0,
-                )
-        }
-        if (repairs.isEmpty()) {
-            logger.info("$label has no loops, stretch-copies, prompt leaks, gaps or early cues to repair")
-            return false
-        }
-        if (replacements.isEmpty() && !moved) {
-            logger.warn("No window of $label came back better than it was; keeping it")
-            return false
-        }
-
-        val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
+        val audio = AudioIdentity(audioSha256(existing[WhisperRun.FIELD] as? Map<*, *>, audioPath), Files.size(audioPath))
         val run =
             WhisperRun(
                 runId = WhisperRun.newId(),
                 decodedAt = WhisperRun.now(),
                 serverUrl = config.whisperServerUrl,
                 model = config.whisperModel,
-                // Every cue outside the windows is still the base's decode; each window records its own request.
                 request = requestOf(existing) ?: transcriber.requestFields(language, podcast.initialPrompt),
                 audioSha256 = audio.sha256,
                 audioBytes = audio.bytes,
                 pipelineVersion = WhisperRun.pipelineVersion,
-                words = spliced.words.size,
+                words = retimed.transcription.words.size,
                 base = existing[WhisperRun.FIELD] as? Map<*, *>,
-                repairs = repairs,
+                repairs =
+                    listOf(
+                        mapOf(
+                            "kind" to "retime",
+                            "words_moved" to retimed.words,
+                            "cues_moved" to retimed.cues,
+                            "seconds_moved" to Math.round(retimed.seconds * 10) / 10.0,
+                        ),
+                    ),
             )
-        val repaired = spliced.copy(run = run)
-        val quality = TranscriptQuality.score(repaired)
+        val written = retimed.transcription.copy(run = run)
         val updated = existing.toMutableMap()
-        updated["episode_transcript"] = repaired.vtt
-        updated["episode_quality"] = quality.toMap()
-        if (!writeTranscriptArtifacts(episodeDirPath, label, repaired, updated, replace = true, runIdOf(existing))) return false
-        val decoded = repairs.filter { it["kind"] != "retime" }
-        val retimedSummary = retimed?.takeIf { moved }?.let { "${it.words} held words and ${it.cues} early cues retimed" }
-        if (decoded.isEmpty()) {
-            logger.info("Retimed $label: $retimedSummary")
-        } else {
-            logger.info(
-                "Repaired $label: ${replacements.size} of ${decoded.size} windows, " +
-                    "${decoded.sumOf { it["defects_before"] as Int }} defective cues before, " +
-                    "${decoded.sumOf { it["defects_after"] as Int }} after" + gapSummary(repairs) +
-                    (retimedSummary?.let { "; $it" } ?: ""),
-            )
-        }
+        updated["episode_transcript"] = written.vtt
+        updated["episode_quality"] = TranscriptQuality.score(written).toMap()
+        if (!writeTranscriptArtifacts(episodeDirPath, label, written, updated, replace = true, runIdOf(existing))) return false
+        logger.info("Retimed $label: ${retimed.words} held words and ${retimed.cues} early cues retimed")
         return true
-    }
-
-    private fun inner(range: IntRange) = (range.first + 1) until range.last
-
-    private fun overlaps(
-        a: IntRange,
-        b: IntRange,
-    ) = !a.isEmpty() && !b.isEmpty() && a.first <= b.last && b.first <= a.last
-
-    private fun gapSummary(repairs: List<Map<String, Any?>>): String {
-        val gaps = repairs.filter { it["kind"] == "gap" }
-        if (gaps.isEmpty()) return ""
-        val filled = gaps.filter { it["applied"] == true }
-        val recovered = filled.sumOf { (it["uncovered_before_s"] as Double) - (it["uncovered_after_s"] as Double) }
-        return "; ${filled.size} of ${gaps.size} gaps filled, ${"%.1f".format(Locale.ROOT, recovered)} s of speech recovered"
-    }
-
-    private data class Filled(
-        val best: WindowRepair.Replacement?,
-        val range: IntRange,
-        val from: Double,
-        val to: Double,
-        val chunks: List<WindowRepair.Chunk>,
-        val clipped: Boolean,
-        val before: Double,
-        val after: Double,
-        val conditioned: Boolean,
-        val retry: Map<String, String>,
-        val attempts: List<Map<String, Any?>> = emptyList(),
-    )
-
-    /**
-     * A gap decoded in chunks that start on the speech, so whisper never opens a window on the music that made it skip.
-     * Kept only if it covers more of the speech, loses none of the cues around it, and brings no defect of its own.
-     */
-    private fun tryGap(
-        base: WhisperTranscription,
-        audioPath: Path,
-        podcast: PodcastConfig,
-        range: IntRange,
-        speech: List<TimeWindow>,
-        prompt: WindowRepair.Prompt,
-        frames: Mp3Frames?,
-        /** The cues that anchored the gap before it was widened over them: their words must survive the decode. */
-        widenedOver: Set<Int>,
-        speakers: SpeakerTurns?,
-    ): Filled {
-        // -1 and the cue count stand for the episode's start and end, where there is no cue to anchor to.
-        val from = base.cues.getOrNull(range.first)?.end ?: 0.0
-        val to = base.cues.getOrNull(range.last)?.start ?: (maxOf(base.cues.last().end, speech.lastOrNull()?.end ?: 0.0) + 1.0)
-        val inner = (maxOf(range.first + 1, 0)..minOf(range.last - 1, base.cues.lastIndex)).toSet()
-        val anchors = maxOf(range.first, 0)..minOf(range.last, base.cues.lastIndex)
-        val strict = widenedOver.intersect(inner).filterNot { WindowRepair.filler(base.cues[it], prompt) }.toSet()
-        val chunks = WindowRepair.chunks(speech, from, to)
-        val clips = chunks.map { frames?.clip(it.window) }
-        val clipped = clips.all { it != null }
-        val before = WindowRepair.uncovered(base.words, speech, from, to, GAP_SCORE_COVER_SECONDS)
-        var filled = Filled(null, range, from, to, chunks, clipped, before, before, true, emptyMap())
-        if (chunks.isEmpty()) return filled
-        val attempts = mutableListOf<Map<String, Any?>>()
-        for ((conditioned, retry) in CHUNK_ATTEMPTS) {
-            val pieces =
-                chunks.flatMapIndexed {
-                        i,
-                        it,
-                    ->
-                    decodeChunk(audioPath, podcast, conditioned, retry, it, clips[i], frames, speech)
-                }
-            val decoded = WindowRepair.stitched(pieces.map { it.first }, pieces.map { it.second })
-            val anchored = WindowRepair.anchor(base, decoded, anchors, inner, byText = !clipped)
-            val replacement = WindowRepair.dropNonSpeech(anchored, speech)
-            val after = WindowRepair.uncovered(replacement.words, speech, from, to, GAP_SCORE_COVER_SECONDS)
-            val dropped = WindowRepair.droppedHeardCues(base, replacement, emptySet(), speech, strict)
-            val stocked = WindowRepair.stockAfter(base, replacement, inner)
-            // A heard cue lost or a stock phrase written is a small error beside many times its length of speech recovered.
-            val cost =
-                dropped.sumOf { WindowRepair.cost(base.cues[it], speech) } +
-                    stocked.sumOf { WindowRepair.cost(replacement.cues[it], speech) }
-            val outweighed = before - after >= GAP_GAIN_PER_COST * cost
-            val refused =
-                when {
-                    maxOf(anchored.intoLeft, anchored.intoRight) > WindowRepair.MAX_INTO_ANCHOR_SECONDS ->
-                        "reaches into an anchor (${"%.1f".format(Locale.ROOT, anchored.intoLeft)} s left, " +
-                            "${"%.1f".format(Locale.ROOT, anchored.intoRight)} s right)"
-                    replacement.words.isEmpty() -> "no words"
-                    WindowRepair.voicesPrompt(base, replacement, prompt, inner) -> "voices the prompt"
-                    dropped.any { WindowRepair.describesSound(base.cues[it].text) } -> "drops a cue naming music"
-                    dropped.isNotEmpty() && !outweighed -> "drops a heard cue"
-                    WindowRepair.losesEdgeSpeech(base, replacement, strict, speech) ->
-                        "leaves an edge cue's speech without words ${WindowRepair.edgeSpeechLost(base, replacement, strict, speech)}"
-                    WindowRepair.defectsAfter(base, replacement, prompt, inner, stock = false, speakers) > 0 -> "brings a defect"
-                    stocked.isNotEmpty() && !outweighed -> "writes a stock phrase"
-                    WindowRepair.echoesNeighbours(base, replacement) -> "echoes the cues beside it"
-                    after > before - WindowRepair.MIN_GAP_GAIN_SECONDS -> "covers too little (${"%.1f".format(Locale.ROOT, after)} s left)"
-                    else -> null
-                }
-            attempts +=
-                mapOf(
-                    "edges_redecoded" to widenedOver.isNotEmpty(),
-                    "conditioned" to conditioned,
-                    "retry" to retry.takeIf { it.isNotEmpty() },
-                    "uncovered_s" to Math.round(after * 10) / 10.0,
-                    "refused" to refused,
-                    "cost_s" to Math.round(cost * 10) / 10.0,
-                    "stock_cues" to stocked.map { replacement.cues[it].text.trim() },
-                    "dropped_cues" to
-                        dropped.map {
-                            val cue = base.cues[it]
-                            val heard = Math.round(WindowRepair.heardUnder(cue, speech) * 10) / 10.0
-                            mapOf("cue" to it, "heard_s" to heard, "text" to cue.text.trim())
-                        },
-                )
-            if (refused != null) {
-                logger.debug(
-                    "Gap {}-{} s: {} attempt {} refused: {}",
-                    from,
-                    to,
-                    if (conditioned) "prompted" else "unprompted",
-                    retry,
-                    refused,
-                )
-                continue
-            }
-            val current = filled.best
-            // Unprompted chunks sometimes come back in lower case without a mark; a punctuated attempt nearly as full wins.
-            val better =
-                when {
-                    current == null -> true
-                    WindowRepair.unpunctuated(current) && !WindowRepair.unpunctuated(replacement) ->
-                        after <= filled.after + GAP_PUNCTUATION_SLACK_SECONDS
-                    !WindowRepair.unpunctuated(current) && WindowRepair.unpunctuated(replacement) ->
-                        after < filled.after - GAP_PUNCTUATION_SLACK_SECONDS
-                    else -> after < filled.after
-                }
-            if (better) filled = Filled(replacement, range, from, to, chunks, clipped, before, after, conditioned, retry)
-            val best = filled.best
-            if (best != null && filled.after <= WindowRepair.MAX_LOST_SPEECH_SECONDS && !WindowRepair.unpunctuated(best)) break
-        }
-        return filled.copy(attempts = attempts)
     }
 
     /**
@@ -2231,15 +1942,14 @@ class PodcastPipeline(
         retry: Map<String, String>,
         chunk: WindowRepair.Chunk,
         clip: Mp3Clip?,
-        frames: Mp3Frames?,
+        frames: Mp3Frames,
         speech: List<TimeWindow>,
-        checkPlacement: Boolean = true,
     ): List<Pair<WindowRepair.Chunk, WhisperTranscription>> {
         val pieces = mutableListOf<Pair<WindowRepair.Chunk, WhisperTranscription>>()
         var window = chunk.window
         var sent = clip
         for (resumed in 0..MAX_CHUNK_RESUMES) {
-            val decoded = decode(audioPath, podcast, conditioned, window, retry, sent, checkPlacement)
+            val decoded = decode(audioPath, podcast, conditioned, window, retry, sent, checkPlacement = false)
             val tail = WindowRepair.unheardTail(decoded, speech, window).takeIf { resumed < MAX_CHUNK_RESUMES }
             if (tail == null) {
                 pieces += chunk.copy(window = window) to decoded
@@ -2250,7 +1960,7 @@ class PodcastPipeline(
             val kept = chunk.keep?.takeIf { resumed == 0 }?.let { TimeWindow(it.start, Double.MAX_VALUE) }
             pieces += WindowRepair.Chunk(TimeWindow(window.start, stopped), cutInSpeech = true, keep = kept) to decoded
             window = tail
-            sent = if (clip != null) frames?.clip(tail) else null
+            sent = if (clip != null) frames.clip(tail) else null
         }
         return pieces
     }
@@ -2263,86 +1973,14 @@ class PodcastPipeline(
         val unpunctuated: Boolean,
         val uncovered: Double,
     ) {
-        /** Fewer defects first; then, as for a gap, a punctuated attempt nearly as full beats one without marks. */
+        /** Fewer defects first; then a punctuated attempt nearly as full beats one without marks. */
         fun beats(other: ChunkAttempt): Boolean =
             when {
                 defects != other.defects -> defects < other.defects
-                other.unpunctuated && !unpunctuated -> uncovered <= other.uncovered + GAP_PUNCTUATION_SLACK_SECONDS
-                !other.unpunctuated && unpunctuated -> uncovered < other.uncovered - GAP_PUNCTUATION_SLACK_SECONDS
+                other.unpunctuated && !unpunctuated -> uncovered <= other.uncovered + PUNCTUATION_SLACK_SECONDS
+                !other.unpunctuated && unpunctuated -> uncovered < other.uncovered - PUNCTUATION_SLACK_SECONDS
                 else -> uncovered < other.uncovered
             }
-    }
-
-    private class Tried(
-        val best: WindowRepair.Replacement?,
-        val bestDefects: Int,
-        val bestConditioned: Boolean,
-        val bestRetry: Map<String, String>,
-        val lost: List<Double>,
-        val droppedCue: Int,
-        val disputedLeft: Boolean,
-        val disputedRight: Boolean,
-    )
-
-    /**
-     * Every attempt at one window, keeping the one with fewest defects, no speech lost, and between equals words closest
-     * to the speech VAD hears. One whose words reach seconds into an anchor disputes that anchor, and is refused.
-     */
-    private fun tryWindow(
-        base: WhisperTranscription,
-        audioPath: Path,
-        podcast: PodcastConfig,
-        range: IntRange,
-        defects: Set<Int>,
-        speech: List<TimeWindow>?,
-        prompt: WindowRepair.Prompt,
-        speakers: SpeakerTurns?,
-    ): Tried {
-        val window = WindowRepair.window(base.cues, range)
-        var best: WindowRepair.Replacement? = null
-        var bestDefects = WindowRepair.defectsBefore(base, range, defects)
-        var bestConditioned = true
-        var bestRetry = emptyMap<String, String>()
-        var bestThin = Double.MAX_VALUE
-        val lost = mutableListOf<Double>()
-        var droppedCue = 0
-        // A line held from where whisper resumed, before it is said, may be re-timed but not replaced.
-        val held = WindowRepair.heldLines(base, range, defects)
-        var disputedLeft = false
-        var disputedRight = false
-        for ((conditioned, retry) in REPAIR_ATTEMPTS) {
-            val anchored = WindowRepair.anchor(base, decode(audioPath, podcast, conditioned, window, retry), range, defects)
-            if (anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS) {
-                disputedLeft = disputedLeft || anchored.intoLeft > WindowRepair.MAX_INTO_ANCHOR_SECONDS
-                disputedRight = disputedRight || anchored.intoRight > WindowRepair.MAX_INTO_ANCHOR_SECONDS
-                continue
-            }
-            val replacement = speech?.let { WindowRepair.dropNonSpeech(anchored, it) } ?: anchored
-            // Nothing said is a repair only where VAD confirms nothing is said.
-            if (replacement.words.isEmpty() && (speech == null || !WindowRepair.silent(base, replacement.range, speech))) continue
-            if (WindowRepair.voicesPrompt(base, replacement, prompt, defects)) continue
-            val spoken = speech ?: WindowRepair.spokenIn(base, replacement.range, defects)
-            val missed = WindowRepair.lostSpeech(base, replacement, spoken)
-            if (missed > WindowRepair.MAX_LOST_SPEECH_SECONDS) {
-                lost += missed
-                continue
-            }
-            if (WindowRepair.dropsHeardCue(base, replacement, defects, spoken, held)) {
-                droppedCue++
-                continue
-            }
-            val after = WindowRepair.defectsAfter(base, replacement, prompt, defects, speakers = speakers)
-            val thin = speech?.let { WindowRepair.lostSpeech(base, replacement, it, WindowRepair.CLOSE_COVER_SECONDS) } ?: 0.0
-            if (after < bestDefects || (best != null && after == bestDefects && thin < bestThin)) {
-                best = replacement
-                bestDefects = after
-                bestConditioned = conditioned
-                bestRetry = retry
-                bestThin = thin
-            }
-            if (bestDefects == 0 && bestThin <= WindowRepair.MAX_LOST_SPEECH_SECONDS) break
-        }
-        return Tried(best, bestDefects, bestConditioned, bestRetry, lost, droppedCue, disputedLeft, disputedRight)
     }
 
     private fun readWords(path: Path): List<Word> =
@@ -2378,33 +2016,17 @@ class PodcastPipeline(
         /** Several times the ~2 min per hour of audio measured at 4 threads, so only a stuck file runs out; 3 h when not an mp3 we can read. */
         internal fun diarizeTimeoutSeconds(durationSeconds: Int?): Long = 10 * 60L + (durationSeconds ?: (3 * 3600)) / 4
 
-        /**
-         * Prompted, then without history, then both again warmer, then with a wider beam. whisper can skip speech on one
-         * decode and transcribe it on another, but since v1.9.4 only if the request differs.
-         */
-        private val REPAIR_ATTEMPTS =
-            listOf(emptyMap(), Transcriber.RETRY_WARMER, Transcriber.RETRY_WIDER_BEAM).flatMap {
-                    retry ->
-                listOf(true to retry, false to retry)
-            }
-
-        /** Unprompted first, as each chunk is decoded alone; then prompted, warmer, and with a wider beam. */
         private const val MAX_CHUNK_RESUMES = 2
 
         /** Tighter than a cue's check: a sentence whisper stretched over speech it skipped, a word a second, covers little of it. */
-        private const val GAP_SCORE_COVER_SECONDS = 0.3
+        private const val SCORE_COVER_SECONDS = 0.3
 
-        /** How many times a lost cue's or a stock phrase's length a gap attempt must recover to be kept despite it. */
-        private const val GAP_GAIN_PER_COST = 5.0
-
+        /** Unprompted first, as each chunk is decoded alone; then prompted, warmer, and with a wider beam. */
         private val CHUNK_ATTEMPTS =
             listOf(false to emptyMap(), true to emptyMap(), false to Transcriber.RETRY_WARMER, false to Transcriber.RETRY_WIDER_BEAM)
         private const val MIN_SPEECH_SHARE = 0.2
 
-        private const val GAP_PUNCTUATION_SLACK_SECONDS = 1.0
-
-        /** How many cues a window may grow by, one per side each time, when an attempt disputes its anchors. */
-        private const val MAX_WIDENINGS = 2
+        private const val PUNCTUATION_SLACK_SECONDS = 1.0
         internal const val AUDIO_FILENAME = "audio.mp3"
 
         /** Deliberately extension-less: nothing walking the tree for transcripts will pick it up. */

@@ -42,9 +42,9 @@ internal val USAGE =
                              words.jsonl.gz came from one decode. Prints one
                              <podcast>/<episode> and reason per offender, exits
                              1 if there are any. Never contacts whisper
-      --list-defects         List every episode --repair-windows would find
-                             loops, copies, echoes or leaks in, with counts by
-                             kind; works as a --retranscribe-list. Reads only
+      --list-defects         List every episode with loops, copies, echoes or
+                             leaks in it, with counts by kind; works as a
+                             --retranscribe-list. Reads only
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -59,19 +59,12 @@ internal val USAGE =
                                  every transcript.json, which is slow on a
                                  network volume
       --retranscribe-limit <n>   Cap --retranscribe-flagged; 0 means no limit
-      --repair-windows           Re-decode only the windows around loops and
-                                 stretch-copies of the targets above, and
-                                 splice them in; the rest of each episode is kept
-      --repair-gaps              Re-decode the stretches VAD hears that no word
-                                 covers, in chunks that start on the speech, and
-                                 splice them in. Needs vad_binary and vad_model
       --retime                   Move words and cues timed before their speech
-                                 to where VAD hears it start, with no decode;
-                                 after any repair above. Needs vad_binary and
-                                 vad_model
+                                 to where VAD hears it start, with no decode.
+                                 Needs vad_binary and vad_model
       --diarize                  Write each target's speaker turns to
                                  speaker-turns.json, keyed on its audio, before
-                                 any repair above; alone, nothing is decoded.
+                                 any --retime; alone, nothing is decoded.
                                  A repeat traded between voices is then not a
                                  loop or echo. Needs diarize_python and the
                                  diarize models
@@ -108,8 +101,6 @@ internal data class Args(
     val retranscribeList: String? = null,
     val verifyPairs: Boolean = false,
     val listDefects: Boolean = false,
-    val repairWindows: Boolean = false,
-    val repairGaps: Boolean = false,
     val retime: Boolean = false,
     val diarize: Boolean = false,
     val help: Boolean = false,
@@ -132,8 +123,6 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--whisper-model" -> args.copy(whisperModel = valueFor(flag, argv, ++i))
                 "--verify-pairs" -> args.copy(verifyPairs = true)
                 "--list-defects" -> args.copy(listDefects = true)
-                "--repair-windows" -> args.copy(repairWindows = true)
-                "--repair-gaps" -> args.copy(repairGaps = true)
                 "--retime" -> args.copy(retime = true)
                 "--diarize" -> args.copy(diarize = true)
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
@@ -181,12 +170,6 @@ internal fun parseArgs(argv: Array<String>): Args {
     ) {
         error("--retranscribe-force needs a target: --retranscribe, --retranscribe-id or --retranscribe-list")
     }
-    if (args.repairWindows && !args.isRetranscribe) {
-        error("--repair-windows needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
-    }
-    if (args.repairGaps && !args.isRetranscribe) {
-        error("--repair-gaps needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
-    }
     if (args.retime && !args.isRetranscribe) {
         error("--retime needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
     }
@@ -194,7 +177,7 @@ internal fun parseArgs(argv: Array<String>): Args {
         error("--diarize needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
     }
     // Diarizing alone marks no attempt, so the least-recently-attempted window would never move on.
-    if (args.diarize && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.repairWindows && !args.repairGaps && !args.retime) {
+    if (args.diarize && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.retime) {
         error("--diarize alone selects the same --retranscribe-limit episodes every run; drop the limit or name the targets")
     }
     if (args.diarize && args.retranscribeForce) {
@@ -203,17 +186,11 @@ internal fun parseArgs(argv: Array<String>): Args {
     if (args.retime && args.retranscribeForce) {
         error("--retime moves word times without a decode, so --retranscribe-force does not apply")
     }
-    if (args.repairGaps && args.retranscribeForce) {
-        error("--repair-gaps keeps a gap's decode only when it covers more speech, so --retranscribe-force does not apply")
-    }
-    if (args.repairWindows && args.retranscribeForce) {
-        error("--repair-windows keeps a window only when it comes back better, so --retranscribe-force does not apply")
-    }
     if (args.verifyPairs && args.isRetranscribe) {
         error("--verify-pairs cannot be combined with re-transcription; it runs after every batch anyway")
     }
     if (args.listDefects && (args.isRetranscribe || args.verifyPairs)) {
-        error("--list-defects only reads; run its output with --retranscribe-list and --repair-windows")
+        error("--list-defects only reads; run its output with --retranscribe-list")
     }
     return args
 }

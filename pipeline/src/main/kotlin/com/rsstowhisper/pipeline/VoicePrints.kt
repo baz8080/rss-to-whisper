@@ -32,10 +32,11 @@ object VoicePrints {
         episodeDir: Path,
         audioSha256: String?,
         audioBytes: Long? = null,
+        anyAudio: Boolean = false,
     ): Stored? {
         val (stored, sha) = stored(episodeDir) ?: return null
         val storedAudio = stored["audio_sha256"] as? String ?: return null
-        if (!AudioKeyed.sameAudio(stored, audioSha256, audioBytes)) return null
+        if (!anyAudio && !AudioKeyed.sameAudio(stored, audioSha256, audioBytes)) return null
         return voicesOf(stored)?.let { Stored(it, storedAudio, sha) }
     }
 

@@ -312,20 +312,15 @@ class PodcastPipeline(
             return false
         }
         if ((request.diarize || request.nameSpeakers) && config.voices != null) {
-            val voices =
-                try {
-                    speakerVoices
-                } catch (e: Exception) {
-                    logger.error("Cannot read the voices folder ${config.voices}: ${e.message}")
-                    return false
-                }
+            val voices = speakerVoices
             when {
                 voices != null -> logger.info("${voices.all.size} named voices in ${config.voices}")
+                request.nameSpeakers && voicesProblem != null -> return false
                 request.nameSpeakers -> {
                     logger.error("The voices folder ${config.voices} does not exist; --add-voices makes it")
                     return false
                 }
-                else -> logger.info("No voices folder at ${config.voices} yet, so no speakers are named")
+                voicesProblem == null -> logger.info("No voices folder at ${config.voices} yet, so no speakers are named")
             }
         }
         val decodes = !request.retime && !request.diarize && !request.nameSpeakers
@@ -531,12 +526,23 @@ class PodcastPipeline(
     private var loadedVoices: SpeakerVoices? = null
     private var voicesLoaded = false
 
-    /** Null when there is no voices folder: no episode is named, rather than each named as nobody. */
+    /** Why the voices folder could not be read this run; null when it was, or there is none. */
+    private var voicesProblem: String? = null
+
+    /** Null when there is no voices folder, or it cannot be read: no episode is named, rather than each named as nobody. */
     private val speakerVoices: SpeakerVoices?
         get() {
             if (!voicesLoaded) {
-                loadedVoices = config.voices?.let { SpeakerVoices.load(Path.of(it)) }
                 voicesLoaded = true
+                voicesProblem = null
+                loadedVoices =
+                    try {
+                        config.voices?.let { SpeakerVoices.load(Path.of(it)) }
+                    } catch (e: Exception) {
+                        voicesProblem = e.message ?: e.toString()
+                        logger.warn("Cannot read the voices folder ${config.voices}: $voicesProblem. No speakers are named this run")
+                        null
+                    }
             }
             return loadedVoices
         }
@@ -552,9 +558,14 @@ class PodcastPipeline(
     ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val voices = speakerVoices ?: return false
-        val bytes = if (audioSha256 == null) audioFileFor(episodeDirPath).takeIf { Files.exists(it) }?.let { Files.size(it) } else null
+        val audio = audioFileFor(episodeDirPath)
+        // With no mp3 to check against (the audio share not mounted), the prints are taken as they are.
         val prints =
-            VoicePrints.read(episodeDirPath, audioSha256, bytes) ?: throw EpisodeNotDiarized("it has no voice prints for its audio")
+            when {
+                audioSha256 != null -> VoicePrints.read(episodeDirPath, audioSha256)
+                Files.exists(audio) -> VoicePrints.read(episodeDirPath, null, Files.size(audio))
+                else -> VoicePrints.read(episodeDirPath, null, null, anyAudio = true)
+            } ?: throw EpisodeNotDiarized("it has no voice prints for its audio")
         if (SpeakerNames.current(episodeDirPath, prints.audioSha256, prints.fileSha256, voices.sha256)) return false
         val names = SpeakerNames.match(prints.voices, voices.candidates(episodeDirPath.parent.fileName.toString()))
         SpeakerNames.write(episodeDirPath, prints.audioSha256, prints.fileSha256, voices.sha256, names)

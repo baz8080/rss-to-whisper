@@ -347,6 +347,40 @@ class SpeakerNamesTest {
     }
 
     @Test
+    fun `naming works with the mp3 out of reach, from the prints as they are`(
+        @TempDir tempDir: Path,
+    ) {
+        val labelled = episode(tempDir, recordedSha = null)
+        val voices = tempDir.resolve("voices")
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), feed = null, diarizer = FakeSpeakerDiarizer(turns), voices = voices)
+        pipeline.retranscribe(diarize(labelled))
+        pipeline.addVoices(labels(tempDir, labelled to (0 to "Host")))
+        Files.delete(labelled.resolve("audio.mp3"))
+
+        assertTrue(pipeline.retranscribe(name(labelled)))
+
+        assertEquals(mapOf("0" to "Host"), names(labelled))
+    }
+
+    @Test
+    fun `a voices folder that cannot be read stops name-speakers but not diarize`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val voices = tempDir.resolve("voices")
+        Files.createDirectories(voices)
+        Files.writeString(voices.resolve("Show.json"), "{ not json")
+        val diarizer = FakeSpeakerDiarizer(turns)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), feed = null, diarizer = diarizer, voices = voices)
+
+        assertTrue(pipeline.retranscribe(diarize(dir)))
+        assertFalse(pipeline.retranscribe(name(dir)))
+
+        assertEquals(1, diarizer.calls)
+        assertFalse(Files.exists(dir.resolve(SpeakerNames.FILENAME)))
+    }
+
+    @Test
     fun `a labels file with Windows line endings is read`() {
         val (rows, problems) = SpeakerVoices.parseLabels(listOf("episode\tspeaker\tname\r", "Show/ep\t3\tHost\r"))
         assertEquals(emptyList(), problems)

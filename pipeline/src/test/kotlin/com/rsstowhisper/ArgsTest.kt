@@ -209,17 +209,6 @@ class ArgsTest {
     }
 
     @Test
-    fun `repair-gaps needs targets, and keeps a gap only when it covers more speech`() {
-        assertTrue(parseArgs(arrayOf("--repair-gaps", "--retranscribe-id", "abcd1234")).repairGaps)
-        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--repair-gaps")) }
-        assertFailsWith<IllegalStateException> {
-            parseArgs(
-                arrayOf("--repair-gaps", "--retranscribe-id", "abcd1234", "--retranscribe-force"),
-            )
-        }
-    }
-
-    @Test
     fun `diarize needs targets and has no decode to force`() {
         assertTrue(parseArgs(arrayOf("--diarize", "--retranscribe-list", "episodes.txt")).diarize)
         assertFalse(parseArgs(arrayOf("--retranscribe-id", "abcd1234")).diarize)
@@ -233,7 +222,7 @@ class ArgsTest {
             parseArgs(arrayOf("--diarize", "--retranscribe-flagged", "--retranscribe-limit", "50"))
         }
         assertTrue(parseArgs(arrayOf("--diarize", "--retranscribe-flagged")).diarize)
-        assertTrue(parseArgs(arrayOf("--diarize", "--repair-windows", "--retranscribe-flagged", "--retranscribe-limit", "50")).diarize)
+        assertTrue(parseArgs(arrayOf("--diarize", "--retime", "--retranscribe-flagged", "--retranscribe-limit", "50")).diarize)
     }
 
     @Test

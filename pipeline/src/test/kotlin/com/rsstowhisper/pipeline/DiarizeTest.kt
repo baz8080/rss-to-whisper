@@ -306,25 +306,6 @@ class DiarizeTest {
     }
 
     @Test
-    fun `window repair leaves a loop traded between voices alone, and repairs it without the turns`(
-        @TempDir tempDir: Path,
-    ) {
-        val traded = episode(tempDir, sha = null, withWords = true, name = "2024-01-01-aaaa1111-traded")
-        SpeakerTurns.write(traded, "hashed-audio", FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
-        val untraded = episode(tempDir, sha = null, withWords = true, name = "2024-01-02-bbbb2222-untraded")
-        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
-
-        val messages =
-            logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${traded.fileName}"), repairWindows = true)) }
-
-        assertEquals(0, txSvc.calls.size)
-        assertTrue(messages.any { "has no loops" in it })
-
-        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${untraded.fileName}"), repairWindows = true))
-        assertTrue(txSvc.calls.isNotEmpty())
-    }
-
-    @Test
     fun `list-defects ignores turns made for other audio`(
         @TempDir tempDir: Path,
     ) {

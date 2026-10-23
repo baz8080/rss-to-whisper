@@ -71,15 +71,15 @@ suppress the timestamps the pipeline exists to capture.
 
 The pipeline is run against whisper.cpp **v1.9.4** (`927cfce3`), serving `ggml-large-v3` from two
 builds: Metal with the CoreML encoder on Apple Silicon, and CUDA on Linux. This is not a requirement.
-It is the version the repair's retries were measured on. The corpus was first transcribed, and
+It is the version the decode retries were measured on. The corpus was first transcribed, and
 repaired once, on v1.9.2 (`306c88f4`).
 
 v1.9.4 re-seeds the sampler on every request
 ([whisper.cpp#4025](https://github.com/ggml-org/whisper.cpp/pull/4025)), so a server gives the same
 output for the same request, even when it falls back to sampling. Older servers drift between calls,
-which is what a repeated request used to get its second chance from. So `--repair-windows` tries each
-window prompted and unprompted, then both again at temperature 0.2, then both again with a beam of 8:
-each retry asks for something different.
+which is what a repeated request used to get its second chance from. So a chunk decoded again is
+sent unprompted, then prompted, then at temperature 0.2, then with a beam of 8: each retry asks for
+something different.
 
 ### Choosing a model
 
@@ -567,8 +567,7 @@ below supply the three required values.
 | `--dump-audio-chapters <dir>` | No equivalent; see [Chapters inside the audio](#chapters-inside-the-audio) |
 | `--retranscribe <dir>`, `--retranscribe-id <hex8>`, `--retranscribe-list <file>`, `--retranscribe-flagged`, `--retranscribe-limit <n>`, `--retranscribe-force` | No equivalent; see [Re-transcribing an episode](#re-transcribing-an-episode) |
 | `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
-| `--list-defects` | No equivalent; see [Repairing windows](#repairing-windows) |
-| `--repair-gaps` | No equivalent; see [Filling gaps](#filling-gaps) |
+| `--list-defects` | No equivalent; see [Listing defects](#listing-defects) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -781,77 +780,21 @@ Measured on the same audio, same model and server, 2026-09-25:
 The cost is punctuation: median marks per word fell from 0.140 to 0.114 without the
 prompt. It is off by default.
 
-### Repairing windows
+### Listing defects
 
 ```bash
-./transcribe --repair-windows --retranscribe-list episodes.txt
+./transcribe --list-defects > defects.txt
 ```
 
-Re-decodes only the stretches of each target around its defects, instead of the whole
-episode, and splices them into the pair on disk. A defect is a stretch-copy, a loop (four or more identical cues, a few cues repeated in
-turn, or one cue repeating a phrase faster than anyone speaks), an echo or long copy of the
-cues before it, or a cue of 10 s or more that is nothing but a sentence of the initial prompt
-or one of whisper's stock phrases ("Thanks for watching."): over music or silence, a decode
-voices them.
+A defect is a stretch-copy, a loop (four or more identical cues, a few cues repeated in turn,
+or one cue repeating a phrase faster than anyone speaks), an echo or long copy of the cues
+before it, or a cue of 10 s or more that is nothing but a sentence of the initial prompt or
+one of whisper's stock phrases ("Thanks for watching."): over music or silence, a decode
+voices them. `--list-defects` prints every episode with one, with its defect cues, the windows
+around them and counts by kind, as a list that works with `--retranscribe-list`. It only reads.
 
-- **Windows** are the defective cues plus two good cues either side. whisper-server
-  decodes just that stretch (`offset_t`, `duration`); nothing is cut from the mp3.
-- **Anchors.** The outer good cue at each end is kept exactly as it was; the one against
-  the defect is re-decoded, since it is the cue most often damaged. The new decode is cut
-  after the last three words of the left anchor and before the first three of the right
-  one, found within 2 s of their old time. Otherwise the decode's words are walked over
-  the anchor's, past a word the anchor does not have, and only then cut by time, in the
-  clock the other anchor's words set. The new window's clock is mapped onto the old one
-  between the two anchors.
-- **Attempts.** Prompted, then without history (`max_context=0`), then both again at
-  temperature 0.2, then both again with a beam of 8: whisper can skip speech on one decode
-  and keep it on another, but since v1.9.4 only if the request differs. A window is applied
-  only if it comes back with fewer defects than it had, counting any sentence of the prompt
-  it now holds; an attempt holding a prompt sentence as long as a leak is refused outright,
-  as is one that drops a cue the base had right where speech is heard under it.
-- **Lost speech.** An attempt that leaves more than 2 s of speech without a word near it
-  is refused: whisper can skip a whole window and carry on, and the words either side
-  still match. Without VAD, the speech is the base's own words in the window's good cues.
-- **Silence.** With `vad_binary` and `vad_model` set in `pods.yaml`, Silero VAD
-  (whisper.cpp's `whisper-vad-speech-segments`) says where speech is instead. Cues the new
-  decode put over non-speech are dropped, keeping one `♪` where it marked music, and a
-  window may come back empty only where VAD hears nothing. A VAD that cannot run stops the
-  batch; one that hears nothing under most of an episode's cues is ignored for it. The
-  server's own VAD cannot be used for this: with `vad` on it applies `offset_t` to
-  VAD-compressed time.
-- Only a pair already from one decode is repaired. The result gets a new run id;
-  `whisper_run.base_run` is the pair it was spliced into and `whisper_run.repairs`
-  records each window, its anchors and gaps, and what was refused.
-
-`--list-defects` prints every episode the repair would find something in, with counts by kind,
-as a list that works with `--retranscribe-list`. It only reads.
-
-### Filling gaps
-
-```bash
-./transcribe --repair-gaps --retranscribe-list episodes.txt
-```
-
-whisper decodes in 30 s windows, and when the model ends one early, whisper.cpp skips the rest of
-it ("single timestamp ending"). Over an ad jingle, music or another language the model says so
-wrongly, and the speech later in the window is lost: nothing is written, or a filler such as
-"Thank you." is held to the window's end. Re-decoding the same window from the same cue edges
-meets the same wall.
-
-- **Gaps** are stretches VAD hears with no word starting within 1 s, 4 s or more of them, from the
-  cue before to the cue after. Filler cues over a gap, and crammed cues at its edges (whisper
-  often crams part of what it skipped into no time at the skip), are replaced with it. A gap at
-  an episode's very start or end has no anchor on that side and is skipped.
-- **Chunks.** The speech between the anchors is cut and merged from VAD's spans into pieces under
-  30 s, each decoded alone and starting on speech, the way WhisperX avoids the skip.
-- **Attempts.** Unprompted first, then prompted, then warmer and with a wider beam. A prompt on
-  every short chunk invites skips and echoes; unprompted chunks sometimes come back without
-  punctuation, so a punctuated attempt within a second of the best coverage wins.
-- **Kept only if** it covers at least 2 s more of the speech, keeps every heard cue around it,
-  holds no defect of its own, no prompt sentence, and is not mostly the text of the cues either
-  side (the next line written early over music). Recorded with `"kind": "gap"`.
-- Needs `vad_binary` and `vad_model`. It can run with `--repair-windows` in the same pass; a gap
-  inside a defect window is left to that window.
+Transcripts written by the retired `--repair-windows` and `--repair-gaps` still carry
+`whisper_run.base_run` and `whisper_run.repairs`, and still load; `--retime` writes the same fields.
 
 ### Speaker turns
 
@@ -875,7 +818,7 @@ else's speech starts unsure of itself.
   per run: on the M5 Max, 8 runners at 2 threads each got through 3.7 times as many episodes as one at 4.
 - **Keyed on the audio.** The file records the audio's SHA-256 (taken from the decode's
   `whisper_run` while the size matches), the models and the threshold; an episode with turns for
-  all three is skipped. Repairs change the words, never the audio, so they never make turns stale.
+  all three is skipped. Re-transcribing and retiming change the words, never the audio, so they never make turns stale.
   A transcript from before decodes recorded their audio takes turns made for audio of its mp3's size.
 - **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
 - **New episodes.** With the diarize settings in `pods.yaml`, a normal run diarizes each episode it
@@ -889,7 +832,7 @@ else's speech starts unsure of itself.
   before the first episode. An episode that can't be diarized is logged and skipped; three in a row stop it.
   Alone it records no attempt, so it refuses `--retranscribe-limit` with `--retranscribe-flagged`.
 - Alone, `--diarize` decodes nothing and leaves the transcript untouched. With
-  `--repair-windows`, `--repair-gaps` or `--retime` it runs first, and the repair uses the turns.
+  `--retime` it runs first, and the retime uses the turns.
   `--list-defects` uses whatever turns are stored, adds `traded=<cues>` to an episode's line, and
   says how many episodes the turns cleared.
 - Short trades (under a second or two a lap) and several voices at once are one turn to this

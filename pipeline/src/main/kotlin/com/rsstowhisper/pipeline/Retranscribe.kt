@@ -30,13 +30,9 @@ data class RetranscribeRequest(
      * prompt, a model change -- is invisible to a flag count.
      */
     val force: Boolean = false,
-    /** Re-decode only the windows around loops and stretch-copies, not the whole episode. */
-    val repairWindows: Boolean = false,
-    /** Re-decode the stretches VAD hears that no word covers, from where the speech starts. */
-    val repairGaps: Boolean = false,
-    /** Move words and cues whisper timed before their speech to where VAD hears it, after any repair. */
+    /** Move words and cues whisper timed before their speech to where VAD hears it. */
     val retime: Boolean = false,
-    /** Write each target's speaker turns first, so the repairs after can tell a line traded between voices from a loop. */
+    /** Write each target's speaker turns first, so a retime after can tell a line traded between voices from a loop. */
     val diarize: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged

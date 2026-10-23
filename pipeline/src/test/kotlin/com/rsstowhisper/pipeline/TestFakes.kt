@@ -12,6 +12,7 @@ import com.rometools.rome.feed.synd.SyndFeed
 import com.rometools.rome.feed.synd.SyndFeedImpl
 import com.rsstowhisper.AppConfig
 import com.rsstowhisper.PodcastConfig
+import com.rsstowhisper.external.Diarization
 import com.rsstowhisper.external.EpisodeNotDiarized
 import com.rsstowhisper.external.Mp3Clip
 import com.rsstowhisper.external.SpeakerDiarizer
@@ -21,6 +22,7 @@ import com.rsstowhisper.external.SpeechDetector
 import com.rsstowhisper.external.SpeechDetectorFailed
 import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.Transcriber
+import com.rsstowhisper.external.Voice
 import com.rsstowhisper.feed.FeedService
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
@@ -231,15 +233,36 @@ internal class FakeSpeakerDiarizer(
         if (fails || calls >= breaksAfter) throw SpeakerDiarizerFailed("Cannot run python3: No such file or directory")
     }
 
-    override fun turns(
+    var voiceCalls = 0
+        private set
+
+    override fun diarize(
         audioPath: Path,
         timeoutSeconds: Long,
-    ): List<SpeakerTurn> {
+    ): Diarization {
         calls++
         timeouts += timeoutSeconds
         onTurns?.invoke(audioPath)
         if (audioPath.parent.fileName.toString() in badFiles) throw EpisodeNotDiarized("ffmpeg could not decode $audioPath")
-        return turns
+        return Diarization(turns, voicesOf(turns))
+    }
+
+    override fun voices(
+        audioPath: Path,
+        turns: List<SpeakerTurn>,
+        timeoutSeconds: Long,
+    ): Map<Int, Voice> {
+        voiceCalls++
+        if (audioPath.parent.fileName.toString() in badFiles) throw EpisodeNotDiarized("ffmpeg could not decode $audioPath")
+        return voicesOf(turns)
+    }
+
+    companion object {
+        /** Speaker n's print points along axis n, so two speakers are unalike and one is like itself in any episode. */
+        fun printOf(speaker: Int): FloatArray = FloatArray(8).also { it[speaker % 8] = 1f }
+
+        fun voicesOf(turns: List<SpeakerTurn>): Map<Int, Voice> =
+            turns.groupBy { it.speaker }.mapValues { (speaker, ts) -> Voice(ts.sumOf { it.end - it.start }, printOf(speaker)) }
     }
 }
 
@@ -311,6 +334,7 @@ internal fun buildPipeline(
     speechDetector: SpeechDetector? = null,
     diarizer: SpeakerDiarizer? = null,
     chunkedDecode: Boolean = true,
+    voices: Path? = null,
 ): Triple<PodcastPipeline, FakeTranscriber, FakeFeedService> {
     val config =
         AppConfig(
@@ -326,6 +350,7 @@ internal fun buildPipeline(
             decodeWithoutHistory = decodeWithoutHistory,
             chunkedDecode = chunkedDecode,
             dryRun = dryRun,
+            voices = voices?.toAbsolutePath()?.toString(),
             podcasts = podcasts,
         )
     val feedSvc = feedService ?: FakeFeedService(mapOf(feedUrl to feed), audioBytes = audioBytes)

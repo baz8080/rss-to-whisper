@@ -84,6 +84,11 @@ there is a warning, never a failed episode or run.
 Where an episode has them, a loop, cycle or echo whose laps are each one voice, changing at every lap, and whose repeats
 whisper was sure of, is not a defect.
 
+Diarizing also writes each speaker's voice print to `voice-prints.json`. `--add-voices <labels.tsv>` stores named
+speakers in the `voices` folder (`pods.yaml`), and `--name-speakers` (with any re-transcription target) writes each
+episode's `speaker-names.json`: the nearest named voice of its show, or any `ad:` voice, at cosine 0.65 or more. With
+`voices` set, diarizing names as it goes. Neither file goes into the pair.
+
 `--find-recurring-audio <podcast> --recurring-audio-out <dir>` fingerprints a show's episodes with `fpcalc`
 (`fingerprint_binary`, optional `fingerprint_cache` in `pods.yaml`) and lists the sounds heard in several of them, to be
 labelled by ear; `--add-recurring-audio <labels.tsv>` stores the labelled ones in the `recurring_audio` folder.

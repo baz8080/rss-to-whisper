@@ -633,4 +633,19 @@ class AppConfigTest {
         yaml.writeText("recurring_audio: /refs\nfingerprint_binary: /bin/fpcalc\n")
         assertEquals("/refs", AppConfig.load(env).recurringAudio)
     }
+
+    @Test
+    fun `voices is read from pods_yaml`(
+        @TempDir tmp: Path,
+    ) {
+        val yaml = tmp.resolve("pods.yaml").toFile()
+        yaml.writeText("voices: /voices\n")
+        val env =
+            mapOf(
+                "PIPELINE_CONFIG_PATH" to yaml.absolutePath,
+                "PIPELINE_DATA_DIRECTORY" to "/data",
+                "PIPELINE_WHISPER_SERVER_URL" to "http://w",
+            )
+        assertEquals("/voices", AppConfig.load(env).voices)
+    }
 }

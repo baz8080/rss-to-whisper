@@ -34,6 +34,8 @@ data class RetranscribeRequest(
     val retime: Boolean = false,
     /** Write each target's speaker turns first, so a retime after can tell a line traded between voices from a loop. */
     val diarize: Boolean = false,
+    /** Match each target's voice prints to the named voices, and write who its speakers are. */
+    val nameSpeakers: Boolean = false,
 ) {
     val isRequested: Boolean get() = paths.isNotEmpty() || ids.isNotEmpty() || flagged
 

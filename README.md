@@ -569,6 +569,7 @@ below supply the three required values.
 | `--verify-pairs` | No equivalent; see [Checking pairs](#checking-pairs) |
 | `--list-defects` | No equivalent; see [Listing defects](#listing-defects) |
 | `--find-recurring-audio <podcast>`, `--recurring-audio-out <dir>`, `--add-recurring-audio <labels.tsv>` | No equivalent; see [Recurring audio](#recurring-audio) |
+| `--name-speakers`, `--add-voices <labels.tsv>` | No equivalent; see [Speaker names](#speaker-names) |
 
 Precedence is argument, then `.env`, then `pods.yaml`. A flag that is not passed falls
 through, so `--whisper-url` alone leaves everything else coming from `.env`.
@@ -812,7 +813,8 @@ whisper looping over a conversation crosses those too, and its copy of a line wr
 else's speech starts unsure of itself.
 
 - **Recipe.** sherpa-onnx offline speaker diarization: pyannote segmentation 3.0, NeMo TitaNet
-  small, fast clustering at cosine distance 0.5, on the CPU. The pipeline runs its bundled
+  small, fast clustering at cosine distance 0.5, on the CPU, then a voice print per speaker (see
+  [Speaker names](#speaker-names)). The pipeline runs its bundled
   `diarize.py` under `diarize_python`, a Python with `sherpa-onnx` and `sherpa-onnx-core`, given
   `diarize_segmentation_model` and `diarize_embedding_model` in `pods.yaml`. ffmpeg decodes the
   audio. About 2 min for an hour of audio on 4 threads. `diarize_threads` (default 4) sets the threads
@@ -821,6 +823,7 @@ else's speech starts unsure of itself.
   `whisper_run` while the size matches), the models and the threshold; an episode with turns for
   all three is skipped. Re-transcribing and retiming change the words, never the audio, so they never make turns stale.
   A transcript from before decodes recorded their audio takes turns made for audio of its mp3's size.
+  Turns already current but without voice prints only have their prints made.
 - **Never in the pair.** No label goes into `transcript.json` or `words.jsonl.gz`.
 - **New episodes.** With the diarize settings in `pods.yaml`, a normal run diarizes each episode it
   transcribes or recovers, on its own thread while the next one decodes, and waits for the last of them
@@ -838,6 +841,37 @@ else's speech starts unsure of itself.
   says how many episodes the turns cleared.
 - Short trades (under a second or two a lap) and several voices at once are one turn to this
   recipe, and stay flagged.
+
+### Speaker names
+
+```yaml
+voices: /path/to/voices      # one <show directory>.json per show
+```
+
+```bash
+./transcribe --add-voices labels.tsv
+./transcribe --name-speakers --retranscribe-list episodes.txt
+```
+
+A speaker number from diarization only means something inside its own episode. Diarizing also writes
+each speaker's voice print to `voice-prints.json`, beside the turns and under the same key: TitaNet over
+the speaker's turns in 10 s pieces (the model refuses inputs past about two minutes), averaged by length.
+Matching those prints to voices Barry named says who each speaker is.
+
+- **Naming voices.** `--add-voices <labels.tsv>` (columns `episode` as `<podcast dir>/<episode dir>`,
+  `speaker`, `name`) copies each labelled speaker's print from its episode into the `voices` folder.
+  Naming a speaker again renames it. A name starting `ad:` is an ad read, and is matched in every show.
+- **Matching.** `--name-speakers` (with any re-transcription target, no decode, no audio read) writes
+  `speaker-names.json`: each speaker's nearest named voice among its show's own and every ad, where the
+  cosine similarity is at least 0.65. On Barry's blind checks (48 clips from the pilot, then 48 from
+  the rest of the corpus) nothing at or above 0.65 named the wrong person. Below it the nearest name was
+  often right too, but in the pilot guests were matched to other shows' hosts there.
+- **Kept current.** The file records the audio's hash and hashes of the prints and of the voices folder;
+  an episode whose names are current is skipped, and any new or renamed voice makes every episode
+  stale. With `voices` set, `--diarize` and a normal run's diarization name each episode as it goes.
+- **Never in the pair.** As with the turns, no name goes into `transcript.json` or `words.jsonl.gz`.
+- **Mixes.** Diarization sometimes merges two people into one speaker; that speaker gets the name of
+  whichever its print is nearer.
 
 ### Recurring audio
 

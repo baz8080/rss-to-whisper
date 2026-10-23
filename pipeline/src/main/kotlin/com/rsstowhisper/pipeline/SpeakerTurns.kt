@@ -7,7 +7,6 @@ import com.rsstowhisper.external.TimeWindow
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 
 /**
  * An episode's speaker turns, stored beside the pair in [FILENAME] and keyed on the audio's SHA-256: repairs change
@@ -53,13 +52,7 @@ class SpeakerTurns(
             audioBytes: Long? = null,
         ): SpeakerTurns? {
             val stored = stored(episodeDir) ?: return null
-            val same =
-                if (audioSha256 != null) {
-                    stored["audio_sha256"] == audioSha256
-                } else {
-                    audioBytes != null && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes
-                }
-            return if (same) turnsOf(stored)?.let { SpeakerTurns(it) } else null
+            return if (AudioKeyed.sameAudio(stored, audioSha256, audioBytes)) turnsOf(stored)?.let { SpeakerTurns(it) } else null
         }
 
         /** Whether [episodeDir] already has turns for this audio from these [models]. */
@@ -70,8 +63,7 @@ class SpeakerTurns(
             models: Map<String, Any>,
         ): Boolean {
             val stored = stored(episodeDir) ?: return false
-            return stored["audio_sha256"] == audioSha256 && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes &&
-                models.all { (key, value) -> stored[key]?.toString() == value.toString() } && turnsOf(stored) != null
+            return AudioKeyed.current(stored, audioSha256, audioBytes, models) && turnsOf(stored) != null
         }
 
         fun write(
@@ -84,13 +76,7 @@ class SpeakerTurns(
             val record =
                 mapOf("audio_sha256" to audioSha256, "audio_bytes" to audioBytes) + models +
                     mapOf("turns" to turns.map { listOf(it.start, it.end, it.speaker) })
-            val partial = Files.createTempFile(episodeDir, ".speaker-turns-", ".json")
-            try {
-                Files.writeString(partial, mapper.writeValueAsString(record))
-                Files.move(partial, episodeDir.resolve(FILENAME), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } finally {
-                Files.deleteIfExists(partial)
-            }
+            AudioKeyed.write(episodeDir, FILENAME, mapper.writeValueAsString(record))
         }
 
         /** Null for a file that is missing or will not parse: it reads as no turns, and is diarized again. */

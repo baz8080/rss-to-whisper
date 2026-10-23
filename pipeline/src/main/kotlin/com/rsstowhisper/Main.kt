@@ -100,6 +100,8 @@ fun main(argv: Array<String>) {
                 pipeline.verifyPairs()
             } else if (args.listDefects) {
                 pipeline.listDefects()
+            } else if (args.addVoices != null) {
+                pipeline.addVoices(Path.of(args.addVoices))
             } else if (args.addRecurringAudio != null) {
                 pipeline.addRecurringAudio(Path.of(args.addRecurringAudio))
             } else if (args.findRecurringAudio != null) {
@@ -114,6 +116,7 @@ fun main(argv: Array<String>) {
                         force = args.retranscribeForce,
                         retime = args.retime,
                         diarize = args.diarize,
+                        nameSpeakers = args.nameSpeakers,
                     ),
                 )
             } else {

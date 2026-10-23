@@ -19,16 +19,28 @@ data class SpeakerTurn(
     val speaker: Int,
 )
 
+/** A speaker's voice print: the unit-length mean of its turns' embeddings, weighted by how long each is. */
+class Voice(
+    val seconds: Double,
+    val print: FloatArray,
+)
+
+class Diarization(
+    val turns: List<SpeakerTurn>,
+    val voices: Map<Int, Voice>,
+)
+
 /**
  * Who speaks when, from sherpa-onnx's offline speaker diarization (pyannote segmentation, a speaker embedding,
- * fast clustering), run by the `diarize.py` bundled with the pipeline under [python]. Needs ffmpeg on PATH.
+ * fast clustering), and each speaker's voice print, run by the `diarize.py` bundled with the pipeline under [python].
+ * Needs ffmpeg on PATH.
  */
 open class SpeakerDiarizer(
     private val python: String,
     private val segmentation: String,
     private val embedding: String,
     private val threads: Int = 4,
-    private val timeoutSeconds: Long = TIMEOUT_MINUTES * 60,
+    val timeoutSeconds: Long = TIMEOUT_MINUTES * 60,
     private val checkSeconds: Long = CHECK_MINUTES * 60,
 ) {
     /** What the turns depend on besides the audio; turns stored under any other are stale. */
@@ -45,12 +57,33 @@ open class SpeakerDiarizer(
         if (exit != 0) throw SpeakerDiarizerFailed("The diarize check failed: $why")
     }
 
-    open fun turns(
+    open fun diarize(
         audioPath: Path,
         timeoutSeconds: Long = this.timeoutSeconds,
-    ): List<SpeakerTurn> {
+    ): Diarization = output(listOf(audioPath.toString()), audioPath, timeoutSeconds)
+
+    /** Voice prints for [turns] already stored, without diarizing again. */
+    open fun voices(
+        audioPath: Path,
+        turns: List<SpeakerTurn>,
+        timeoutSeconds: Long = this.timeoutSeconds,
+    ): Map<Int, Voice> {
+        val file = Files.createTempFile("turns-", ".json")
+        try {
+            Files.writeString(file, mapper.writeValueAsString(turns.map { listOf(it.start, it.end, it.speaker) }))
+            return output(listOf("--turns", file.toString(), audioPath.toString()), audioPath, timeoutSeconds).voices
+        } finally {
+            Files.deleteIfExists(file)
+        }
+    }
+
+    private fun output(
+        args: List<String>,
+        audioPath: Path,
+        timeoutSeconds: Long,
+    ): Diarization {
         val (exit, out, why) =
-            run(listOf(audioPath.toString()), timeoutSeconds)
+            run(args, timeoutSeconds)
                 ?: throw EpisodeNotDiarized("Diarization did not finish on $audioPath within ${timeoutSeconds / 60} minutes")
         if (exit != 0) throw EpisodeNotDiarized("Diarization exited $exit on $audioPath: $why")
         return try {
@@ -122,16 +155,36 @@ open class SpeakerDiarizer(
         /** A model's file and the folder it sits in: the segmentation model is always `model.onnx`. */
         private fun name(path: String): String = Path.of(path).let { p -> listOfNotNull(p.parent?.fileName, p.fileName).joinToString("/") }
 
-        fun parse(json: String): List<SpeakerTurn> {
-            val list =
+        fun parse(json: String): Diarization {
+            val printed =
                 try {
-                    mapper.readValue(json, List::class.java)
+                    mapper.readValue(json, Map::class.java)
                 } catch (e: IOException) {
-                    throw SpeakerDiarizerFailed("Diarization printed something other than a list of turns: ${e.message}", e)
+                    throw SpeakerDiarizerFailed("Diarization printed something other than turns and voices: ${e.message}", e)
                 }
-            return list.map { entry ->
-                turnOf(entry) ?: throw SpeakerDiarizerFailed("Diarization printed a turn that is not [start, end, speaker]: $entry")
-            }
+            val turns =
+                (printed["turns"] as? List<*> ?: throw SpeakerDiarizerFailed("Diarization printed no list of turns")).map { entry ->
+                    turnOf(entry) ?: throw SpeakerDiarizerFailed("Diarization printed a turn that is not [start, end, speaker]: $entry")
+                }
+            val voices =
+                (printed["voices"] as? Map<*, *> ?: throw SpeakerDiarizerFailed("Diarization printed no voices")).entries.associate {
+                        (k, v) ->
+                    val speaker = k.toString().toIntOrNull()
+                    val voice = voiceOf(v)
+                    if (speaker == null || voice == null) throw SpeakerDiarizerFailed("Diarization printed a voice it cannot read: $k")
+                    speaker to voice
+                }
+            return Diarization(turns, voices)
+        }
+
+        /** `{"seconds": s, "print": [...]}`, as diarize.py prints a voice and voice-prints.json stores it; null for anything else. */
+        fun voiceOf(entry: Any?): Voice? {
+            val voice = entry as? Map<*, *> ?: return null
+            val seconds = (voice["seconds"] as? Number)?.toDouble() ?: return null
+            val print = voice["print"] as? List<*> ?: return null
+            if (print.isEmpty()) return null
+            val values = print.map { (it as? Number)?.toFloat() ?: return null }
+            return Voice(seconds, values.toFloatArray())
         }
 
         /** `[start, end, speaker]`, as diarize.py prints a turn and speaker-turns.json stores it; null for anything else. */

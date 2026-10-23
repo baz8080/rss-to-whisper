@@ -122,7 +122,7 @@ class SpeakerNamesTest {
 
         assertTrue(pipeline.addVoices(labels(tempDir, dir to (1 to "Robert Evans"))))
 
-        val stored = SpeakerVoices.load(voices).all.single()
+        val stored = SpeakerVoices.load(voices)!!.all.single()
         assertEquals("Robert Evans", stored.name)
         assertEquals("Show", stored.show)
         assertEquals(1, stored.speaker)
@@ -141,7 +141,7 @@ class SpeakerNamesTest {
         pipeline.addVoices(labels(tempDir, dir to (1 to "Dave Ross")))
         pipeline.addVoices(labels(tempDir, dir to (1 to "Robert Evans")))
 
-        assertEquals(listOf("Robert Evans"), SpeakerVoices.load(voices).all.map { it.name })
+        assertEquals(listOf("Robert Evans"), SpeakerVoices.load(voices)!!.all.map { it.name })
     }
 
     @Test
@@ -156,7 +156,7 @@ class SpeakerNamesTest {
 
         assertFalse(pipeline.addVoices(labels(tempDir, dir to (7 to "Nobody"))))
         assertFalse(pipeline.addVoices(labels(tempDir, bare to (0 to "Nobody"))))
-        assertTrue(SpeakerVoices.load(voices).all.isEmpty())
+        assertNull(SpeakerVoices.load(voices))
     }
 
     @Test
@@ -266,6 +266,91 @@ class SpeakerNamesTest {
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), feed = null, diarizer = FakeSpeakerDiarizer(turns))
 
         assertFalse(pipeline.retranscribe(name(dir)))
+    }
+
+    @Test
+    fun `name-speakers refuses a voices folder that isn't there, rather than name every episode as nobody`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(show), feed = null, diarizer = FakeSpeakerDiarizer(turns), voices = tempDir.resolve("no-voices"))
+        pipeline.retranscribe(diarize(dir))
+
+        assertFalse(pipeline.retranscribe(name(dir)))
+        assertFalse(Files.exists(dir.resolve(SpeakerNames.FILENAME)))
+    }
+
+    @Test
+    fun `diarizing with no voices folder yet still diarizes, and names nobody`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val (pipeline, _, _) =
+            buildPipeline(tempDir, listOf(show), feed = null, diarizer = FakeSpeakerDiarizer(turns), voices = tempDir.resolve("no-voices"))
+
+        assertTrue(pipeline.retranscribe(diarize(dir)))
+
+        assertTrue(Files.exists(dir.resolve(VoicePrints.FILENAME)))
+        assertFalse(Files.exists(dir.resolve(SpeakerNames.FILENAME)))
+    }
+
+    @Test
+    fun `episodes that only had prints made are not counted as diarized`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir)
+        val diarizer = FakeSpeakerDiarizer(turns)
+        SpeakerTurns.write(dir, sha, FAKE_MP3_BYTES.size.toLong(), diarizer.models, turns)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), feed = null, diarizer = diarizer)
+
+        val messages = logged { assertTrue(pipeline.retranscribe(diarize(dir))) }
+
+        assertTrue(messages.any { "Diarized 0 of 1 episodes; made voice prints for 1 more" in it })
+    }
+
+    @Test
+    fun `a normal run names each episode it diarizes`(
+        @TempDir tempDir: Path,
+    ) {
+        val labelled = episode(tempDir)
+        val voices = tempDir.resolve("voices")
+        val (setup, _, _) = buildPipeline(tempDir, listOf(show), feed = null, diarizer = FakeSpeakerDiarizer(turns), voices = voices)
+        setup.retranscribe(diarize(labelled))
+        setup.addVoices(labels(tempDir, labelled to (0 to "Host")))
+        val entry = makeEntry("Fresh")
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), makeFeed(entry), diarizer = FakeSpeakerDiarizer(turns), voices = voices)
+
+        assertTrue(pipeline.run())
+
+        val fresh = tempDir.resolve("Show").resolve(com.rsstowhisper.escapeFilename(PodcastPipeline.getEpisodeDirName(entry)))
+        assertEquals(mapOf("0" to "Host"), names(fresh))
+    }
+
+    @Test
+    fun `a voices folder that cannot be read is a warning in a normal run, and the decode and turns still land`(
+        @TempDir tempDir: Path,
+    ) {
+        val voices = tempDir.resolve("voices")
+        Files.createDirectories(voices)
+        Files.writeString(voices.resolve("Show.json"), "{ not json")
+        val entry = makeEntry("Fresh")
+        val diarizer = FakeSpeakerDiarizer(turns)
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(show), makeFeed(entry), diarizer = diarizer, voices = voices)
+
+        val errors = loggedAtError { assertTrue(pipeline.run()) }
+
+        val fresh = tempDir.resolve("Show").resolve(com.rsstowhisper.escapeFilename(PodcastPipeline.getEpisodeDirName(entry)))
+        assertEquals(emptyList(), errors)
+        assertTrue(Files.exists(fresh.resolve(SpeakerTurns.FILENAME)))
+        assertEquals(1, (pipeline.report.toMap()["totals"] as Map<*, *>)["diarized"])
+    }
+
+    @Test
+    fun `a labels file with Windows line endings is read`() {
+        val (rows, problems) = SpeakerVoices.parseLabels(listOf("episode\tspeaker\tname\r", "Show/ep\t3\tHost\r"))
+        assertEquals(emptyList(), problems)
+        assertEquals("Host", rows.single().name)
     }
 
     @Test

@@ -5,7 +5,6 @@ import com.rsstowhisper.external.Voice
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 
 /** The named voice a speaker matched, and how closely. */
 internal class SpeakerName(
@@ -81,12 +80,6 @@ internal object SpeakerNames {
                     names.toSortedMap().mapKeys { it.key.toString() }
                         .mapValues { (_, n) -> mapOf("name" to n.name, "similarity" to Math.round(n.similarity * 1000) / 1000.0) },
             )
-        val partial = Files.createTempFile(episodeDir, ".speaker-names-", ".json")
-        try {
-            Files.writeString(partial, mapper.writeValueAsString(record))
-            Files.move(partial, episodeDir.resolve(FILENAME), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            Files.deleteIfExists(partial)
-        }
+        AudioKeyed.write(episodeDir, FILENAME, mapper.writeValueAsString(record))
     }
 }

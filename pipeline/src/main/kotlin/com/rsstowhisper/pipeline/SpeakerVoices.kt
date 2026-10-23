@@ -6,6 +6,7 @@ import com.rsstowhisper.external.Voice
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
 
 /** A voice Barry named: one diarized speaker of one episode, and its print. */
 internal class NamedVoice(
@@ -43,13 +44,11 @@ internal class SpeakerVoices(
     companion object {
         private val mapper = ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT)
 
-        val NONE = SpeakerVoices(emptyList(), "")
-
         private val LABEL_COLUMNS = listOf("episode", "speaker", "name")
 
         /** The rows of a labels TSV, and a line for each row that cannot be read. */
         fun parseLabels(lines: List<String>): Pair<List<VoiceLabel>, List<String>> {
-            val text = lines.withIndex().filter { it.value.isNotBlank() }
+            val text = lines.map { it.trimEnd('\r') }.withIndex().filter { it.value.isNotBlank() }
             if (text.isEmpty()) return emptyList<VoiceLabel>() to listOf("no header row")
             val header = text.first().value.split('\t')
             val missing = LABEL_COLUMNS.filter { it !in header }
@@ -70,18 +69,30 @@ internal class SpeakerVoices(
             return rows to problems
         }
 
-        /** Refuses the folder rather than skip a file: a voice that quietly stopped matching would unname a show. */
-        fun load(dir: Path): SpeakerVoices {
-            if (!Files.isDirectory(dir)) return NONE
+        /**
+         * Refuses the folder rather than skip a file: a voice that quietly stopped matching would unname a show.
+         * Null when the folder isn't there, which is not the same as one with no voices in it yet.
+         */
+        fun load(dir: Path): SpeakerVoices? {
+            if (!Files.isDirectory(dir)) return null
             val files = Files.list(dir).use { s -> s.filter { it.fileName.toString().endsWith(".json") }.toList() }.sorted()
-            val bytes = files.map { it.fileName.toString().toByteArray() + Files.readAllBytes(it) }
-            val all = files.zip(bytes).flatMap { (file, _) -> read(file) }
-            return SpeakerVoices(all, VoicePrints.sha256(bytes.fold(ByteArray(0)) { a, b -> a + b }))
+            val digest = MessageDigest.getInstance("SHA-256")
+            val all =
+                files.flatMap { file ->
+                    val bytes = Files.readAllBytes(file)
+                    digest.update(file.fileName.toString().toByteArray())
+                    digest.update(bytes)
+                    read(file, bytes)
+                }
+            return SpeakerVoices(all, digest.digest().joinToString("") { "%02x".format(it) })
         }
 
-        private fun read(file: Path): List<NamedVoice> {
+        private fun read(
+            file: Path,
+            bytes: ByteArray = Files.readAllBytes(file),
+        ): List<NamedVoice> {
             val show = file.fileName.toString().removeSuffix(".json")
-            return mapper.readTree(file.toFile()).path("voices").map { node ->
+            return mapper.readTree(bytes).path("voices").map { node ->
                 val where = "${file.fileName}, ${node.path("episode").asText("?")} speaker ${node.path("speaker").asText("?")}"
                 val print = node.path("print").map { it.floatValue() }.toFloatArray()
                 require(print.isNotEmpty()) { "$where: no print" }

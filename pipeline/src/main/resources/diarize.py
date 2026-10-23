@@ -34,7 +34,8 @@ config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
     clustering=sherpa_onnx.FastClusteringConfig(threshold=args.threshold))
 if not config.validate():
     sys.exit("sherpa-onnx refused the models: check the segmentation and embedding paths")
-diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
+# Stored turns need only the embedding model; the check loads both.
+diarizer = sherpa_onnx.OfflineSpeakerDiarization(config) if args.check or not args.turns else None
 extractor = sherpa_onnx.SpeakerEmbeddingExtractor(config.embedding)
 if args.check:
     sys.exit(0)
@@ -64,7 +65,7 @@ def embed(start, end):
     stream.input_finished()
     e = extractor.compute(stream)
     norm = sum(x * x for x in e) ** 0.5
-    return [x / norm for x in e]
+    return [x / norm for x in e] if norm > 0 else None
 
 
 # A speaker's print: the duration-weighted mean of its pieces' unit embeddings, made unit length.
@@ -78,6 +79,9 @@ for start, end, speaker in turns:
         q = min(p + PIECE, end)
         if q - p >= MIN_PIECE:
             e = embed(p, q)
+            if e is None:
+                p = q
+                continue
             acc = sums.setdefault(speaker, [0.0] * len(e))
             for i, x in enumerate(e):
                 acc[i] += x * (q - p)

@@ -150,7 +150,7 @@ class PodcastPipeline(
             return false
         }
         diarizerUsable = null
-        loadedVoices = null
+        voicesLoaded = false
         decodesUndiarized.reset()
         if (diarizer != null && !config.dryRun) {
             diarizeQueue = Executors.newSingleThreadExecutor { Thread(it, "diarize").apply { isDaemon = true } }
@@ -210,7 +210,7 @@ class PodcastPipeline(
         try {
             // The decode's own duration is where its speech ends, which can be far short of the file sherpa-onnx reads.
             val seconds = Mp3Frames.of(audioFileFor(episodeDirPath))?.duration?.toInt()
-            if (diarizeEpisode(episodeDirPath, diarizeTimeoutSeconds(seconds))) counts.diarized++
+            if (diarizeEpisode(episodeDirPath, diarizeTimeoutSeconds(seconds)) == Diarized.TURNS) counts.diarized++
             decodesUndiarized.reset()
         } catch (e: SpeakerDiarizerFailed) {
             logger.warn("${e.message}. The rest of this run will not diarize")
@@ -293,7 +293,7 @@ class PodcastPipeline(
     fun retranscribe(request: RetranscribeRequest): Boolean {
         val dataDir = Path.of(config.dataDirectory)
         resetDecodeTally()
-        loadedVoices = null
+        voicesLoaded = false
         if (!Files.isWritable(dataDir)) {
             logger.error("The data_dir is missing, or not writable. Cannot continue")
             return false
@@ -312,11 +312,20 @@ class PodcastPipeline(
             return false
         }
         if ((request.diarize || request.nameSpeakers) && config.voices != null) {
-            try {
-                logger.info("${speakerVoices.all.size} named voices in ${config.voices}")
-            } catch (e: Exception) {
-                logger.error("Cannot read the voices folder ${config.voices}: ${e.message}")
-                return false
+            val voices =
+                try {
+                    speakerVoices
+                } catch (e: Exception) {
+                    logger.error("Cannot read the voices folder ${config.voices}: ${e.message}")
+                    return false
+                }
+            when {
+                voices != null -> logger.info("${voices.all.size} named voices in ${config.voices}")
+                request.nameSpeakers -> {
+                    logger.error("The voices folder ${config.voices} does not exist; --add-voices makes it")
+                    return false
+                }
+                else -> logger.info("No voices folder at ${config.voices} yet, so no speakers are named")
             }
         }
         val decodes = !request.retime && !request.diarize && !request.nameSpeakers
@@ -363,13 +372,18 @@ class PodcastPipeline(
         )
         var done = 0
         var diarized = 0
+        var printed = 0
         var named = 0
         val undiarized = UndiarizedStreak()
         var toolFailed = false
         for (target in targets) {
             if (request.diarize) {
                 try {
-                    if (diarizeEpisode(target)) diarized++
+                    when (diarizeEpisode(target)) {
+                        Diarized.TURNS -> diarized++
+                        Diarized.PRINTS -> printed++
+                        Diarized.ALREADY -> {}
+                    }
                     undiarized.reset()
                 } catch (e: SpeakerDiarizerFailed) {
                     logger.error("Stopping: ${e.message}. Fix diarize_python and the diarize models")
@@ -428,7 +442,9 @@ class PodcastPipeline(
                 }
             if (attempted) markRetranscribeAttempted(target)
         }
-        if (request.diarize) logger.info("Diarized $diarized of ${targets.size} episodes")
+        if (request.diarize) {
+            logger.info("Diarized $diarized of ${targets.size} episodes" + if (printed > 0) "; made voice prints for $printed more" else "")
+        }
         if (request.nameSpeakers && !request.diarize) logger.info("Named the speakers of $named of ${targets.size} episodes")
         val decoded = !request.diarize && !request.nameSpeakers || request.retime
         if (decoded) logger.info("Re-transcribed $done of ${targets.size} episodes")
@@ -462,10 +478,12 @@ class PodcastPipeline(
      * Writes the episode's speaker turns and voice prints, unless it has them for this audio and these models already,
      * then names its speakers if there are named voices. Turns already current only have their prints made.
      */
+    private enum class Diarized { ALREADY, PRINTS, TURNS }
+
     private fun diarizeEpisode(
         episodeDirPath: Path,
         timeoutSeconds: Long? = null,
-    ): Boolean {
+    ): Diarized {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) throw EpisodeNotDiarized("it has no audio")
@@ -479,13 +497,13 @@ class PodcastPipeline(
             when {
                 turnsCurrent && VoicePrints.current(episodeDirPath, sha256, bytes, diarizer.models) -> {
                     logger.info("$label already has speaker turns for its audio")
-                    false
+                    Diarized.ALREADY
                 }
                 turnsCurrent -> {
                     val turns = requireNotNull(SpeakerTurns.read(episodeDirPath, sha256)).turns
                     VoicePrints.write(episodeDirPath, sha256, bytes, diarizer.models, diarizer.voices(audioPath, turns, timeout))
                     logger.info("Made voice prints for $label's turns: ${(System.nanoTime() - started) / 1_000_000_000} s")
-                    true
+                    Diarized.PRINTS
                 }
                 else -> {
                     val diarization = diarizer.diarize(audioPath, timeout)
@@ -495,7 +513,7 @@ class PodcastPipeline(
                         "Diarized $label: ${diarization.turns.size} turns, ${diarization.voices.size} voices, " +
                             "${(System.nanoTime() - started) / 1_000_000_000} s",
                     )
-                    true
+                    Diarized.TURNS
                 }
             }
         if (config.voices != null) {
@@ -511,22 +529,32 @@ class PodcastPipeline(
 
     // Loaded once a run, so every episode named in it is matched against the same voices; each run reads them afresh.
     private var loadedVoices: SpeakerVoices? = null
-    private val speakerVoices: SpeakerVoices
-        get() = loadedVoices ?: (config.voices?.let { SpeakerVoices.load(Path.of(it)) } ?: SpeakerVoices.NONE).also { loadedVoices = it }
+    private var voicesLoaded = false
+
+    /** Null when there is no voices folder: no episode is named, rather than each named as nobody. */
+    private val speakerVoices: SpeakerVoices?
+        get() {
+            if (!voicesLoaded) {
+                loadedVoices = config.voices?.let { SpeakerVoices.load(Path.of(it)) }
+                voicesLoaded = true
+            }
+            return loadedVoices
+        }
 
     /**
      * Writes who each of the episode's speakers is, from its voice prints and the named voices, unless that is current.
-     * [audioSha256] is the audio's when known; without it the prints are taken for audio of the mp3's size, as turns are.
+     * [audioSha256] is the audio's when known; without it the prints are taken for audio of the mp3's size, so naming
+     * a whole corpus never reads its transcripts.
      */
     private fun nameEpisode(
         episodeDirPath: Path,
         audioSha256: String? = null,
     ): Boolean {
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
-        val sha256 = audioSha256 ?: recordedRun(episodeDirPath)?.get("audio_sha256") as? String
-        val bytes = if (sha256 == null) audioFileFor(episodeDirPath).takeIf { Files.exists(it) }?.let { Files.size(it) } else null
-        val prints = VoicePrints.read(episodeDirPath, sha256, bytes) ?: throw EpisodeNotDiarized("it has no voice prints for its audio")
-        val voices = speakerVoices
+        val voices = speakerVoices ?: return false
+        val bytes = if (audioSha256 == null) audioFileFor(episodeDirPath).takeIf { Files.exists(it) }?.let { Files.size(it) } else null
+        val prints =
+            VoicePrints.read(episodeDirPath, audioSha256, bytes) ?: throw EpisodeNotDiarized("it has no voice prints for its audio")
         if (SpeakerNames.current(episodeDirPath, prints.audioSha256, prints.fileSha256, voices.sha256)) return false
         val names = SpeakerNames.match(prints.voices, voices.candidates(episodeDirPath.parent.fileName.toString()))
         SpeakerNames.write(episodeDirPath, prints.audioSha256, prints.fileSha256, voices.sha256, names)

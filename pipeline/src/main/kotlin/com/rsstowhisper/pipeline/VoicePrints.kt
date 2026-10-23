@@ -6,7 +6,6 @@ import com.rsstowhisper.external.Voice
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 /**
@@ -36,13 +35,7 @@ object VoicePrints {
     ): Stored? {
         val (stored, sha) = stored(episodeDir) ?: return null
         val storedAudio = stored["audio_sha256"] as? String ?: return null
-        val same =
-            if (audioSha256 != null) {
-                storedAudio == audioSha256
-            } else {
-                audioBytes != null && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes
-            }
-        if (!same) return null
+        if (!AudioKeyed.sameAudio(stored, audioSha256, audioBytes)) return null
         return voicesOf(stored)?.let { Stored(it, storedAudio, sha) }
     }
 
@@ -53,8 +46,7 @@ object VoicePrints {
         models: Map<String, Any>,
     ): Boolean {
         val (stored, _) = stored(episodeDir) ?: return false
-        return stored["audio_sha256"] == audioSha256 && (stored["audio_bytes"] as? Number)?.toLong() == audioBytes &&
-            models.all { (key, value) -> stored[key]?.toString() == value.toString() } && voicesOf(stored) != null
+        return AudioKeyed.current(stored, audioSha256, audioBytes, models) && voicesOf(stored) != null
     }
 
     fun write(
@@ -73,13 +65,7 @@ object VoicePrints {
                             mapOf("seconds" to v.seconds, "print" to v.print)
                         },
                 )
-        val partial = Files.createTempFile(episodeDir, ".voice-prints-", ".json")
-        try {
-            Files.writeString(partial, mapper.writeValueAsString(record))
-            Files.move(partial, episodeDir.resolve(FILENAME), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-        } finally {
-            Files.deleteIfExists(partial)
-        }
+        AudioKeyed.write(episodeDir, FILENAME, mapper.writeValueAsString(record))
     }
 
     /** Null for a file that is missing or will not parse: it reads as no prints, and they are made again. */

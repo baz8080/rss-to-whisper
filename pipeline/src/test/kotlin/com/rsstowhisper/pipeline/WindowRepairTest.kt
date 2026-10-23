@@ -236,7 +236,7 @@ class WindowRepairTest {
                     ->
                     Word(w, t, if (i < 6) listOf(2360.8, 2363.4, 2364.1, 2365.22, 2365.3, 2365.4)[i] else 2365.77, 0.9, 0)
                 }
-        val replacement = WindowRepair.Replacement(listOf(Cue(2357.85, 2365.77, words.joinToString("") { it.text })), words)
+        val replacement = WhisperTranscription.of(listOf(Cue(2357.85, 2365.77, words.joinToString("") { it.text })), words)
         val speech = listOf(TimeWindow(2347.52, 2358.14), TimeWindow(2364.61, 2378.69))
 
         val fitted = WindowRepair.dropNonSpeech(replacement, speech)
@@ -361,7 +361,7 @@ class WindowRepairTest {
     @Test
     fun `cues over non-speech are dropped, and a run of music markers becomes one`() {
         val replacement =
-            WindowRepair.Replacement(
+            WhisperTranscription.of(
                 listOf(Cue(6.0, 9.0, " Thank you."), Cue(9.0, 12.0, " ♪"), Cue(12.0, 15.0, " ♪"), Cue(15.0, 18.0, " Real words here.")),
                 listOf(Word(" Thank", 6.0, 7.0, 0.9, 0), Word(" you.", 7.0, 8.0, 0.9, 0), Word(" Real", 15.0, 16.0, 0.9, 3)),
             )
@@ -413,7 +413,7 @@ class WindowRepairTest {
     @Test
     fun `words smeared across music before the speech are moved onto it`() {
         val replacement =
-            WindowRepair.Replacement(
+            WhisperTranscription.of(
                 listOf(Cue(29.7, 55.4, " astronomy cast episode seven")),
                 listOf(
                     Word(" astronomy", 29.8, 34.0, 0.9, 0),
@@ -440,7 +440,7 @@ class WindowRepairTest {
             invented.mapIndexed { i, t -> Word(t, 0.1 + i * 1.3, 1.3 + i * 1.3, 0.9, 0) } +
                 sung.mapIndexed { i, t -> Word(t, 12.0 + i * 0.3, 12.3 + i * 0.3, 0.9, 0) }
         val replacement =
-            WindowRepair.Replacement(
+            WhisperTranscription.of(
                 listOf(Cue(0.1, 16.2, (invented + sung).joinToString(""))),
                 words.dropLast(1) + words.last().copy(end = 16.2),
             )
@@ -458,7 +458,7 @@ class WindowRepairTest {
         val times = listOf(27.55, 28.69, 29.67, 30.98, 31.64, 31.97, 34.05)
         val tokens = listOf(" It's", " the", " size", " of", " a", " squash", " court.")
         val words = tokens.mapIndexed { i, t -> Word(t, times[i], if (i + 1 < times.size) times[i + 1] else 35.62, 0.9, 0) }
-        val replacement = WindowRepair.Replacement(listOf(Cue(27.38, 35.62, tokens.joinToString(""))), words)
+        val replacement = WhisperTranscription.of(listOf(Cue(27.38, 35.62, tokens.joinToString(""))), words)
 
         val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(26.08, 30.08), TimeWindow(33.95, 51.1)))
 
@@ -472,7 +472,7 @@ class WindowRepairTest {
         val words =
             ahead + listOf(Word(" and", 14.5, 15.0, 0.9, 0), Word(" um", 15.5, 16.0, 0.9, 0)) +
                 (0 until 6).map { Word(" more", 17.0 + it * 0.5, 17.4 + it * 0.5, 0.9, 0) }
-        val replacement = WindowRepair.Replacement(listOf(Cue(10.0, 20.0, words.joinToString("") { it.text })), words)
+        val replacement = WhisperTranscription.of(listOf(Cue(10.0, 20.0, words.joinToString("") { it.text })), words)
 
         val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(9.5, 14.0), TimeWindow(17.0, 21.0)))
 
@@ -488,7 +488,7 @@ class WindowRepairTest {
         val words =
             ahead.mapIndexed { i, (t, s) -> Word(t, s, if (i + 1 < ahead.size) ahead[i + 1].second else 109.6, 0.9, 0) } +
                 on.mapIndexed { i, t -> Word(t, 110.7 + i * 0.25, 110.95 + i * 0.25, 0.9, 0) }
-        val replacement = WindowRepair.Replacement(listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
+        val replacement = WhisperTranscription.of(listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
 
         val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(108.7, 115.3)))
 
@@ -590,7 +590,7 @@ class WindowRepairTest {
     @Test
     fun `a cue too short to hold half a second of speech is kept when it lies in speech`() {
         val replacement =
-            WindowRepair.Replacement(
+            WhisperTranscription.of(
                 listOf(Cue(6.0, 6.0, " AI might be"), Cue(6.0, 11.0, " the most important new technology.")),
                 listOf(Word(" AI", 6.0, 6.0, 0.9, 0), Word(" the", 6.0, 7.0, 0.9, 1)),
             )
@@ -695,6 +695,17 @@ class WindowRepairTest {
     }
 
     @Test
+    fun `retiming without VAD configured fails the run before any target is marked`(
+        @TempDir tempDir: Path,
+    ) {
+        val dir = episode(tempDir, looping())
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+
+        assertFalse(pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true)))
+        assertFalse(Files.exists(dir.resolve(PodcastPipeline.RETRANSCRIBE_ATTEMPTED_FILENAME)))
+    }
+
+    @Test
     fun `a VAD that hears nothing under a transcript's speech is not trusted`(
         @TempDir tempDir: Path,
     ) {
@@ -720,7 +731,8 @@ class WindowRepairTest {
                 mapOf("episode_transcript" to transcription(looping()).vtt, "whisper_run" to mapOf("run_id" to "r1", "words" to 0)),
             ),
         )
-        val (pipeline, txSvc, _) = buildPipeline(tempDir, listOf(podcast), feed = null)
+        val (pipeline, txSvc, _) =
+            buildPipeline(tempDir, listOf(podcast), feed = null, speechDetector = FakeSpeechDetector(listOf(TimeWindow(0.0, 27.0))))
 
         val log = logged { pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${dir.fileName}"), retime = true)) }
 
@@ -762,7 +774,7 @@ class WindowRepairTest {
     @Test
     fun `a lone short sound before the speech is not where smeared words are moved to`() {
         val replacement =
-            WindowRepair.Replacement(
+            WhisperTranscription.of(
                 listOf(Cue(23.0, 39.35, " I got stung.")),
                 listOf(Word(" I", 23.0, 24.0, 0.9, 0), Word(" got", 24.0, 25.0, 0.9, 0), Word(" stung.", 25.0, 26.0, 0.9, 0)),
             )

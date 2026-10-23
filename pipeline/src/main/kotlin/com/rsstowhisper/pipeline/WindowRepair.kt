@@ -11,11 +11,6 @@ internal object WindowRepair {
     /** Cues a defect's window takes either side: the one against it is the cue most often damaged. */
     private const val MARGIN_CUES = 2
 
-    data class Replacement(
-        val cues: List<Cue>,
-        val words: List<Word>,
-    )
-
     /** A cue that is nothing but one of the prompt's sentences, held this long, is whisper voicing the prompt over non-speech. */
     private const val MIN_PROMPT_LEAK_SECONDS = 10.0
 
@@ -336,7 +331,6 @@ internal object WindowRepair {
         return ranges
     }
 
-    /** How far a window grows over crammed or echoed cues at either edge. */
     private const val MAX_EDGE_GROWTH = 8
 
     fun window(
@@ -538,13 +532,13 @@ internal object WindowRepair {
      * is invention. A run of music markers is kept as one, since music is what is there.
      */
     fun dropNonSpeech(
-        replacement: Replacement,
+        decode: WhisperTranscription,
         speech: List<TimeWindow>,
-    ): Replacement {
-        val bySegment = replacement.words.groupBy { it.segment }
+    ): WhisperTranscription {
+        val bySegment = decode.words.groupBy { it.segment }
         val cues = mutableListOf<Cue>()
         val words = mutableListOf<Word>()
-        for ((index, cue) in replacement.cues.withIndex()) {
+        for ((index, cue) in decode.cues.withIndex()) {
             if (overSpeech(cue, speech)) {
                 val (fitted, fittedWords) = fitToSpeech(cue, bySegment[index].orEmpty(), speech)
                 words += fittedWords.map { it.copy(segment = cues.size) }
@@ -558,7 +552,7 @@ internal object WindowRepair {
                 }
             }
         }
-        return replacement.copy(cues = cues, words = words)
+        return WhisperTranscription.of(cues, words)
     }
 
     /** Tokens grouped into the words they spell, punctuation left out: whisper splits "dexterous" as "de", "xter", "ous". */
@@ -575,8 +569,8 @@ internal object WindowRepair {
     private fun normalise(word: String): String = word.lowercase().filter { it.isLetterOrDigit() }
 
     /** A window long enough to judge, with next to no punctuation: what a decode without the prompt can produce. */
-    fun unpunctuated(replacement: Replacement): Boolean {
-        val text = replacement.cues.joinToString(" ") { it.text }
+    fun unpunctuated(decode: WhisperTranscription): Boolean {
+        val text = decode.cues.joinToString(" ") { it.text }
         val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
         val marks = text.count { it in ".,!?;:" }
         return words >= MIN_WORDS_TO_JUDGE_PUNCTUATION && marks.toDouble() / words < TranscriptQuality.MIN_PUNCTUATION_PER_WORD

@@ -299,6 +299,10 @@ class PodcastPipeline(
             logger.error("--diarize needs diarize_python, diarize_segmentation_model and diarize_embedding_model in pods.yaml")
             return false
         }
+        if (request.retime && speechDetector == null) {
+            logger.error("--retime needs vad_binary and vad_model in pods.yaml")
+            return false
+        }
         val decodes = !request.retime && !request.diarize
         if (!config.dryRun && decodes && !transcriber.ping()) {
             logger.error("No answer from the whisper server at ${config.whisperServerUrl}. Cannot continue")
@@ -1743,7 +1747,7 @@ class PodcastPipeline(
                         conditioned,
                         retry,
                         WindowRepair.defectCues(joined.cues, prompt).size,
-                        WindowRepair.unpunctuated(WindowRepair.Replacement(joined.cues, joined.words)),
+                        WindowRepair.unpunctuated(joined),
                         WindowRepair.uncovered(joined.words, speech, chunk.window.start, chunk.window.end, SCORE_COVER_SECONDS),
                     )
                 if (best == null || tries.beats(best)) best = tries
@@ -1778,8 +1782,7 @@ class PodcastPipeline(
             throw it
         }
         val stitched = WindowRepair.stitched(pieces.map { it.first }, pieces.map { it.second })
-        val heard = WindowRepair.dropNonSpeech(WindowRepair.Replacement(stitched.cues, stitched.words), speech)
-        return WhisperTranscription.of(heard.cues, heard.words) to mapOf("chunks" to chunks.size, "retried" to retried)
+        return WindowRepair.dropNonSpeech(stitched, speech) to mapOf("chunks" to chunks.size, "retried" to retried)
     }
 
     /** One request to whisper, counted for the exit code, and refused if its word times are unusable. */
@@ -1878,12 +1881,7 @@ class PodcastPipeline(
         val base = WhisperTranscription.of(cues, readWords(wordsPath))
         val voices = speakersFor(episodeDirPath, existing)?.let { WindowRepair.Voices(it, base.words) }
         val defects = WindowRepair.defectCues(cues, prompt, voices)
-        val detector = speechDetector
-        if (detector == null) {
-            logger.warn("Cannot retime $label: it needs vad_binary and vad_model")
-            return false
-        }
-        val speech = detector.speech(audioPath)
+        val speech = requireNotNull(speechDetector).speech(audioPath)
         if (!WindowRepair.plausible(base, defects, speech)) {
             logger.warn("VAD hears no speech under most of $label's cues; not retiming it")
             return false
@@ -1897,7 +1895,7 @@ class PodcastPipeline(
         }
 
         val language = podcast.language ?: config.language
-        val audio = AudioIdentity(WhisperRun.sha256(audioPath), Files.size(audioPath))
+        val audio = AudioIdentity(audioSha256(episodeDirPath, audioPath), Files.size(audioPath))
         val run =
             WhisperRun(
                 runId = WhisperRun.newId(),
@@ -1940,7 +1938,7 @@ class PodcastPipeline(
         retry: Map<String, String>,
         chunk: WindowRepair.Chunk,
         clip: Mp3Clip?,
-        frames: Mp3Frames?,
+        frames: Mp3Frames,
         speech: List<TimeWindow>,
     ): List<Pair<WindowRepair.Chunk, WhisperTranscription>> {
         val pieces = mutableListOf<Pair<WindowRepair.Chunk, WhisperTranscription>>()
@@ -1958,7 +1956,7 @@ class PodcastPipeline(
             val kept = chunk.keep?.takeIf { resumed == 0 }?.let { TimeWindow(it.start, Double.MAX_VALUE) }
             pieces += WindowRepair.Chunk(TimeWindow(window.start, stopped), cutInSpeech = true, keep = kept) to decoded
             window = tail
-            sent = if (clip != null) frames?.clip(tail) else null
+            sent = if (clip != null) frames.clip(tail) else null
         }
         return pieces
     }

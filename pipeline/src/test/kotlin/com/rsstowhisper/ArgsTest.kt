@@ -261,6 +261,29 @@ class ArgsTest {
     }
 
     @Test
+    fun `add-voices writes and runs on its own`() {
+        assertEquals("labels.tsv", parseArgs(arrayOf("--add-voices", "labels.tsv")).addVoices)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--add-voices", "labels.tsv", "--dry-run")) }
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--add-voices", "labels.tsv", "--retranscribe-id", "abcd1234")) }
+    }
+
+    @Test
+    fun `name-speakers needs targets and has no decode to force`() {
+        assertTrue(parseArgs(arrayOf("--name-speakers", "--retranscribe-list", "episodes.txt")).nameSpeakers)
+        assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--name-speakers")) }
+        assertFailsWith<IllegalStateException> {
+            parseArgs(
+                arrayOf("--name-speakers", "--retranscribe-id", "abcd1234", "--retranscribe-force"),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            parseArgs(
+                arrayOf("--name-speakers", "--retranscribe-flagged", "--retranscribe-limit", "50"),
+            )
+        }
+    }
+
+    @Test
     fun `verify-pairs is its own run`() {
         assertTrue(parseArgs(arrayOf("--verify-pairs")).verifyPairs)
         assertFailsWith<IllegalStateException> { parseArgs(arrayOf("--verify-pairs", "--retranscribe-id", "abcd1234")) }

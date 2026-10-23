@@ -58,6 +58,8 @@ data class AppConfig(
     val fingerprintCache: String? = null,
     /** A folder of the recurring sounds Barry named, one `<show directory>.json` per show. */
     val recurringAudio: String? = null,
+    /** A folder of the voices Barry named, one `<show directory>.json` per show; each diarized speaker is matched against them. */
+    val voices: String? = null,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */

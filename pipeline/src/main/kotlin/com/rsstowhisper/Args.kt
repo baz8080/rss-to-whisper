@@ -54,6 +54,10 @@ internal val USAGE =
                              Store each labelled sound (I, O, M, A, S) in the
                              recurring_audio folder, cut from its source
                              episode's fingerprint. Never contacts whisper
+      --add-voices <labels.tsv>
+                             Store each labelled speaker (episode, speaker,
+                             name) in the voices folder, from its episode's
+                             voice-prints.json. Never contacts whisper
       -h, --help             Show this message
 
     Re-transcription (any of these skips the feeds entirely and redoes episodes
@@ -72,11 +76,15 @@ internal val USAGE =
                                  to where VAD hears it start, with no decode.
                                  Needs vad_binary and vad_model
       --diarize                  Write each target's speaker turns to
-                                 speaker-turns.json, keyed on its audio, before
+                                 speaker-turns.json and voice prints to
+                                 voice-prints.json, keyed on its audio, before
                                  any --retime; alone, nothing is decoded.
                                  A repeat traded between voices is then not a
                                  loop or echo. Needs diarize_python and the
-                                 diarize models
+                                 diarize models. With voices, names them too
+      --name-speakers            Write who each target's speakers are to
+                                 speaker-names.json, from its voice prints and
+                                 the voices folder; nothing is decoded
       --retranscribe-force      Keep the new decode even if it scores worse.
                                  Only with --retranscribe, --retranscribe-id or
                                  --retranscribe-list,
@@ -115,6 +123,8 @@ internal data class Args(
     val addRecurringAudio: String? = null,
     val retime: Boolean = false,
     val diarize: Boolean = false,
+    val nameSpeakers: Boolean = false,
+    val addVoices: String? = null,
     val help: Boolean = false,
 ) {
     val isRetranscribe: Boolean
@@ -140,6 +150,8 @@ internal fun parseArgs(argv: Array<String>): Args {
                 "--add-recurring-audio" -> args.copy(addRecurringAudio = valueFor(flag, argv, ++i))
                 "--retime" -> args.copy(retime = true)
                 "--diarize" -> args.copy(diarize = true)
+                "--name-speakers" -> args.copy(nameSpeakers = true)
+                "--add-voices" -> args.copy(addVoices = valueFor(flag, argv, ++i))
                 "--retranscribe-list" -> args.copy(retranscribeList = valueFor(flag, argv, ++i))
                 "--verbose" -> args.copy(verbose = true)
                 "--no-verbose" -> args.copy(verbose = false)
@@ -194,6 +206,23 @@ internal fun parseArgs(argv: Array<String>): Args {
     // Diarizing alone marks no attempt, so the least-recently-attempted window would never move on.
     if (args.diarize && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.retime) {
         error("--diarize alone selects the same --retranscribe-limit episodes every run; drop the limit or name the targets")
+    }
+    if (args.nameSpeakers && !args.isRetranscribe) {
+        error("--name-speakers needs targets: --retranscribe, --retranscribe-id, --retranscribe-list or --retranscribe-flagged")
+    }
+    if (args.nameSpeakers && args.retranscribeFlagged && args.retranscribeLimit > 0 && !args.retime) {
+        error("--name-speakers alone selects the same --retranscribe-limit episodes every run; drop the limit or name the targets")
+    }
+    if (args.nameSpeakers && args.retranscribeForce) {
+        error("--name-speakers decodes nothing, so --retranscribe-force does not apply")
+    }
+    if (args.addVoices != null &&
+        (args.isRetranscribe || args.verifyPairs || args.listDefects || args.findRecurringAudio != null || args.addRecurringAudio != null)
+    ) {
+        error("--add-voices runs on its own")
+    }
+    if (args.addVoices != null && args.dryRun) {
+        error("--add-voices writes the voices folder, so --dry-run does not apply")
     }
     if (args.diarize && args.retranscribeForce) {
         error("--diarize decodes nothing, so --retranscribe-force does not apply")

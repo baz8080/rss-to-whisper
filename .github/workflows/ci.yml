@@ -1,6 +1,22 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  # Branches are covered by the pull_request trigger; push only runs for main.
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+
+# A newer push to the same PR/branch supersedes the run in flight (never cancel main).
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 # All three jobs only check out code and run builds, so the default
 # GITHUB_TOKEN is narrowed to read-only at the top level.
@@ -10,7 +26,10 @@ permissions:
 jobs:
   lint:
     name: Lint
+    # Draft PRs skip CI until marked ready for review.
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +47,10 @@ jobs:
 
   test:
     name: Run unit tests
+    # Draft PRs skip CI until marked ready for review.
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +68,10 @@ jobs:
 
   indexer:
     name: Check index.py
+    # Draft PRs skip CI until marked ready for review.
+    if: github.event.pull_request.draft != true
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 

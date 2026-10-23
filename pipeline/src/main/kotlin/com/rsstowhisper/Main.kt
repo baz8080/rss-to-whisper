@@ -112,8 +112,6 @@ fun main(argv: Array<String>) {
                         flagged = args.retranscribeFlagged,
                         limit = args.retranscribeLimit,
                         force = args.retranscribeForce,
-                        repairWindows = args.repairWindows,
-                        repairGaps = args.repairGaps,
                         retime = args.retime,
                         diarize = args.diarize,
                     ),

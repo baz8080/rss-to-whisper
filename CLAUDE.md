@@ -64,16 +64,8 @@ prints a warning/error count when it finishes. Every run also writes what it did
 `transcript.json` and `words.jsonl.gz` are written only together, by `writeTranscriptArtifacts`,
 and carry the same run id (`whisper_run.run_id`, and `run` on every word line). Nothing else may
 write either file. `--verify-pairs` lists every episode whose pair disagrees, and
-`--retranscribe-list <file>` re-transcribes such a list. `--list-defects` lists every episode `--repair-windows` would
-find something in.
-
-`--repair-gaps` (with VAD) re-decodes stretches VAD hears that no word covers, in chunks that start on
-the speech: whisper.cpp skips the rest of a 30 s window it wrongly takes for silence.
-
-`--repair-windows` with any re-transcription target re-decodes only the windows around
-loops, stretch-copies and prompt leaks and splices them in, anchored on the good cues
-either side, and refuses attempts that lose speech. `vad_binary`/`vad_model` in `pods.yaml`
-(optional) let it drop cues over non-speech and judge lost speech by what VAD hears.
+`--retranscribe-list <file>` re-transcribes such a list. `--list-defects` lists every episode with a loop,
+stretch-copy, echo or prompt leak, in a form `--retranscribe-list` reads.
 
 With `vad_binary`/`vad_model` set, every decode cuts the speech VAD hears into chunks of one whisper window and sends
 each as its own mp3 clip, unprompted; a chunk with a loop, stretch-copy or prompt leak, or back without punctuation, is
@@ -81,7 +73,7 @@ decoded again with other settings. `chunked_decode: false` in `pods.yaml` decode
 whose language is `auto`.
 
 `--retime` (with VAD, no decode) moves words and cues whisper timed before their speech to just before where VAD hears
-it start; after `--repair-windows`/`--repair-gaps` when combined. `vad_cache` in `pods.yaml` (optional) is a folder of
+it start. `vad_cache` in `pods.yaml` (optional) is a folder of
 VAD results per episode (`<podcast>__<episode>.json`), read before running VAD and written after.
 
 `--diarize` (with any re-transcription target, no decode) writes each episode's speaker turns to `speaker-turns.json`,

@@ -206,7 +206,7 @@ class WindowRepairTest {
             )
 
         assertEquals(setOf(1), WindowRepair.defectCues(cues))
-        assertEquals(1, WindowRepair.defectKinds(cues)["stock"])
+        assertEquals(1, WindowRepair.defectsByKind(cues).getValue("stock").size)
     }
 
     /** Measured: Blindboy 2018-04-24 Marble Charles, 1:20:50. */

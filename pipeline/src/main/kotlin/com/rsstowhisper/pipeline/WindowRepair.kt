@@ -48,12 +48,6 @@ internal object WindowRepair {
             "stock" to stock(cues),
         )
 
-    /** How many cues of each kind of defect. */
-    fun defectKinds(
-        cues: List<Cue>,
-        prompt: Prompt = Prompt.NONE,
-    ): Map<String, Int> = defectsByKind(cues, prompt).mapValues { it.value.size }
-
     /** Runs of identical cues, with the cue either side that holds the loop's first or last lap. */
     private fun loops(
         cues: List<Cue>,

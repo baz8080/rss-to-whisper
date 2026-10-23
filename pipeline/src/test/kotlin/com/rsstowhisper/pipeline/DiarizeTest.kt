@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.rsstowhisper.PodcastConfig
 import com.rsstowhisper.external.Cue
 import com.rsstowhisper.external.SpeakerTurn
+import com.rsstowhisper.external.TimeWindow
 import com.rsstowhisper.external.WhisperRun
 import com.rsstowhisper.external.WhisperTranscription
 import com.rsstowhisper.external.Word
@@ -303,6 +304,25 @@ class DiarizeTest {
         assertTrue(pipeline.listDefects(out))
 
         assertEquals("", out.toString())
+    }
+
+    @Test
+    fun `retiming moves a loop traded between voices, and leaves it as a defect without the turns`(
+        @TempDir tempDir: Path,
+    ) {
+        val traded = episode(tempDir, withWords = true, name = "2024-01-01-aaaa1111-traded")
+        SpeakerTurns.write(traded, recordedSha, FAKE_MP3_BYTES.size.toLong(), FakeSpeakerDiarizer().models, tradedTurns)
+        val untraded = episode(tempDir, withWords = true, name = "2024-01-02-bbbb2222-untraded")
+        val untouched = Files.readString(untraded.resolve("transcript.json"))
+        val speech = FakeSpeechDetector(listOf(TimeWindow(0.0, 9.0), TimeWindow(11.5, 24.0)))
+        val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, speechDetector = speech)
+
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${traded.fileName}"), retime = true))
+        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${untraded.fileName}"), retime = true))
+
+        val vtt = mapper.readTree(Files.readString(traded.resolve("transcript.json"))).path("episode_transcript").asText()
+        assertTrue("00:00:11.200 --> 00:00:12.000\n Silmarillion." in vtt, vtt)
+        assertEquals(untouched, Files.readString(untraded.resolve("transcript.json")))
     }
 
     @Test

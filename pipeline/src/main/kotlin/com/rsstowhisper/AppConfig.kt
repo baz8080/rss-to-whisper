@@ -52,6 +52,12 @@ data class AppConfig(
     val diarizeThreads: Int = 4,
     /** With VAD, decode each episode as its speech cut into chunks of one window each, rather than whole. */
     val chunkedDecode: Boolean = true,
+    /** Chromaprint's `fpcalc`, to find the sounds a show plays in episode after episode. */
+    val fingerprintBinary: String? = null,
+    /** A folder of each episode's fingerprint, read before running fpcalc and written after: `<podcast>__<episode>.fp`. */
+    val fingerprintCache: String? = null,
+    /** A folder of the recurring sounds Barry named, one `<show directory>.json` per show. */
+    val recurringAudio: String? = null,
     /** Set by --dry-run only; pods.yaml cannot turn this on. */
     val dryRun: Boolean = false,
     /** POSTed the run's summary line as text/plain when set. See [Notifier]. */
@@ -70,6 +76,7 @@ data class AppConfig(
             "diarize_python, diarize_segmentation_model and diarize_embedding_model are set together or not at all"
         }
         require(diarizeThreads >= 1) { "diarize_threads must be at least 1" }
+        require(recurringAudio == null || fingerprintBinary != null) { "recurring_audio needs fingerprint_binary to find its sounds" }
         checkShowDirectories()
         checkLanguage(language, "The top-level language")
         for (podcast in podcasts) {

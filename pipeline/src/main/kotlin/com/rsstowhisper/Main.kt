@@ -100,6 +100,10 @@ fun main(argv: Array<String>) {
                 pipeline.verifyPairs()
             } else if (args.listDefects) {
                 pipeline.listDefects()
+            } else if (args.addRecurringAudio != null) {
+                pipeline.addRecurringAudio(Path.of(args.addRecurringAudio))
+            } else if (args.findRecurringAudio != null) {
+                pipeline.findRecurringAudio(args.findRecurringAudio, Path.of(args.recurringAudioOut!!))
             } else if (args.isRetranscribe) {
                 pipeline.retranscribe(
                     RetranscribeRequest(

@@ -317,11 +317,12 @@ class DiarizeTest {
         val speech = FakeSpeechDetector(listOf(TimeWindow(0.0, 9.0), TimeWindow(11.5, 24.0)))
         val (pipeline, _, _) = buildPipeline(tempDir, listOf(podcast), feed = null, speechDetector = speech)
 
-        pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${traded.fileName}"), retime = true))
+        assertTrue(pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${traded.fileName}"), retime = true)))
         pipeline.retranscribe(RetranscribeRequest(paths = listOf("Show/${untraded.fileName}"), retime = true))
 
         val vtt = mapper.readTree(Files.readString(traded.resolve("transcript.json"))).path("episode_transcript").asText()
         assertTrue("00:00:11.200 --> 00:00:12.000\n Silmarillion." in vtt, vtt)
+        assertEquals(TranscriptPair.Consistent, TranscriptPair.check(traded))
         assertEquals(untouched, Files.readString(untraded.resolve("transcript.json")))
     }
 

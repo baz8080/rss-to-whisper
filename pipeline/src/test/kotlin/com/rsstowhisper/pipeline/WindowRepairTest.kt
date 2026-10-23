@@ -236,10 +236,10 @@ class WindowRepairTest {
                     ->
                     Word(w, t, if (i < 6) listOf(2360.8, 2363.4, 2364.1, 2365.22, 2365.3, 2365.4)[i] else 2365.77, 0.9, 0)
                 }
-        val replacement = WhisperTranscription.of(listOf(Cue(2357.85, 2365.77, words.joinToString("") { it.text })), words)
+        val decode = WhisperTranscription.of(listOf(Cue(2357.85, 2365.77, words.joinToString("") { it.text })), words)
         val speech = listOf(TimeWindow(2347.52, 2358.14), TimeWindow(2364.61, 2378.69))
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, speech)
+        val fitted = WindowRepair.dropNonSpeech(decode, speech)
 
         assertEquals(2364.61, fitted.cues.single().start, 0.01)
         assertTrue(fitted.words.all { it.start >= 2364.6 })
@@ -360,13 +360,13 @@ class WindowRepairTest {
 
     @Test
     fun `cues over non-speech are dropped, and a run of music markers becomes one`() {
-        val replacement =
+        val decode =
             WhisperTranscription.of(
                 listOf(Cue(6.0, 9.0, " Thank you."), Cue(9.0, 12.0, " ♪"), Cue(12.0, 15.0, " ♪"), Cue(15.0, 18.0, " Real words here.")),
                 listOf(Word(" Thank", 6.0, 7.0, 0.9, 0), Word(" you.", 7.0, 8.0, 0.9, 0), Word(" Real", 15.0, 16.0, 0.9, 3)),
             )
 
-        val kept = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(15.2, 18.0)))
+        val kept = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(15.2, 18.0)))
 
         assertEquals(listOf(" ♪", " Real words here."), kept.cues.map { it.text })
         assertEquals(Cue(9.0, 15.0, " ♪"), kept.cues.first())
@@ -412,7 +412,7 @@ class WindowRepairTest {
     /** Measured: a cue whose speech starts at 49.4 s had its first word at 29.8 s, smeared across an intro. */
     @Test
     fun `words smeared across music before the speech are moved onto it`() {
-        val replacement =
+        val decode =
             WhisperTranscription.of(
                 listOf(Cue(29.7, 55.4, " astronomy cast episode seven")),
                 listOf(
@@ -423,7 +423,7 @@ class WindowRepairTest {
                 ),
             )
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(49.4, 55.4)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(49.4, 55.4)))
 
         assertEquals(49.4, fitted.cues.single().start, 0.01)
         assertEquals(49.4, fitted.words.first().start, 0.01)
@@ -439,13 +439,13 @@ class WindowRepairTest {
         val words =
             invented.mapIndexed { i, t -> Word(t, 0.1 + i * 1.3, 1.3 + i * 1.3, 0.9, 0) } +
                 sung.mapIndexed { i, t -> Word(t, 12.0 + i * 0.3, 12.3 + i * 0.3, 0.9, 0) }
-        val replacement =
+        val decode =
             WhisperTranscription.of(
                 listOf(Cue(0.1, 16.2, (invented + sung).joinToString(""))),
                 words.dropLast(1) + words.last().copy(end = 16.2),
             )
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(13.19, 13.76), TimeWindow(14.2, 15.0)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(13.19, 13.76), TimeWindow(14.2, 15.0)))
 
         assertEquals(sung.joinToString(""), fitted.cues.single().text)
         assertEquals(13.19, fitted.cues.single().start, 0.01)
@@ -458,9 +458,9 @@ class WindowRepairTest {
         val times = listOf(27.55, 28.69, 29.67, 30.98, 31.64, 31.97, 34.05)
         val tokens = listOf(" It's", " the", " size", " of", " a", " squash", " court.")
         val words = tokens.mapIndexed { i, t -> Word(t, times[i], if (i + 1 < times.size) times[i + 1] else 35.62, 0.9, 0) }
-        val replacement = WhisperTranscription.of(listOf(Cue(27.38, 35.62, tokens.joinToString(""))), words)
+        val decode = WhisperTranscription.of(listOf(Cue(27.38, 35.62, tokens.joinToString(""))), words)
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(26.08, 30.08), TimeWindow(33.95, 51.1)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(26.08, 30.08), TimeWindow(33.95, 51.1)))
 
         assertEquals(33.95, fitted.cues.single().start, 0.01)
         assertTrue(fitted.words.all { it.start >= 33.95 - 0.01 })
@@ -472,9 +472,9 @@ class WindowRepairTest {
         val words =
             ahead + listOf(Word(" and", 14.5, 15.0, 0.9, 0), Word(" um", 15.5, 16.0, 0.9, 0)) +
                 (0 until 6).map { Word(" more", 17.0 + it * 0.5, 17.4 + it * 0.5, 0.9, 0) }
-        val replacement = WhisperTranscription.of(listOf(Cue(10.0, 20.0, words.joinToString("") { it.text })), words)
+        val decode = WhisperTranscription.of(listOf(Cue(10.0, 20.0, words.joinToString("") { it.text })), words)
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(9.5, 14.0), TimeWindow(17.0, 21.0)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(9.5, 14.0), TimeWindow(17.0, 21.0)))
 
         assertEquals(10.0, fitted.words.first().start, 0.01)
     }
@@ -488,9 +488,9 @@ class WindowRepairTest {
         val words =
             ahead.mapIndexed { i, (t, s) -> Word(t, s, if (i + 1 < ahead.size) ahead[i + 1].second else 109.6, 0.9, 0) } +
                 on.mapIndexed { i, t -> Word(t, 110.7 + i * 0.25, 110.95 + i * 0.25, 0.9, 0) }
-        val replacement = WhisperTranscription.of(listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
+        val decode = WhisperTranscription.of(listOf(Cue(92.38, 113.62, words.joinToString("") { it.text })), words)
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(108.7, 115.3)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(108.7, 115.3)))
 
         assertEquals(words.joinToString("") { it.text }, fitted.cues.single().text)
         assertEquals(108.7, fitted.words.first().start, 0.01)
@@ -589,13 +589,13 @@ class WindowRepairTest {
 
     @Test
     fun `a cue too short to hold half a second of speech is kept when it lies in speech`() {
-        val replacement =
+        val decode =
             WhisperTranscription.of(
                 listOf(Cue(6.0, 6.0, " AI might be"), Cue(6.0, 11.0, " the most important new technology.")),
                 listOf(Word(" AI", 6.0, 6.0, 0.9, 0), Word(" the", 6.0, 7.0, 0.9, 1)),
             )
 
-        val kept = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(3.0, 12.0)))
+        val kept = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(3.0, 12.0)))
 
         assertEquals(listOf(" AI might be", " the most important new technology."), kept.cues.map { it.text })
         assertEquals(listOf(0, 1), kept.words.map { it.segment })
@@ -773,13 +773,13 @@ class WindowRepairTest {
 
     @Test
     fun `a lone short sound before the speech is not where smeared words are moved to`() {
-        val replacement =
+        val decode =
             WhisperTranscription.of(
                 listOf(Cue(23.0, 39.35, " I got stung.")),
                 listOf(Word(" I", 23.0, 24.0, 0.9, 0), Word(" got", 24.0, 25.0, 0.9, 0), Word(" stung.", 25.0, 26.0, 0.9, 0)),
             )
 
-        val fitted = WindowRepair.dropNonSpeech(replacement, listOf(TimeWindow(27.55, 28.38), TimeWindow(38.82, 43.81)))
+        val fitted = WindowRepair.dropNonSpeech(decode, listOf(TimeWindow(27.55, 28.38), TimeWindow(38.82, 43.81)))
 
         assertEquals(38.82, fitted.words.first().start, 0.01)
         assertEquals(38.82, fitted.cues.single().start, 0.01)

@@ -426,7 +426,7 @@ class PodcastPipeline(
         val label = episodeDirPath.parent.fileName.toString() + "/" + episodeDirPath.fileName
         val audioPath = audioFileFor(episodeDirPath)
         if (!Files.exists(audioPath) || Files.size(audioPath) == 0L) throw EpisodeNotDiarized("it has no audio")
-        val sha256 = audioSha256(episodeDirPath, audioPath)
+        val sha256 = audioSha256(recordedRun(episodeDirPath), audioPath)
         val bytes = Files.size(audioPath)
         val diarizer = requireNotNull(diarizer)
         if (SpeakerTurns.current(episodeDirPath, sha256, bytes, diarizer.models)) {
@@ -445,10 +445,9 @@ class PodcastPipeline(
 
     /** The decode's record of the audio when its size still matches, so a network volume is not read twice over. */
     private fun audioSha256(
-        episodeDirPath: Path,
+        run: Map<*, *>?,
         audioPath: Path,
     ): String {
-        val run = recordedRun(episodeDirPath)
         val recorded = run?.get("audio_sha256") as? String
         val bytes = (run?.get("audio_bytes") as? Number)?.toLong()
         return if (recorded != null && bytes == Files.size(audioPath)) recorded else WhisperRun.sha256(audioPath)
@@ -1881,7 +1880,12 @@ class PodcastPipeline(
         val base = WhisperTranscription.of(cues, readWords(wordsPath))
         val voices = speakersFor(episodeDirPath, existing)?.let { WindowRepair.Voices(it, base.words) }
         val defects = WindowRepair.defectCues(cues, prompt, voices)
-        val speech = requireNotNull(speechDetector).speech(audioPath)
+        val detector = speechDetector
+        if (detector == null) {
+            logger.warn("Cannot retime $label: it needs vad_binary and vad_model")
+            return false
+        }
+        val speech = detector.speech(audioPath)
         if (!WindowRepair.plausible(base, defects, speech)) {
             logger.warn("VAD hears no speech under most of $label's cues; not retiming it")
             return false
@@ -1895,7 +1899,7 @@ class PodcastPipeline(
         }
 
         val language = podcast.language ?: config.language
-        val audio = AudioIdentity(audioSha256(episodeDirPath, audioPath), Files.size(audioPath))
+        val audio = AudioIdentity(audioSha256(existing[WhisperRun.FIELD] as? Map<*, *>, audioPath), Files.size(audioPath))
         val run =
             WhisperRun(
                 runId = WhisperRun.newId(),
